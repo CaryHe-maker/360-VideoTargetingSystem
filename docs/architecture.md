@@ -23,7 +23,7 @@ ERP（等距柱状投影）全景帧有三个特点，导致普通单目标跟�
 FramePacket（ERP RGB）
    │
    ▼
-TrackController.beginFrame() ──▶ SearchPlan（第 1 轮：4 个视图）
+TrackController.beginFrame() ──▶ SearchPlan（4 个视图）
    │
    ▼
 Geometry.cropViews()            ERP → N 个 256×256 透视视图（CPU 或 CUDA）
@@ -35,8 +35,8 @@ TrackerBackend.infer()          ARTrackV2-B-256，一次 batch 处理 N 个视�
 Geometry 回投 + 打分             局部框 → BFoV / 跨缝 ERP 框；外观分 + 运动分 → SingleScore
    │
    ▼
-TrackController.consume()       第 1 轮 → 返回第 2 轮 SearchPlan（MoreViewsRequired）
-   │                            第 2 轮 → 两轮候选统一融合，状态机转移，一次性提交（FrameCommitted）
+TrackController.consume()       候选融合，状态机转移，一次性提交（FrameCommitted）
+   │                            带门槛的模式下可以先返回第 2 轮 SearchPlan（MoreViewsRequired）
    ▼
 ResultSink                      每帧一行结果
 ```
@@ -73,13 +73,13 @@ cli ─▶ runtime ─┬─▶ controller ─▶ geometry ─▶ core
 
 ## 帧事务协议
 
-同一帧最多进行两轮查询。如果每一轮都立即修改状态，第二轮就会在“半更新”的状态上运行，出错时也无法回滚。因此控制器把一帧内的所有尝试暂存在 `FrameTransaction` 中，到提交点一次性写入。
+同一帧最多进行两轮查询。**默认配置（`backendTuning.acceptAnyCandidate: true`）每帧只做一轮**，第二轮只在带门槛的模式下出现（见 [配置说明](configuration.md#backendtuning)）。协议按两轮设计：如果每一轮都立即修改状态，第二轮就会在“半更新”的状态上运行，出错时也无法回滚。因此控制器把一帧内的所有尝试暂存在 `FrameTransaction` 中，到提交点一次性写入。
 
 1. `beginFrame(frame)` 创建事务，返回 `attemptIndex=0` 的 `SearchPlan`；
 2. 运行时必须按计划中的视图顺序返回 `ProjectedObservation`；
 3. `consume(plan, observations)` 校验序列 ID、帧号、事务 ID、轮次、状态 revision 和模板 revision；
-4. 第 1 轮结束后返回 `MoreViewsRequired` 和第 2 轮计划，旧计划不能被再次消费；
-5. 第 2 轮结束后合并两轮候选，执行融合和状态转移，返回 `FrameCommitted`。
+4. 需要第 2 轮时，第 1 轮结束后返回 `MoreViewsRequired` 和第 2 轮计划，旧计划不能被再次消费；
+5. 最后一轮结束后合并本帧所有候选，执行融合和状态转移，返回 `FrameCommitted`。
 
 这一协议可以防止：上一帧迟到的结果污染当前帧、同一计划被消费两次、模板 revision 跳号、预测框被误当作真实测量写入运动历史。
 

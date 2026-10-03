@@ -14,9 +14,9 @@ Controller 决定“看哪里、相信哪个候选、是否继续查询、下一
 | `score_calibration.py` | 可选的、与权重绑定的分数校准产物加载 |
 | `state_machine.py` | 跨帧的纯状态转移 |
 | `template_policy.py` | 模板策略：固定第 0 帧 anchor，可选 recent 模板更新 |
-| `decision_gate.py` | 旧的聚合打分，仅为兼容保留，生产路径不使用 |
+| `decision_gate.py` | `FrameAggregate`：模板策略使用的单帧聚合结果 |
 
-> 下文描述的是 YAML 配置决定的基础行为。ARTrackV2 后端会通过环境变量调整其中一部分（例如关闭运动分、放宽融合门槛、启用 recent 模板），详见 [配置说明](../configuration.md#环境变量待迁移)。
+> 下文描述的是控制器的完整逻辑。默认配置通过 `backendTuning` 调整了其中一部分：接受最佳候选而不用分数门槛过滤（因此**每帧只做一轮搜索**）、不使用运动分、放宽融合门槛、启用 recent 模板，详见 [配置说明](../configuration.md#backendtuning)。两轮搜索只在 `acceptAnyCandidate: false` 时出现。
 
 ## 视图规划
 

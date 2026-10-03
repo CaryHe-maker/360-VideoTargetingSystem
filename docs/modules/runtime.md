@@ -13,12 +13,13 @@ Runtime 是组合根和执行器，本身不实现状态判定或模型算法。
 
 `buildRuntime(config)` 按配置创建并返回 `RuntimeBundle`：
 
-1. Geometry：默认 `SphericalGeometryImpl`（CPU），设置 `TRACK360_GPU_GEOMETRY=1` 时使用 `GpuGeometryImpl`；
-2. 后端：`PyTorchARTrackV2Session` → `ARTrackBackend` → `TrackerBackendImpl`；
-3. 控制器：`TrackControllerImpl(geometry, config)`；
-4. 结果输出：`FileResultSink`；
-5. 可选的中间视图记录器；
-6. 分数校准：有 `scoring.calibrationArtifact` 时加载并校验，否则对 ARTrackV2 使用未校准的原始分数。
+1. 固定随机种子并按 `reproducibility.deterministic` 设置 cuDNN；
+2. Geometry：`geometry.resampler` 为 `cpu` 时使用 `SphericalGeometryImpl`（默认），为 `cuda` 时使用 `GpuGeometryImpl`；
+3. 后端：`PyTorchARTrackV2Session` → `ARTrackBackend` → `TrackerBackendImpl`；
+4. 控制器：`TrackControllerImpl(geometry, config)`；
+5. 结果输出：`FileResultSink`；
+6. 可选的中间视图记录器；
+7. 分数校准：有 `scoring.calibrationArtifact` 时加载并校验，否则对 ARTrackV2 使用未校准的原始分数。
 
 测试可以通过 `artrackSessionFactory` 和 `geometryFactory` 注入假实现，不需要真实权重和 GPU。
 
@@ -51,6 +52,6 @@ Runtime 是组合根和执行器，本身不实现状态判定或模型算法。
 
 测量 CUDA 耗时时，普通的 `perf_counter` 可能只记录了异步提交的时间。需要在测量边界显式同步，或使用 CUDA event，并在报告中注明同步方式。
 
-## 配置中的 runtime 段
+## 运行记录
 
-`runtime.*QueueCapacity` 是为将来的并行流水线预留的。当前循环是顺序执行的（只有解码在后台线程），这些值只会被校验，不影响运行和延迟。
+两个命令行入口在结果发布后调用 `runtime/reproducibility.py::writeRunMetadata()`，在结果文件旁写入 `<结果文件名>.run.json`（git commit、配置哈希、最终生效的配置、权重 SHA-256、环境版本）。字段说明见 [配置说明](../configuration.md#运行记录)。

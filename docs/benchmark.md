@@ -1,6 +1,6 @@
 # Benchmark 数据集
 
-本文记录测试集的选型结论和评测协议；每一轮的评测结果记录在 [evaluation-log.md](evaluation-log.md)。**数据集尚未下载**；下载、加载器和评测脚本是 [V2Plan](V2Plan.md) 第三阶段的任务。
+本文记录测试集的选型结论和评测协议；每一轮的评测结果记录在 [evaluation-log.md](evaluation-log.md)。**数据集尚未下载**；下载、加载器和评测脚本是 [V2Plan](V2Plan.md) Phase 2 的任务。
 
 ## 结论
 
