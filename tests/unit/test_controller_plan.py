@@ -49,6 +49,8 @@ def _observation(
 class ControllerPlanTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = loadConfig(ROOT / "configs" / "default.yaml")
+        # Gated two-round behavior: every backendTuning switch at its "off" value.
+        self.legacyConfig = loadConfig(ROOT / "configs" / "tests" / "legacy_off.yaml")
         self.geometry = SphericalGeometryImpl(
             boundarySamplesPerEdge=self.config.geometry.boundarySamplesPerEdge
         )
@@ -250,9 +252,11 @@ class ControllerPlanTest(unittest.TestCase):
             supported=True,
         )
 
-        decision = TemplatePolicy(self.config.tracking).decide(
+        decision = TemplatePolicy(
+            self.legacyConfig.tracking, self.legacyConfig.backendTuning
+        ).decide(
             TrackStatus.TRACKING,
-            self.config.tracking.stableFramesBeforeUpdate * 2,
+            self.legacyConfig.tracking.stableFramesBeforeUpdate * 2,
             aggregate,
         )
 

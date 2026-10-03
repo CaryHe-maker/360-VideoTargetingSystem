@@ -6,14 +6,13 @@ from pathlib import Path
 import numpy as np
 
 from track360.controller import (
-    DecisionGate,
     RecoveryPlanner,
     SphericalMotionEstimator,
     TrackControllerImpl,
     scoreMotionConsistency,
 )
 from track360.controller.state_model import TrackMode
-from track360.core.config import DecisionGateConfig, loadConfig
+from track360.core.config import loadConfig
 from track360.core.protocols import FrameCommitted, MoreViewsRequired
 from track360.core.types import (
     BBoxXYWH,
@@ -93,23 +92,11 @@ def _scoredCandidate(
 class ControllerV2Test(unittest.TestCase):
     def setUp(self) -> None:
         self.config = loadConfig(ROOT / "configs" / "default.yaml")
+        # Gated two-round behavior: every backendTuning switch at its "off" value.
+        self.legacyConfig = loadConfig(ROOT / "configs" / "tests" / "legacy_off.yaml")
         self.geometry = SphericalGeometryImpl(
             boundarySamplesPerEdge=self.config.geometry.boundarySamplesPerEdge
         )
-
-    def testDisjointCandidatesAreNotMergedIntoOneUnionBox(self) -> None:
-        gate = DecisionGate(DecisionGateConfig(0.25, 0.15), self.config.tracking)
-        aggregate = gate.aggregate(
-            (_candidate(0, 0.0), _candidate(1, 2.2)),
-            self.geometry,
-            360,
-            180,
-        )
-        self.assertIsNotNone(aggregate)
-        assert aggregate is not None
-        self.assertEqual(len(aggregate.sourceViewIds), 1)
-        self.assertEqual(aggregate.clusterCount, 2)
-        self.assertLess(aggregate.bbox.widthPx, 100.0)
 
     def testTrackingUsesTwoRoundsAndCommitsOneResult(self) -> None:
         frame0 = FramePacket(
@@ -118,7 +105,7 @@ class ControllerV2Test(unittest.TestCase):
             0,
             np.zeros((180, 360, 3), dtype=np.uint8),
         )
-        controller = TrackControllerImpl(self.geometry, self.config)
+        controller = TrackControllerImpl(self.geometry, self.legacyConfig)
         init = controller.buildInitialization(frame0, BBoxXYWH(150.0, 70.0, 40.0, 50.0))
         controller.commitInitialization(init)
         frame1 = FramePacket(
@@ -152,7 +139,7 @@ class ControllerV2Test(unittest.TestCase):
         )
         controller = TrackControllerImpl(
             self.geometry,
-            self.config,
+            self.legacyConfig,
             motionEstimator=estimator,
         )
         controller.commitInitialization(
@@ -189,7 +176,7 @@ class ControllerV2Test(unittest.TestCase):
             0,
             np.zeros((180, 360, 3), dtype=np.uint8),
         )
-        controller = TrackControllerImpl(self.geometry, self.config)
+        controller = TrackControllerImpl(self.geometry, self.legacyConfig)
         controller.commitInitialization(
             controller.buildInitialization(frame0, BBoxXYWH(150.0, 70.0, 40.0, 50.0))
         )
@@ -217,11 +204,11 @@ class ControllerV2Test(unittest.TestCase):
         assert controller._planned is not None
         self.assertEqual(
             controller._planned.predictedBfov.horizontalFovRad,
-            self.config.geometry.maxFovRad,
+            self.legacyConfig.geometry.maxFovRad,
         )
         self.assertEqual(
             controller._planned.predictedBfov.verticalFovRad,
-            self.config.geometry.maxFovRad,
+            self.legacyConfig.geometry.maxFovRad,
         )
 
     def testFallbackAdvancesProtocolAndAllowsNextFrame(self) -> None:
@@ -268,7 +255,7 @@ class ControllerV2Test(unittest.TestCase):
             0,
             np.zeros((180, 360, 3), dtype=np.uint8),
         )
-        controller = TrackControllerImpl(self.geometry, self.config)
+        controller = TrackControllerImpl(self.geometry, self.legacyConfig)
         init = controller.buildInitialization(frame0, BBoxXYWH(150.0, 70.0, 40.0, 50.0))
         controller.commitInitialization(init)
         frame1 = FramePacket(
@@ -328,7 +315,7 @@ class ControllerV2Test(unittest.TestCase):
             0,
             np.zeros((180, 360, 3), dtype=np.uint8),
         )
-        controller = TrackControllerImpl(self.geometry, self.config)
+        controller = TrackControllerImpl(self.geometry, self.legacyConfig)
         init = controller.buildInitialization(frame0, BBoxXYWH(150.0, 70.0, 40.0, 50.0))
         controller.commitInitialization(init)
 
@@ -353,7 +340,7 @@ class ControllerV2Test(unittest.TestCase):
             0,
             np.zeros((180, 360, 3), dtype=np.uint8),
         )
-        controller = TrackControllerImpl(self.geometry, self.config)
+        controller = TrackControllerImpl(self.geometry, self.legacyConfig)
         init = controller.buildInitialization(frame0, BBoxXYWH(150.0, 70.0, 40.0, 50.0))
         controller.commitInitialization(init)
 
@@ -484,7 +471,7 @@ class ControllerV2Test(unittest.TestCase):
         )
         controller = TrackControllerImpl(
             self.geometry,
-            self.config,
+            self.legacyConfig,
             motionEstimator=estimator,
         )
         init = controller.buildInitialization(frame0, BBoxXYWH(150.0, 70.0, 40.0, 50.0))
@@ -627,7 +614,7 @@ class ControllerV2Test(unittest.TestCase):
             0,
             np.zeros((180, 360, 3), dtype=np.uint8),
         )
-        controller = TrackControllerImpl(self.geometry, self.config)
+        controller = TrackControllerImpl(self.geometry, self.legacyConfig)
         init = controller.buildInitialization(frame0, BBoxXYWH(150.0, 70.0, 40.0, 50.0))
         controller.commitInitialization(init)
         frame1 = FramePacket(SequenceId("floor"), FrameIndex(1), 1_000_000_000, frame0.rgb)
@@ -659,7 +646,7 @@ class ControllerV2Test(unittest.TestCase):
             0,
             np.zeros((180, 360, 3), dtype=np.uint8),
         )
-        controller = TrackControllerImpl(self.geometry, self.config)
+        controller = TrackControllerImpl(self.geometry, self.legacyConfig)
         init = controller.buildInitialization(frame0, BBoxXYWH(150.0, 70.0, 40.0, 50.0))
         controller.commitInitialization(init)
         frame1 = FramePacket(SequenceId("overlap"), FrameIndex(1), 1_000_000_000, frame0.rgb)
@@ -687,7 +674,7 @@ class ControllerV2Test(unittest.TestCase):
             0,
             np.zeros((180, 360, 3), dtype=np.uint8),
         )
-        controller = TrackControllerImpl(self.geometry, self.config)
+        controller = TrackControllerImpl(self.geometry, self.legacyConfig)
         init = controller.buildInitialization(frame0, BBoxXYWH(150.0, 70.0, 40.0, 50.0))
         controller.commitInitialization(init)
 
@@ -798,7 +785,7 @@ class ControllerV2Test(unittest.TestCase):
             0,
             np.zeros((180, 360, 3), dtype=np.uint8),
         )
-        controller = TrackControllerImpl(self.geometry, self.config)
+        controller = TrackControllerImpl(self.geometry, self.legacyConfig)
         init = controller.buildInitialization(frame0, BBoxXYWH(150.0, 70.0, 40.0, 50.0))
         controller.commitInitialization(init)
 
@@ -833,8 +820,8 @@ class ControllerV2Test(unittest.TestCase):
         self.assertEqual(len(uncertainFirst.views), 4)
         self.assertTrue(
             all(
-                math.isclose(view.bfov.horizontalFovRad, self.config.geometry.maxFovRad)
-                and math.isclose(view.bfov.verticalFovRad, self.config.geometry.maxFovRad)
+                math.isclose(view.bfov.horizontalFovRad, self.legacyConfig.geometry.maxFovRad)
+                and math.isclose(view.bfov.verticalFovRad, self.legacyConfig.geometry.maxFovRad)
                 for view in uncertainFirst.views
             )
         )
@@ -843,8 +830,8 @@ class ControllerV2Test(unittest.TestCase):
         self.assertEqual(len(uncertainSecond.plan.views), 4)
         self.assertTrue(
             all(
-                math.isclose(view.bfov.horizontalFovRad, self.config.geometry.maxFovRad)
-                and math.isclose(view.bfov.verticalFovRad, self.config.geometry.maxFovRad)
+                math.isclose(view.bfov.horizontalFovRad, self.legacyConfig.geometry.maxFovRad)
+                and math.isclose(view.bfov.verticalFovRad, self.legacyConfig.geometry.maxFovRad)
                 for view in uncertainSecond.plan.views
             )
         )

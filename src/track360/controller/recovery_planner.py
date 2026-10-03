@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from math import asin, atan2, cos, isfinite, pi, sin, sqrt, tan
 
 from track360.controller.state_model import RecoveryMemory
-from track360.core.config import GeometryConfig, RecoveryConfig, TrackingConfig
+from track360.core.config import (
+    BackendTuningConfig,
+    GeometryConfig,
+    RecoveryConfig,
+    TrackingConfig,
+)
 from track360.core.errors import ProtocolError
 from track360.core.types import (
     BBoxXYWH,
@@ -116,10 +120,12 @@ class RecoveryPlanner:
         geometryConfig: GeometryConfig,
         trackingConfig: TrackingConfig,
         recoveryConfig: RecoveryConfig,
+        backendTuning: BackendTuningConfig | None = None,
     ) -> None:
         self._geometry = geometryConfig
         self._tracking = trackingConfig
         self._recovery = recoveryConfig
+        self._tuning = backendTuning or BackendTuningConfig()
 
     def buildViews(
         self,
@@ -235,8 +241,8 @@ class RecoveryPlanner:
         forceMaxFov: bool = False,
         targetAreaRatio: float = 0.0,
     ) -> tuple[PlannedView, ...]:
-        singleView = os.environ.get("TRACK360_ARTRACK_SINGLE_VIEW", "0") == "1"
-        if os.environ.get("TRACK360_ARTRACK_ADAPTIVE", "0") == "1" and dynamicSize is not None:
+        singleView = self._tuning.singleView
+        if self._tuning.adaptiveViewCount and dynamicSize is not None:
             # ERP pixel area is misleading for panoramic targets. Use angular
             # extent so genuinely large objects get the four-view context path.
             horizontalSize, verticalSize = (float(dynamicSize[0]), float(dynamicSize[1]))
@@ -257,21 +263,10 @@ class RecoveryPlanner:
                 self._geometry.minFovRad,
                 self._geometry.maxFovRad,
             )
-            capDeg = os.environ.get("TRACK360_ARTRACK_SINGLE_FOV_DEG")
-            capHDeg = os.environ.get("TRACK360_ARTRACK_SINGLE_HFOV_DEG", capDeg)
-            capVDeg = os.environ.get("TRACK360_ARTRACK_SINGLE_VFOV_DEG", capDeg)
-            if capHDeg is not None or capVDeg is not None:
-                try:
-                    if capHDeg is not None:
-                        capRad = float(capHDeg) * pi / 180.0
-                        if isfinite(capRad) and capRad > 0.0:
-                            horizontalFov = min(horizontalFov, capRad)
-                    if capVDeg is not None:
-                        capRad = float(capVDeg) * pi / 180.0
-                        if isfinite(capRad) and capRad > 0.0:
-                            verticalFov = min(verticalFov, capRad)
-                except ValueError:
-                    pass
+            if self._tuning.singleViewHorizontalFovCapRad is not None:
+                horizontalFov = min(horizontalFov, self._tuning.singleViewHorizontalFovCapRad)
+            if self._tuning.singleViewVerticalFovCapRad is not None:
+                verticalFov = min(verticalFov, self._tuning.singleViewVerticalFovCapRad)
             return (
                 PlannedView(
                     spec=ViewSpec(
@@ -295,14 +290,8 @@ class RecoveryPlanner:
         )
         if dynamicSize is not None:
             maxFovRad = self._geometry.maxFovRad
-            capDeg = os.environ.get("TRACK360_ARTRACK_FOV_CAP_DEG")
-            if capDeg is not None:
-                try:
-                    candidateCap = float(capDeg) * pi / 180.0
-                    if isfinite(candidateCap) and candidateCap >= pi / 6.0:
-                        maxFovRad = min(maxFovRad, candidateCap)
-                except ValueError:
-                    pass
+            if self._tuning.fourViewFovCapRad is not None:
+                maxFovRad = min(maxFovRad, self._tuning.fourViewFovCapRad)
             specs = ViewSpecType1(
                 center,
                 dynamicSize,

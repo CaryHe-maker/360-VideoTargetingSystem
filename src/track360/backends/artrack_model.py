@@ -8,7 +8,6 @@ so replacing the model does not change the spherical controller contract.
 from __future__ import annotations
 
 import math
-import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -220,7 +219,13 @@ class PyTorchARTrackV2Session:
 
     supportsOnlineTemplates = True
 
-    def __init__(self, config: ModelConfig, *, artrackRoot: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        artrackRoot: str | Path | None = None,
+        fullViewSearch: bool = False,
+    ) -> None:
         if config.backend != "pytorch":
             raise ModelError(f"PyTorch ARTrackV2 session cannot use backend={config.backend}")
         if config.variant.lower().replace("-", "_") not in {_VARIANT, "artrackv2_b_256"}:
@@ -230,6 +235,7 @@ class PyTorchARTrackV2Session:
         self._torch = _importTorch()
         self._device = self._torch.device("cuda" if self._torch.cuda.is_available() else "cpu")
         self._precision = config.precision
+        self._fullViewSearch = fullViewSearch
         self._closed = False
         self._lastProfile: dict[str, int | float | bool | str] = {}
         self._root = _resolveArTrackRoot(artrackRoot)
@@ -290,7 +296,7 @@ class PyTorchARTrackV2Session:
         states: list[BBoxXYWH] = []
         crops: list[NDArray[np.uint8]] = []
         resizeFactors: list[float] = []
-        useFullView = os.environ.get("TRACK360_ARTRACK_FULL_VIEW", "0") == "1"
+        useFullView = self._fullViewSearch
         for index, image in enumerate(images):
             _requireRgb(image)
             # Each perspective view is an independent coordinate system. The
@@ -382,7 +388,7 @@ class PyTorchARTrackV2Session:
         states: list[BBoxXYWH] = []
         crops: list[Any] = []
         resizeFactors: list[float] = []
-        useFullView = os.environ.get("TRACK360_ARTRACK_FULL_VIEW", "0") == "1"
+        useFullView = self._fullViewSearch
         for deviceRgb, (width, height) in zip(deviceRgbs, imageSizes, strict=True):
             _requireDeviceRgb(deviceRgb, width, height)
             fov = imageFovs[len(states)] if imageFovs is not None else None

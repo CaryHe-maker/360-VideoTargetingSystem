@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Sequence
 from math import pi
 from time import perf_counter_ns
@@ -18,7 +17,7 @@ from track360.geometry.spherical_geometry import SphericalGeometryImpl
 class GpuGeometryImpl(SphericalGeometryImpl):
     """Keep crop/resize/normalization on CUDA and expose tensors to ARTrackV2."""
 
-    def __init__(self, boundarySamplesPerEdge: int = 65) -> None:
+    def __init__(self, boundarySamplesPerEdge: int = 65, *, profileEnabled: bool = False) -> None:
         super().__init__(boundarySamplesPerEdge=boundarySamplesPerEdge)
         try:
             import torch
@@ -33,7 +32,7 @@ class GpuGeometryImpl(SphericalGeometryImpl):
         self._frameTensor: Any = None
         self._hostTensor: Any = None
         self._frameToDeviceNs = 0
-        self._profileEnabled = os.environ.get("TRACK360_PROFILE", "0") == "1"
+        self._profileEnabled = profileEnabled
         self._localGridCache: dict[tuple[int, int], tuple[Any, Any]] = {}
         self._mean = torch.tensor(
             [0.485, 0.456, 0.406], device=self._device, dtype=torch.float32

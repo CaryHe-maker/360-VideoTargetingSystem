@@ -35,6 +35,12 @@ class CoreConfigTest(unittest.TestCase):
         self.assertIsNone(config.scoring.calibrationArtifact)
         self.assertTrue(config.scoring.requireCheckpointHashMatch)
         self.assertFalse(config.visualization.enabled)
+        self.assertEqual(config.geometry.resampler, "cpu")
+        self.assertTrue(config.backendTuning.acceptAnyCandidate)
+        self.assertAlmostEqual(
+            config.backendTuning.singleViewHorizontalFovCapRad, 1.5707963267948966
+        )
+        self.assertIsNone(config.backendTuning.fourViewFovCapRad)
         self.assertEqual(
             config.visualization.outputRoot,
             REPOSITORY_ROOT / "outputs" / "visualization",
@@ -84,6 +90,30 @@ class CoreConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "invalid.yaml"
             path.write_text(source, encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                loadConfig(path)
+
+    def testLoadConfigRejectsUnimplementedPrecision(self) -> None:
+        self._assertRejected("  precision: fp32", "  precision: fp16")
+
+    def testLoadConfigRejectsRemovedSections(self) -> None:
+        removed = "decisionGate:\n  motionScoreWeight: 0.25\n  scaleScoreWeight: 0.15\n"
+        self._assertRejected("evaluator:\n", removed + "evaluator:\n")
+
+    def testLoadConfigRejectsInvalidBackendTuning(self) -> None:
+        self._assertRejected("  templateFovScale: 2.5", "  templateFovScale: 0.5")
+        self._assertRejected("  fourViewFovCapDeg: null", "  fourViewFovCapDeg: 10.0")
+        self._assertRejected("  fusionOverlap: 0.45", "  fusionOverlap: 1.5")
+        self._assertRejected("  fusionBoxMode: null", "  fusionBoxMode: union")
+        self._assertRejected("  holdWeakBox: true", "  holdWeakBox: 1")
+        self._assertRejected("  resampler: cpu", "  resampler: gpu")
+
+    def _assertRejected(self, old: str, new: str) -> None:
+        source = (REPOSITORY_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")
+        self.assertEqual(source.count(old), 1, old)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid.yaml"
+            path.write_text(source.replace(old, new), encoding="utf-8")
             with self.assertRaises(ConfigError):
                 loadConfig(path)
 
