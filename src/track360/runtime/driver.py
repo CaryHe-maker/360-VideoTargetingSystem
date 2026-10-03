@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import os
 import queue
 import sys
 import threading
@@ -45,6 +44,7 @@ from track360.core.types import (
 )
 from track360.geometry import GpuGeometryImpl, SphericalGeometryImpl
 from track360.io.result_sink import FileResultSink
+from track360.runtime.reproducibility import seedEverything
 
 if TYPE_CHECKING:
     from track360.backends.artrack_model import ARTrackSession
@@ -61,6 +61,7 @@ class RuntimeBundle:
     backend: TrackerBackend
     sink: ResultSinkProtocol
     scoreCalibration: ScoreCalibration
+    useMotionScore: bool
     recorder: VisualizationRecorder | None = None
 
 
@@ -151,55 +152,26 @@ def buildRuntime(
     artrackSessionFactory: Callable[[ModelConfig], ARTrackSession] | None = None,
     geometryFactory: Callable[[int], SphericalGeometry] | None = None,
     allowUncalibratedScoring: bool = False,
+    profile: bool = False,
 ) -> RuntimeBundle:
-    sessionFactory = artrackSessionFactory or PyTorchARTrackV2Session
-    if config.model.variant.lower().replace("-", "_") == "artrackv2_b_256":
-        # ARTrack already performs appearance/localization scoring internally.
-        # These defaults favor IoU over throughput: use the full multi-view,
-        # two-round route so small/changed targets get geometric corroboration.
-        # Callers can still opt into the low-latency route with environment
-        # overrides when FPS is more important than accuracy.
-        # ARTrack's raw sigmoid quality is a ranking signal (roughly 0.49 on
-        # this checkpoint), not the calibrated HiViT probability encoded in
-        # tracking.candidateMinScore. Let the evaluator use its best candidate
-        # and rely on anchor/recent safeguards for template integrity.
-        os.environ.setdefault("TRACK360_ARTRACK_ACCEPT_ANY", "1")
-        os.environ.setdefault("TRACK360_ARTRACK_ADAPTIVE", "0")
-        os.environ.setdefault("TRACK360_ARTRACK_SINGLE_ROUND", "0")
-        os.environ.setdefault("TRACK360_ARTRACK_DISABLE_MOTION", "1")
-        os.environ.setdefault("TRACK360_ARTRACK_SINGLE_FOV_DEG", "90")
-        os.environ.setdefault("TRACK360_ARTRACK_TEMPLATE_FOV_SCALE", "2.5")
-        os.environ.setdefault("TRACK360_ARTRACK_HOLD_WEAK", "1")
-        # ARTrack raw quality scores cluster near 0.50 on this checkpoint;
-        # only promote the upper tail into the recent template stream so a
-        # drifting box cannot overwrite the anchor.
-        os.environ.setdefault("TRACK360_ARTRACK_TEMPLATE_MIN_CONF", "0.515")
-        os.environ.setdefault("TRACK360_ARTRACK_ALLOW_SINGLE_TEMPLATE", "1")
-        # The legacy 0.70 overlap / 0.740642 source gate was calibrated for
-        # HiViT. ARTrack views are independent perspective crops with raw
-        # scores near 0.5, so use the empirically validated ARTrack fusion
-        # operating point and keep both values overrideable for new sequences.
-        os.environ.setdefault("TRACK360_ARTRACK_FUSION_SOURCE_MIN", "0.35")
-        os.environ.setdefault("TRACK360_ARTRACK_FUSION_OVERLAP", "0.45")
-        # Keep the immutable frame-zero anchor while allowing safe recent/stable
-        # appearance refreshes after confirmed observations.
-        os.environ.setdefault("TRACK360_ARTRACK_ONLINE_TEMPLATE", "1")
-    # ARTrack's reference preprocessing is OpenCV/uint8 based. Keep that
-    # numerically faithful path as the default for IoU; opt into CUDA geometry
-    # only after a workload-specific A/B check proves no accuracy regression.
-    useGpuGeometry = os.environ.get("TRACK360_GPU_GEOMETRY", "0") == "1"
-    geometry = (
-        geometryFactory(config.geometry.boundarySamplesPerEdge)
-        if geometryFactory is not None
-        else (
-            GpuGeometryImpl(boundarySamplesPerEdge=config.geometry.boundarySamplesPerEdge)
-            if useGpuGeometry
-            else SphericalGeometryImpl(
-                boundarySamplesPerEdge=config.geometry.boundarySamplesPerEdge
-            )
+    tuning = config.backendTuning
+    seedEverything(config.reproducibility)
+    if geometryFactory is not None:
+        geometry = geometryFactory(config.geometry.boundarySamplesPerEdge)
+    elif config.geometry.resampler == "cuda":
+        geometry = GpuGeometryImpl(
+            boundarySamplesPerEdge=config.geometry.boundarySamplesPerEdge,
+            profileEnabled=profile,
         )
+    else:
+        geometry = SphericalGeometryImpl(
+            boundarySamplesPerEdge=config.geometry.boundarySamplesPerEdge
+        )
+    rgbSession = (
+        artrackSessionFactory(config.model)
+        if artrackSessionFactory is not None
+        else PyTorchARTrackV2Session(config.model, fullViewSearch=tuning.fullViewSearch)
     )
-    rgbSession = sessionFactory(config.model)
     backend = TrackerBackendImpl(ARTrackBackend(rgbSession))
     controller = TrackControllerImpl(geometry, config)
     sink = FileResultSink()
@@ -230,6 +202,7 @@ def buildRuntime(
         sink=sink,
         scoreCalibration=scoreCalibration,
         recorder=recorder,
+        useMotionScore=tuning.useMotionScore,
     )
 
 
@@ -246,6 +219,7 @@ def runTracking(
     processingTimer: TimeCounter | None = None,
     profiler: RuntimeProfiler | None = None,
     scoreCalibration: ScoreCalibration,
+    useMotionScore: bool,
 ) -> int:
     """Run the sequential tracking pipeline and publish one result per frame."""
     try:
@@ -352,6 +326,7 @@ def runTracking(
                                         predictedMotion=plan.predictedMotion,
                                         geometry=geometry,
                                         scoreCalibration=scoreCalibration,
+                                        useMotionScore=useMotionScore,
                                     )
                                 # PostTrainV2.4 keeps recorder inputs host-only at this boundary.
                                 # Recorders only consume the compatibility RGB and view
@@ -497,6 +472,7 @@ def _projectObservation(
     predictedMotion: MotionState3D | None,
     geometry: SphericalGeometry,
     scoreCalibration: ScoreCalibration,
+    useMotionScore: bool,
 ) -> ProjectedObservation:
     projection = geometry.projectLocalBoxBoundary(
         observation.bbox,
@@ -510,7 +486,7 @@ def _projectObservation(
         if observation.appearanceProbability is not None
         else calibrateBackendFusedScore(observation.fusedScore, scoreCalibration)
     )
-    if os.environ.get("TRACK360_ARTRACK_DISABLE_MOTION", "0") == "1":
+    if not useMotionScore:
         # ARTrack already scores localization against its template/search crop.
         # The legacy spherical motion prior can reject a correct appearance hit.
         singleScore = float(np.clip(appearanceProbability, 0.0, 1.0))
@@ -553,6 +529,7 @@ def _projectValidObservations(
     predictedMotion: MotionState3D | None,
     geometry: SphericalGeometry,
     scoreCalibration: ScoreCalibration,
+    useMotionScore: bool,
 ) -> tuple[ProjectedObservation, ...]:
     projected: list[ProjectedObservation] = []
     for view, observation in zip(views, observations, strict=True):
@@ -565,6 +542,7 @@ def _projectValidObservations(
                     predictedMotion=predictedMotion,
                     geometry=geometry,
                     scoreCalibration=scoreCalibration,
+                    useMotionScore=useMotionScore,
                 )
             )
         except GeometryError as error:

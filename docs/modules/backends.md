@@ -26,7 +26,7 @@
 
 ## 已知限制
 
-- `model.precision` 可以配置为 `fp16`，但当前会话**没有使用**该值，推理始终是 FP32。FP16 / TensorRT 是 V2Plan 第四阶段的工作；
+- 推理始终是 FP32，`model.precision` 只接受 `fp32`。FP16 / TensorRT 是 [V2Plan](../V2Plan.md) Phase 5 的工作；
 - 后端在 `runtime/driver.py` 中直接创建，还没有注册表机制。
 
 ## 接入新后端

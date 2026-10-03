@@ -75,4 +75,11 @@ pytest
 ruff check src tests tools
 ```
 
-GPU 几何测试在没有 PyTorch 或 CUDA 时会自动跳过；其余测试只需要 NumPy、OpenCV 和 PyYAML。
+GPU 几何测试在没有 PyTorch 或 CUDA 时会自动跳过；其余测试只需要 NumPy、OpenCV 和 PyYAML。`tests/regression/` 用合成序列和假后端跑完整的运行时路径，其中开关组合回归约需 1.5 分钟，日常开发可以用 `pytest -m "not slow"` 跳过。
+
+提交前检查可以交给 pre-commit：
+
+```bash
+pip install pre-commit
+pre-commit install
+```

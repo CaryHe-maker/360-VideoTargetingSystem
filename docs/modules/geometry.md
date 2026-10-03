@@ -45,4 +45,4 @@ ERP 的水平坐标是一个圆周，不是一条直线。
 - 输出直接是归一化后的 FP32 `[3, H, W]` 张量，可以直接送入后端；
 - 与 CPU 结果对比，P99 像素误差为 0，最大误差 1 个灰度级（`tests/unit/test_gpu_geometry.py`）。
 
-为了与 ARTrack 官方预处理在数值上一致，默认使用 CPU 路径；设置 `TRACK360_GPU_GEOMETRY=1` 启用 CUDA 路径。在 HiT 后端阶段的单序列测试中，GPU 几何把单帧 P50 延迟从 355.9 ms 降到 90.0 ms（见 [历史实验结论](../experiments.md)）。在 ARTrackV2 上需要重新做 A/B。
+为了与 ARTrack 官方预处理在数值上一致，默认使用 CPU 路径；把 `geometry.resampler` 设为 `cuda` 启用 CUDA 路径。在 HiT 后端阶段的单序列测试中，GPU 几何把单帧 P50 延迟从 355.9 ms 降到 90.0 ms（见 [历史实验结论](../experiments.md)）。在 ARTrackV2 上需要重新做 A/B。

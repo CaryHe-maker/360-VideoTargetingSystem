@@ -16,9 +16,28 @@ The upstream license is reproduced in src/track360/third_party/artrackv2/LICENSE
 Only the subset of the upstream code needed for inference is included (model
 definition, ViT backbone, configuration, and supporting utilities).
 
-The exact upstream commit the code was copied from was not recorded. The
-upstream default branch was at 5931f4af8dd3f3f04af52f9ca7d6f2d5da54592e when
-this notice was written (2026-10-03).
+Upstream revision: b2ed853a1d1c3ece2bbe74bb7927b2a338217045 (2025-07-31).
+The commit was not recorded when the code was copied; it was identified on
+2026-10-03 by comparing file contents (ignoring line endings) with the upstream
+history. These files are identical to upstream at that commit, and at every
+commit back to bdd93e7b9a7693c48e605f4a8f847fe4f4156700 (2024-10-23):
+
+  artrackv2_256_full.yaml (upstream: experiments/artrackv2/artrackv2_256_full.yaml)
+  lib/config/artrackv2/config.py
+  lib/models/artrackv2/artrackv2.py
+  lib/models/artrackv2/base_backbone.py
+  lib/models/artrackv2/utils.py
+  lib/models/layers/patch_embed.py
+  lib/utils/box_ops.py
+
+lib/models/artrackv2/artrackv2.py differs from the next upstream commit
+(7a9ebc1866254758d110885c1d0200fa2d663ba5), so the copy predates it.
+
+Modified from upstream, to keep only what inference needs:
+
+  lib/models/artrackv2/vit.py
+  lib/train/admin/local.py, settings.py, stats.py
+  all __init__.py files
 
 The ARTrackV2-B-256 model weights are distributed by the upstream authors and
 are not part of this repository.

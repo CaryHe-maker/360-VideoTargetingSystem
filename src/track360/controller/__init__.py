@@ -1,6 +1,6 @@
 """Controller components for spherical RGB tracking."""
 
-from track360.controller.decision_gate import DecisionGate, FrameAggregate, ScoredObservation
+from track360.controller.decision_gate import FrameAggregate
 from track360.controller.fused_score import (
     MotionScore,
     calibrateBackendFusedScore,
@@ -43,7 +43,6 @@ from track360.controller.template_policy import TemplateDecision, TemplatePolicy
 from track360.controller.track_controller import TrackControllerImpl
 
 __all__ = [
-    "DecisionGate",
     "FUSION_AGREEMENT_BONUS_WEIGHT",
     "FUSION_MAX_SCORE_GAIN",
     "FUSION_OVERLAP_RATE",
@@ -64,7 +63,6 @@ __all__ = [
     "calibrateMotionScore",
     "composeSingleScore",
     "UNCALIBRATED_STAGE3_SCORE_CALIBRATION",
-    "ScoredObservation",
     "StateEvaluator",
     "StateInstance",
     "StateObservation",

@@ -11,6 +11,8 @@ from track360.core.errors import ConfigError
 
 SUPPORTED_SCHEMA_VERSION = 1
 VISUALIZATION_STAGES = frozenset({"local_rgb", "backend_box", "geometry_box"})
+GEOMETRY_RESAMPLERS = frozenset({"cpu", "cuda"})
+FUSION_BOX_MODES = frozenset({"reference_adaptive", "best_source"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,8 +29,10 @@ class ModelConfig:
             raise ConfigError("model.variant must be artrackv2_b_256")
         if not self.variant.strip():
             raise ConfigError("model.variant must be non-empty")
-        if self.precision not in {"fp32", "fp16"}:
-            raise ConfigError(f"unsupported model.precision: {self.precision}")
+        if self.precision != "fp32":
+            raise ConfigError(
+                f"unsupported model.precision: {self.precision}; only fp32 is implemented"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,28 +52,19 @@ class GeometryConfig:
     boundarySamplesPerEdge: int
     minFovRad: float
     maxFovRad: float
+    resampler: str = "cpu"
 
     def __post_init__(self) -> None:
         if self.viewWidthPx <= 0 or self.viewHeightPx <= 0:
             raise ConfigError("geometry view dimensions must be positive")
+        if self.resampler not in GEOMETRY_RESAMPLERS:
+            raise ConfigError(f"unsupported geometry.resampler: {self.resampler}")
         if self.boundarySamplesPerEdge < 2:
             raise ConfigError("geometry.boundarySamplesPerEdge must be at least 2")
         if not 0.0 < self.minFovRad < self.maxFovRad < pi:
             raise ConfigError("geometry FOV must satisfy 0 < minFovRad < maxFovRad < pi")
         if not isclose(self.maxFovRad, 2.0 * pi / 3.0, abs_tol=1e-9):
             raise ConfigError("geometry.maxFovDeg must be 120 for fixed search views")
-
-
-@dataclass(frozen=True, slots=True)
-class DecisionGateConfig:
-    motionScoreWeight: float
-    scaleScoreWeight: float
-
-    def __post_init__(self) -> None:
-        _requireProbability("decisionGate.motionScoreWeight", self.motionScoreWeight)
-        _requireProbability("decisionGate.scaleScoreWeight", self.scaleScoreWeight)
-        if self.motionScoreWeight + self.scaleScoreWeight > 1.0:
-            raise ConfigError("decision gate motion and scale weights must sum to at most 1")
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +93,7 @@ class EvaluatorConfig:
         _requireProbability(
             "evaluator.fusionSourceMinConfidence", self.fusionSourceMinConfidence
         )
-        if self.fusionBoxMode not in {"reference_adaptive", "best_source"}:
+        if self.fusionBoxMode not in FUSION_BOX_MODES:
             raise ConfigError(
                 "evaluator.fusionBoxMode must be 'reference_adaptive' or 'best_source'"
             )
@@ -207,21 +202,79 @@ class RecoveryConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class RuntimeConfig:
-    decodeQueueCapacity: int
-    inferRequestQueueCapacity: int
-    inferResponseQueueCapacity: int
-    resultQueueCapacity: int
+class BackendTuningConfig:
+    """Controller and backend switches tuned for the ARTrackV2 backend.
+
+    The defaults are the production operating point and must stay identical to
+    ``configs/default.yaml``.  ``None`` means "no override": the corresponding
+    ``evaluator`` value, fusion constant or geometry FOV limit applies.
+    """
+
+    acceptAnyCandidate: bool = True
+    directMode: bool = False
+    singleRound: bool = False
+    adaptiveViewCount: bool = False
+    singleView: bool = False
+    singleViewHorizontalFovCapRad: float | None = pi / 2.0
+    singleViewVerticalFovCapRad: float | None = pi / 2.0
+    fourViewFovCapRad: float | None = None
+    fullViewSearch: bool = False
+    useMotionScore: bool = False
+    templateFovScale: float = 2.5
+    onlineTemplate: bool = True
+    templateMinConfidence: float = 0.515
+    allowSingleViewTemplate: bool = True
+    holdWeakBox: bool = True
+    fusionSourceMinConfidence: float | None = 0.35
+    fusionOverlap: float | None = 0.45
+    fusionBoxMode: str | None = None
 
     def __post_init__(self) -> None:
-        capacities = (
-            self.decodeQueueCapacity,
-            self.inferRequestQueueCapacity,
-            self.inferResponseQueueCapacity,
-            self.resultQueueCapacity,
-        )
-        if any(capacity <= 0 for capacity in capacities):
-            raise ConfigError("runtime queue capacities must be positive")
+        for name in (
+            "acceptAnyCandidate",
+            "directMode",
+            "singleRound",
+            "adaptiveViewCount",
+            "singleView",
+            "fullViewSearch",
+            "useMotionScore",
+            "onlineTemplate",
+            "allowSingleViewTemplate",
+            "holdWeakBox",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise ConfigError(f"backendTuning.{name} must be boolean")
+        for name in ("singleViewHorizontalFovCapRad", "singleViewVerticalFovCapRad"):
+            value = getattr(self, name)
+            if value is not None and not 0.0 < value < pi:
+                raise ConfigError(f"backendTuning.{name} must be in (0, pi)")
+        if self.fourViewFovCapRad is not None and not pi / 6.0 <= self.fourViewFovCapRad < pi:
+            raise ConfigError("backendTuning.fourViewFovCapDeg must be in [30, 180)")
+        if not isfinite(self.templateFovScale) or self.templateFovScale < 1.0:
+            raise ConfigError("backendTuning.templateFovScale must be at least 1")
+        _requireProbability("backendTuning.templateMinConfidence", self.templateMinConfidence)
+        if self.fusionSourceMinConfidence is not None:
+            _requireProbability(
+                "backendTuning.fusionSourceMinConfidence", self.fusionSourceMinConfidence
+            )
+        if self.fusionOverlap is not None:
+            _requireProbability("backendTuning.fusionOverlap", self.fusionOverlap)
+        if self.fusionBoxMode is not None and self.fusionBoxMode not in FUSION_BOX_MODES:
+            raise ConfigError(
+                "backendTuning.fusionBoxMode must be null, 'reference_adaptive' or 'best_source'"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ReproducibilityConfig:
+    seed: int = 0
+    deterministic: bool = True
+
+    def __post_init__(self) -> None:
+        if isinstance(self.seed, bool) or not isinstance(self.seed, int) or self.seed < 0:
+            raise ConfigError("reproducibility.seed must be a non-negative integer")
+        if not isinstance(self.deterministic, bool):
+            raise ConfigError("reproducibility.deterministic must be boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,12 +297,12 @@ class AppConfig:
     model: ModelConfig
     scoring: ScoringConfig
     geometry: GeometryConfig
-    decisionGate: DecisionGateConfig
     evaluator: EvaluatorConfig
     motion: MotionConfig
     tracking: TrackingConfig
     recovery: RecoveryConfig
-    runtime: RuntimeConfig
+    backendTuning: BackendTuningConfig
+    reproducibility: ReproducibilityConfig
     visualization: VisualizationConfig
     sourcePath: Path
 
@@ -279,12 +332,12 @@ def loadConfig(path: str | Path) -> AppConfig:
             "model",
             "scoring",
             "geometry",
-            "decisionGate",
             "evaluator",
             "motion",
             "tracking",
             "recovery",
-            "runtime",
+            "backendTuning",
+            "reproducibility",
             "visualization",
         },
     )
@@ -305,12 +358,14 @@ def loadConfig(path: str | Path) -> AppConfig:
     geometryRaw = _section(
         root,
         "geometry",
-        {"viewWidthPx", "viewHeightPx", "boundarySamplesPerEdge", "minFovDeg", "maxFovDeg"},
-    )
-    gateRaw = _section(
-        root,
-        "decisionGate",
-        {"motionScoreWeight", "scaleScoreWeight"},
+        {
+            "viewWidthPx",
+            "viewHeightPx",
+            "boundarySamplesPerEdge",
+            "minFovDeg",
+            "maxFovDeg",
+            "resampler",
+        },
     )
     evaluatorRaw = _section(
         root,
@@ -370,16 +425,31 @@ def loadConfig(path: str | Path) -> AppConfig:
             "maxCoveredCells",
         },
     )
-    runtimeRaw = _section(
+    tuningRaw = _section(
         root,
-        "runtime",
+        "backendTuning",
         {
-            "decodeQueueCapacity",
-            "inferRequestQueueCapacity",
-            "inferResponseQueueCapacity",
-            "resultQueueCapacity",
+            "acceptAnyCandidate",
+            "directMode",
+            "singleRound",
+            "adaptiveViewCount",
+            "singleView",
+            "singleViewHorizontalFovCapDeg",
+            "singleViewVerticalFovCapDeg",
+            "fourViewFovCapDeg",
+            "fullViewSearch",
+            "useMotionScore",
+            "templateFovScale",
+            "onlineTemplate",
+            "templateMinConfidence",
+            "allowSingleViewTemplate",
+            "holdWeakBox",
+            "fusionSourceMinConfidence",
+            "fusionOverlap",
+            "fusionBoxMode",
         },
     )
+    reproducibilityRaw = _section(root, "reproducibility", {"seed", "deterministic"})
     visualizationRaw = _section(root, "visualization", {"enabled", "outputRoot", "stages"})
 
     weightsValue = _requireStr("model.weights", modelRaw["weights"])
@@ -429,14 +499,7 @@ def loadConfig(path: str | Path) -> AppConfig:
             maxFovRad=_degreesToRadians(
                 "geometry.maxFovDeg", _requireFloat("geometry.maxFovDeg", geometryRaw["maxFovDeg"])
             ),
-        ),
-        decisionGate=DecisionGateConfig(
-            motionScoreWeight=_requireFloat(
-                "decisionGate.motionScoreWeight", gateRaw["motionScoreWeight"]
-            ),
-            scaleScoreWeight=_requireFloat(
-                "decisionGate.scaleScoreWeight", gateRaw["scaleScoreWeight"]
-            ),
+            resampler=_requireStr("geometry.resampler", geometryRaw["resampler"]),
         ),
         evaluator=EvaluatorConfig(
             supportWeight=_requireFloat("evaluator.supportWeight", evaluatorRaw["supportWeight"]),
@@ -537,18 +600,63 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
             maxCoveredCells=_requireInt("recovery.maxCoveredCells", recoveryRaw["maxCoveredCells"]),
         ),
-        runtime=RuntimeConfig(
-            decodeQueueCapacity=_requireInt(
-                "runtime.decodeQueueCapacity", runtimeRaw["decodeQueueCapacity"]
+        backendTuning=BackendTuningConfig(
+            acceptAnyCandidate=_requireBool(
+                "backendTuning.acceptAnyCandidate", tuningRaw["acceptAnyCandidate"]
             ),
-            inferRequestQueueCapacity=_requireInt(
-                "runtime.inferRequestQueueCapacity", runtimeRaw["inferRequestQueueCapacity"]
+            directMode=_requireBool("backendTuning.directMode", tuningRaw["directMode"]),
+            singleRound=_requireBool("backendTuning.singleRound", tuningRaw["singleRound"]),
+            adaptiveViewCount=_requireBool(
+                "backendTuning.adaptiveViewCount", tuningRaw["adaptiveViewCount"]
             ),
-            inferResponseQueueCapacity=_requireInt(
-                "runtime.inferResponseQueueCapacity", runtimeRaw["inferResponseQueueCapacity"]
+            singleView=_requireBool("backendTuning.singleView", tuningRaw["singleView"]),
+            singleViewHorizontalFovCapRad=_optionalDegreesToRadians(
+                "backendTuning.singleViewHorizontalFovCapDeg",
+                tuningRaw["singleViewHorizontalFovCapDeg"],
             ),
-            resultQueueCapacity=_requireInt(
-                "runtime.resultQueueCapacity", runtimeRaw["resultQueueCapacity"]
+            singleViewVerticalFovCapRad=_optionalDegreesToRadians(
+                "backendTuning.singleViewVerticalFovCapDeg",
+                tuningRaw["singleViewVerticalFovCapDeg"],
+            ),
+            fourViewFovCapRad=_optionalDegreesToRadians(
+                "backendTuning.fourViewFovCapDeg", tuningRaw["fourViewFovCapDeg"]
+            ),
+            fullViewSearch=_requireBool(
+                "backendTuning.fullViewSearch", tuningRaw["fullViewSearch"]
+            ),
+            useMotionScore=_requireBool(
+                "backendTuning.useMotionScore", tuningRaw["useMotionScore"]
+            ),
+            templateFovScale=_requireFloat(
+                "backendTuning.templateFovScale", tuningRaw["templateFovScale"]
+            ),
+            onlineTemplate=_requireBool(
+                "backendTuning.onlineTemplate", tuningRaw["onlineTemplate"]
+            ),
+            templateMinConfidence=_requireFloat(
+                "backendTuning.templateMinConfidence", tuningRaw["templateMinConfidence"]
+            ),
+            allowSingleViewTemplate=_requireBool(
+                "backendTuning.allowSingleViewTemplate", tuningRaw["allowSingleViewTemplate"]
+            ),
+            holdWeakBox=_requireBool("backendTuning.holdWeakBox", tuningRaw["holdWeakBox"]),
+            fusionSourceMinConfidence=_optionalFloat(
+                "backendTuning.fusionSourceMinConfidence",
+                tuningRaw["fusionSourceMinConfidence"],
+            ),
+            fusionOverlap=_optionalFloat(
+                "backendTuning.fusionOverlap", tuningRaw["fusionOverlap"]
+            ),
+            fusionBoxMode=(
+                None
+                if tuningRaw["fusionBoxMode"] is None
+                else _requireStr("backendTuning.fusionBoxMode", tuningRaw["fusionBoxMode"])
+            ),
+        ),
+        reproducibility=ReproducibilityConfig(
+            seed=_requireInt("reproducibility.seed", reproducibilityRaw["seed"]),
+            deterministic=_requireBool(
+                "reproducibility.deterministic", reproducibilityRaw["deterministic"]
             ),
         ),
         visualization=VisualizationConfig(
@@ -614,6 +722,14 @@ def _requireFloat(name: str, value: object) -> float:
     if not isfinite(result):
         raise ConfigError(f"{name} must be finite")
     return result
+
+
+def _optionalFloat(name: str, value: object) -> float | None:
+    return None if value is None else _requireFloat(name, value)
+
+
+def _optionalDegreesToRadians(name: str, value: object) -> float | None:
+    return None if value is None else _degreesToRadians(name, _requireFloat(name, value))
 
 
 def _requireStringSet(name: str, value: object) -> frozenset[str]:

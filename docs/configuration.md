@@ -1,9 +1,6 @@
 # 配置说明
 
-运行参数来自两个地方：
-
-1. **YAML 配置文件**（默认 `configs/default.yaml`），由 `core/config.py::loadConfig()` 严格校验；
-2. **环境变量**：ARTrackV2 后端的一组调参开关，暂时还没有迁入 YAML（见本文最后一节）。
+所有运行参数都来自 YAML 配置文件（默认 `configs/default.yaml`），由 `core/config.py::loadConfig()` 严格校验。代码中不读取任何环境变量：同一份配置文件加同一个 commit，得到的就是同一组参数。
 
 ## YAML 加载规则
 
@@ -16,16 +13,46 @@
 
 | 配置段 | 归属模块 | 主要字段 |
 |---|---|---|
-| `model` | Backends | `variant`（当前只支持 `artrackv2_b_256`）、`weights`、`precision` |
+| `model` | Backends | `variant`（当前只支持 `artrackv2_b_256`）、`weights`、`precision`（当前只支持 `fp32`） |
 | `scoring` | Controller | `calibrationArtifact`：可选的分数校准 JSON；`requireCheckpointHashMatch`：校准产物必须与权重的 SHA-256 绑定 |
-| `geometry` | Geometry | 局部视图尺寸 256×256、`boundarySamplesPerEdge`（局部框每条边回投的采样点数）、FoV 范围 20°–120° |
-| `decisionGate` | Controller | 兼容字段，当前生产路径不使用 |
+| `geometry` | Geometry | 局部视图尺寸 256×256、`boundarySamplesPerEdge`（局部框每条边回投的采样点数）、FoV 范围 20°–120°、`resampler`（`cpu` / `cuda`） |
 | `evaluator` | Controller | `fusionSourceMinConfidence`（参与融合的来源最低分）、`overlapThreshold`、`fusionBoxMode` |
 | `motion` | Controller | 球面运动估计：Huber 参数、过程噪声、最大角速度、最大尺度变化率 |
 | `tracking` | Controller | `candidateMinScore`、运动窗口长度、每帧最多轮数（2）和视图数上限（12） |
 | `recovery` | Controller | 找回目标时的 cubemap / 环形视图布局 |
-| `runtime` | Runtime | 队列容量；当前逐帧循环是顺序执行的，这些值只被校验，不影响运行 |
+| `backendTuning` | Controller / Backends | 针对 ARTrackV2 后端的开关和阈值，见下一节 |
+| `reproducibility` | Runtime | `seed`：随机种子；`deterministic`：是否启用确定性 cuDNN |
 | `visualization` | Visualization | 是否输出中间视图、输出目录、输出哪些阶段 |
+
+## backendTuning
+
+ARTrackV2 的原始分数集中在 0.5 附近，不是校准过的概率，所以 `tracking.candidateMinScore`、`evaluator.fusionSourceMinConfidence` 这类按概率设定的门槛不能直接使用。`backendTuning` 把针对这个后端的调整集中在一处。取值为 `null` 表示“不覆盖”，此时使用右栏说明的回退值。
+
+| 字段 | 默认值 | 作用 |
+|---|---|---|
+| `acceptAnyCandidate` | `true` | 接受最佳候选作为测量，不再用 `candidateMinScore` 过滤。**为 `true` 时每帧只做一轮搜索** |
+| `directMode` | `false` | 不做跨视图融合，直接取最高分候选，且每帧只做一轮 |
+| `singleRound` | `false` | 在带门槛的模式（`acceptAnyCandidate: false`）下禁止第二轮 |
+| `adaptiveViewCount` | `false` | 按目标角尺寸在单视图和四视图之间切换（目标 ≥ 75° 或占画面 ≥ 20% 时用四视图） |
+| `singleView` | `false` | 始终只用一个以预测中心为中心的视图 |
+| `singleViewHorizontalFovCapDeg` / `singleViewVerticalFovCapDeg` | `90.0` | 单视图模式的视场上限；`null` 表示只受 `geometry.maxFovDeg` 限制 |
+| `fourViewFovCapDeg` | `null` | 四视图模式的视场上限（≥ 30）；`null` 表示使用 `geometry.maxFovDeg` |
+| `fullViewSearch` | `false` | 把整个局部视图缩放后作为搜索区域，跳过 ARTrackV2 自己的 4 倍搜索裁剪 |
+| `useMotionScore` | `false` | 用“外观 + 运动”加权得到 SingleScore；为 `false` 时只用外观分。没有校准产物时运动权重为 0，此开关不影响结果 |
+| `templateFovScale` | `2.5` | 模板视图视场相对目标角尺寸的倍数（≥ 1） |
+| `onlineTemplate` | `true` | 保留第 0 帧 anchor 的同时允许更新 recent / stable 模板 |
+| `templateMinConfidence` | `0.515` | 允许更新模板的最低分 |
+| `allowSingleViewTemplate` | `true` | 只有单个视图支持时也允许更新模板；为 `false` 时要求分数 ≥ 0.84 |
+| `holdWeakBox` | `true` | 测量未被接受且目标面积 ≥ 画面的 10% 时，保持上一帧的框 |
+| `fusionSourceMinConfidence` | `0.35` | 参与融合的来源最低分；`null` 时回退为 0（`acceptAnyCandidate: true`）或 `evaluator.fusionSourceMinConfidence` |
+| `fusionOverlap` | `0.45` | 融合所需的最小重叠率；`null` 时使用代码常量 0.70 |
+| `fusionBoxMode` | `null` | 融合框的生成方式；`null` 时使用 `evaluator.fusionBoxMode` |
+
+`core/config.py::BackendTuningConfig` 的 dataclass 默认值与 `configs/default.yaml` 相同，有测试保证两者不会不一致。因此不传配置、直接构造 `TrackControllerImpl` / `StateEvaluator` / `TemplatePolicy` / `RecoveryPlanner` 时，得到的也是默认配置的行为。
+
+### configs/tests/legacy_off.yaml
+
+这份配置把 `backendTuning` 的所有开关设为“关闭”：带门槛的两轮搜索、不更新模板、不保持弱框、使用 `evaluator` 中的融合门槛。它对应迁移前“没有设置任何环境变量”时控制器的行为，**只用于测试**两轮搜索、融合门槛等在默认配置下不会触发的逻辑。
 
 ## 关键约束
 
@@ -37,29 +64,13 @@
 
 1. 在 `core/config.py` 中给对应的 dataclass 加字段和校验；
 2. 把字段名加入 `_section()` 的允许集合，并在构造处解析；
-3. 更新 `configs/default.yaml`；
+3. 更新 `configs/default.yaml` 和 `configs/tests/legacy_off.yaml`；
 4. 更新 `tests/unit/test_core_config.py` 和本文档。
 
-## 环境变量（待迁移）
+新参数不允许通过环境变量或代码常量绕过配置文件。
 
-`runtime/driver.py::buildRuntime()` 在 `model.variant` 为 `artrackv2_b_256` 时，会用 `os.environ.setdefault` 写入下面这些默认值，再由各模块读取。已经在外部设置的值不会被覆盖，因此可以用环境变量临时调参。
+## 运行记录
 
-| 变量 | 后端默认值 | 读取位置 | 作用 |
-|---|---|---|---|
-| `TRACK360_ARTRACK_ACCEPT_ANY` | `1` | `controller/state_evaluator.py` | 取消融合来源的最低分门槛 |
-| `TRACK360_ARTRACK_ADAPTIVE` | `0` | 视图规划、评估器 | 按目标角尺寸自动选择单视图或四视图 |
-| `TRACK360_ARTRACK_SINGLE_ROUND` | `0` | 评估器 | 每帧只做一轮搜索 |
-| `TRACK360_ARTRACK_DISABLE_MOTION` | `1` | `runtime/driver.py` | 不使用运动分参与 SingleScore |
-| `TRACK360_ARTRACK_SINGLE_FOV_DEG` | `90` | `controller/recovery_planner.py` | 单视图模式的视场上限 |
-| `TRACK360_ARTRACK_TEMPLATE_FOV_SCALE` | `2.5` | `controller/track_controller.py` | 模板视图视场相对目标的倍数 |
-| `TRACK360_ARTRACK_HOLD_WEAK` | `1` | 跟踪控制器 | 弱候选时保持上一个可信框 |
-| `TRACK360_ARTRACK_TEMPLATE_MIN_CONF` | `0.515` | `controller/template_policy.py` | 允许更新 recent 模板的最低分 |
-| `TRACK360_ARTRACK_ALLOW_SINGLE_TEMPLATE` | `1` | 模板策略 | 允许只有单个来源时更新模板 |
-| `TRACK360_ARTRACK_ONLINE_TEMPLATE` | `1` | 模板策略 | 保留第 0 帧 anchor 的同时启用 recent 模板更新 |
-| `TRACK360_ARTRACK_FUSION_SOURCE_MIN` | `0.35` | 评估器 | 融合来源最低分（覆盖 YAML 中的值） |
-| `TRACK360_ARTRACK_FUSION_OVERLAP` | `0.45` | 评估器 | 融合所需的最小重叠率（覆盖代码常量 0.70） |
-| `TRACK360_GPU_GEOMETRY` | `0` | `runtime/driver.py` | 设为 `1` 时使用 CUDA 几何重采样 |
+`track360 track` 和 `track360 airsim360` 每次运行都会在结果文件旁写一个 `<结果文件名>.run.json`，内容包括：git commit 和工作区是否干净、配置哈希、最终生效的完整配置、权重文件的 SHA-256、Python / PyTorch / CUDA / cuDNN / NumPy / OpenCV 版本、GPU 型号和驱动版本。
 
-另外还有几个没有默认值、只用于实验的开关：`TRACK360_ARTRACK_FULL_VIEW`、`TRACK360_ARTRACK_SINGLE_VIEW`、`TRACK360_ARTRACK_SINGLE_HFOV_DEG`、`TRACK360_ARTRACK_SINGLE_VFOV_DEG`、`TRACK360_ARTRACK_FOV_CAP_DEG`、`TRACK360_ARTRACK_DIRECT`、`TRACK360_ARTRACK_FUSION_BOX_MODE`，以及性能统计开关 `TRACK360_PROFILE`。
-
-> **注意**：这些变量只在 `buildRuntime()` 中设置默认值。单元测试直接构造控制器、不经过 `buildRuntime()`，因此测试覆盖的是这些开关都关闭时的行为，与实际运行时的行为不同。把它们迁入 YAML 并让测试使用同一套参数，是 [V2Plan](V2Plan.md) 第二阶段的首要任务。
+配置哈希只覆盖影响结果的参数，不包含因机器而异的路径（权重路径、可视化输出目录），所以同一份配置在不同机器上的哈希相同。

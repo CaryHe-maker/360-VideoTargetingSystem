@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Sequence
-from math import isfinite
 
 from track360.controller.fusor import FUSION_OVERLAP_RATE, FusionBoxMode, Fusor
 from track360.controller.state_model import (
@@ -16,7 +14,11 @@ from track360.controller.state_model import (
     StateObservation,
     TrackMode,
 )
-from track360.core.config import DecisionGateConfig, EvaluatorConfig, TrackingConfig
+from track360.core.config import (
+    BackendTuningConfig,
+    EvaluatorConfig,
+    TrackingConfig,
+)
 from track360.core.errors import ProtocolError
 from track360.core.protocols import SphericalGeometry
 from track360.core.types import BFoV, ProjectedObservation, ResultSource, SearchPlan
@@ -31,17 +33,17 @@ class StateEvaluator:
 
     def __init__(
         self,
-        gateConfig: DecisionGateConfig,
         trackingConfig: TrackingConfig,
         evaluatorConfig: EvaluatorConfig | None = None,
+        backendTuning: BackendTuningConfig | None = None,
     ) -> None:
-        del gateConfig
         self._tracking = trackingConfig
         self._config = evaluatorConfig or EvaluatorConfig()
-        self._artrackDirect = os.environ.get("TRACK360_ARTRACK_DIRECT", "0") == "1"
-        self._artrackSingleRound = os.environ.get("TRACK360_ARTRACK_SINGLE_ROUND", "0") == "1"
-        self._artrackAcceptAny = os.environ.get("TRACK360_ARTRACK_ACCEPT_ANY", "0") == "1"
-        self._artrackAdaptive = os.environ.get("TRACK360_ARTRACK_ADAPTIVE", "0") == "1"
+        self._tuning = backendTuning or BackendTuningConfig()
+        self._artrackDirect = self._tuning.directMode
+        self._artrackSingleRound = self._tuning.singleRound
+        self._artrackAcceptAny = self._tuning.acceptAnyCandidate
+        self._artrackAdaptive = self._tuning.adaptiveViewCount
 
     def evaluate(
         self,
@@ -61,17 +63,18 @@ class StateEvaluator:
         if priorObservations and plan.attemptIndex == 0:
             raise ProtocolError("first attempt cannot contain prior observations")
         candidatePool = _combineObservations(priorObservations, observations)
-        boxMode = os.environ.get(
-            "TRACK360_ARTRACK_FUSION_BOX_MODE",
-            self._config.fusionBoxMode,
+        boxMode = self._tuning.fusionBoxMode or self._config.fusionBoxMode
+        overlapRate = (
+            self._tuning.fusionOverlap
+            if self._tuning.fusionOverlap is not None
+            else FUSION_OVERLAP_RATE
         )
-        overlapRate = _artrackFusionFloat("TRACK360_ARTRACK_FUSION_OVERLAP", FUSION_OVERLAP_RATE)
-        configuredSourceMin = (
-            0.0 if self._artrackAcceptAny else self._config.fusionSourceMinConfidence
-        )
-        sourceMinConfidence = _artrackFusionFloat(
-            "TRACK360_ARTRACK_FUSION_SOURCE_MIN", configuredSourceMin
-        )
+        if self._tuning.fusionSourceMinConfidence is not None:
+            sourceMinConfidence = self._tuning.fusionSourceMinConfidence
+        else:
+            sourceMinConfidence = (
+                0.0 if self._artrackAcceptAny else self._config.fusionSourceMinConfidence
+            )
         best = Fusor(
             geometry,
             overlapRate=overlapRate,
@@ -220,18 +223,6 @@ class StateEvaluator:
             raise ProtocolError("projected observation contains an unknown viewId")
         if actual and actual != tuple(item for item in expected if item in set(actual)):
             raise ProtocolError("projected observations must preserve requested view order")
-
-
-def _artrackFusionFloat(name: str, default: float) -> float:
-    """Read bounded ARTrack fusion overrides without malformed env state."""
-    raw = os.environ.get(name)
-    if raw is None:
-        return float(default)
-    try:
-        value = float(raw)
-    except ValueError:
-        return float(default)
-    return value if isfinite(value) and 0.0 <= value <= 1.0 else float(default)
 
 
 def _measurementAccepted(candidate: EvaluatedCandidate | None, minimumScore: float) -> bool:

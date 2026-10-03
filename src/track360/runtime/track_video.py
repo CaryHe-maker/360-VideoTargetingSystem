@@ -24,6 +24,7 @@ from track360.runtime.driver import (
     openSink,
     runTracking,
 )
+from track360.runtime.reproducibility import writeRunMetadata
 
 EXIT_CONFIG = 2
 EXIT_DECODE = 3
@@ -65,9 +66,11 @@ def main(argv: list[str] | None = None) -> int:
             sink=runtime.sink,
             recorder=runtime.recorder,
             scoreCalibration=runtime.scoreCalibration,
+            useMotionScore=runtime.useMotionScore,
         )
         expectedCount = resultCount if getattr(source, "frameCount", 0) <= 0 else source.frameCount
         finalizeSink(runtime.sink, expectedCount)
+        writeRunMetadata(args.output, config)
         return 0
     except ConfigError as error:
         _report(error)

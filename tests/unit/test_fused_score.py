@@ -183,6 +183,7 @@ class FusedScoreRemappingTest(unittest.TestCase):
                 predictedMotion=predicted,
                 geometry=geometry,
                 scoreCalibration=TEST_CALIBRATION,
+                useMotionScore=True,
             )
 
         score.assert_called_once_with(view.spec.bfov.center, predicted)
@@ -214,6 +215,7 @@ class FusedScoreRemappingTest(unittest.TestCase):
                 predictedMotion=None,
                 geometry=geometry,
                 scoreCalibration=TEST_CALIBRATION,
+                useMotionScore=True,
             )
 
         self.assertEqual(projected, ())

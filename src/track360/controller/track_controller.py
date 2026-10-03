@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from math import asin, atan2, isfinite, tan
+from math import asin, atan2, tan
 from typing import TYPE_CHECKING
 
 from track360.controller.motion_estimator import SphericalMotionEstimator
@@ -32,7 +31,7 @@ from track360.controller.state_model import (
 from track360.controller.template_policy import TemplateDecision, TemplatePolicy
 from track360.core.config import (
     AppConfig,
-    DecisionGateConfig,
+    BackendTuningConfig,
     EvaluatorConfig,
     GeometryConfig,
     MotionConfig,
@@ -94,23 +93,24 @@ class TrackControllerImpl(TrackControllerProtocol):
         geometryConfig: GeometryConfig | None = None,
         trackingConfig: TrackingConfig | None = None,
         recoveryConfig: RecoveryConfig | None = None,
-        decisionGateConfig: DecisionGateConfig | None = None,
         evaluatorConfig: EvaluatorConfig | None = None,
         motionConfig: MotionConfig | None = None,
+        backendTuning: BackendTuningConfig | None = None,
         motionEstimator: MotionEstimator | None = None,
     ) -> None:
         if config is not None:
             geometryConfig = config.geometry
             trackingConfig = config.tracking
             recoveryConfig = config.recovery
-            decisionGateConfig = config.decisionGate
             evaluatorConfig = config.evaluator
             motionConfig = config.motion
+            backendTuning = config.backendTuning
         if geometryConfig is None or trackingConfig is None or recoveryConfig is None:
             raise ValueError("geometryConfig, trackingConfig and recoveryConfig are required")
-        decisionGateConfig = decisionGateConfig or DecisionGateConfig(0.25, 0.15)
         evaluatorConfig = evaluatorConfig or EvaluatorConfig()
         motionConfig = motionConfig or MotionConfig()
+        backendTuning = backendTuning or BackendTuningConfig()
+        self._backendTuning = backendTuning
         self._geometry = geometry
         self._geometryConfig = geometryConfig
         self._trackingConfig = trackingConfig
@@ -126,14 +126,15 @@ class TrackControllerImpl(TrackControllerProtocol):
             maxAngularSpeedRadPerSec=motionConfig.maxAngularSpeedRadPerSec,
             maxLogScaleRatePerSec=motionConfig.maxLogScaleRatePerSec,
         )
-        self._evaluator = StateEvaluator(decisionGateConfig, trackingConfig, evaluatorConfig)
+        self._evaluator = StateEvaluator(trackingConfig, evaluatorConfig, backendTuning)
         self._planner = RecoveryPlanner(
             geometryConfig,
             trackingConfig,
             recoveryConfig,
+            backendTuning,
         )
         self._stateMachine = TrackStateMachine(trackingConfig)
-        self._templatePolicy = TemplatePolicy(trackingConfig)
+        self._templatePolicy = TemplatePolicy(trackingConfig, backendTuning)
         self._recovery = RecoveryMemory()
 
         self._initialized = False
@@ -190,12 +191,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         if int(frame.frameIndex) != 0:
             raise ProtocolError("initialization must use frameIndex 0")
         objectBfov = self._geometry.bboxToBfov(initialBox, frame.rgb.shape[1], frame.rgb.shape[0])
-        try:
-            templateScale = float(os.environ.get("TRACK360_ARTRACK_TEMPLATE_FOV_SCALE", "2.0"))
-        except ValueError:
-            templateScale = 2.0
-        if not isfinite(templateScale) or templateScale < 1.0:
-            templateScale = 2.0
+        templateScale = self._backendTuning.templateFovScale
         templateBfov = BFoV(
             center=objectBfov.center,
             horizontalFovRad=_clampFov(
@@ -684,10 +680,7 @@ class TrackControllerImpl(TrackControllerProtocol):
                 else 0.0
             )
             frameArea = float(planned.frame.rgb.shape[1] * planned.frame.rgb.shape[0])
-            if (
-                os.environ.get("TRACK360_ARTRACK_HOLD_WEAK", "0") == "1"
-                and currentArea >= 0.10 * frameArea
-            ):
+            if self._backendTuning.holdWeakBox and currentArea >= 0.10 * frameArea:
                 assert self._currentBox is not None and self._currentBfov is not None
                 outputBox = self._currentBox
                 outputBfov = self._currentBfov

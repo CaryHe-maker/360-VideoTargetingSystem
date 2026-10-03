@@ -40,6 +40,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = ["slow: exhaustive regression runs that take about a minute or more"]
 
 [tool.ruff]
 line-length = 100

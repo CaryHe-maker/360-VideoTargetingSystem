@@ -1,8 +1,11 @@
+# Every backendTuning switch at its pre-V2 "off" value: the behavior the controller
+# had when no TRACK360_ARTRACK_* environment variable was set. Used only by tests that
+# exercise the gated two-round state machine; production uses ../default.yaml.
 schemaVersion: 1
 model:
   backend: pytorch
   variant: artrackv2_b_256
-  weights: ../models/artrackv2_b_256.pth.tar
+  weights: ../../models/artrackv2_b_256.pth.tar
   precision: fp32
 scoring:
   calibrationArtifact: null
@@ -53,30 +56,30 @@ recovery:
   cubeMapOverlapRatio: 0.10
   maxCoveredCells: 256
 backendTuning:
-  acceptAnyCandidate: true
+  acceptAnyCandidate: false
   directMode: false
   singleRound: false
   adaptiveViewCount: false
   singleView: false
-  singleViewHorizontalFovCapDeg: 90.0
-  singleViewVerticalFovCapDeg: 90.0
+  singleViewHorizontalFovCapDeg: null
+  singleViewVerticalFovCapDeg: null
   fourViewFovCapDeg: null
   fullViewSearch: false
-  useMotionScore: false
-  templateFovScale: 2.5
-  onlineTemplate: true
+  useMotionScore: true
+  templateFovScale: 2.0
+  onlineTemplate: false
   templateMinConfidence: 0.515
   allowSingleViewTemplate: true
-  holdWeakBox: true
-  fusionSourceMinConfidence: 0.35
-  fusionOverlap: 0.45
+  holdWeakBox: false
+  fusionSourceMinConfidence: null
+  fusionOverlap: null
   fusionBoxMode: null
 reproducibility:
   seed: 0
   deterministic: true
 visualization:
   enabled: false
-  outputRoot: ../outputs/visualization
+  outputRoot: ../../outputs/visualization
   stages:
     - local_rgb
     - backend_box

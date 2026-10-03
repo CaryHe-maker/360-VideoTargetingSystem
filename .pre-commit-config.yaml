@@ -1,0 +1,17 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.12
+    hooks:
+      - id: ruff-check
+        files: ^(src|tests|tools)/
+        exclude: ^src/track360/third_party/
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+        exclude: ^(src/track360/third_party/|tests/regression/golden/)
+      - id: trailing-whitespace
+        exclude: ^src/track360/third_party/
+      - id: check-added-large-files
+        args: [--maxkb=512]

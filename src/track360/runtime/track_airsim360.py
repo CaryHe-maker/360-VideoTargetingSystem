@@ -26,6 +26,7 @@ from track360.runtime.driver import (
     openSink,
     runTracking,
 )
+from track360.runtime.reproducibility import writeRunMetadata
 from track360.visualization.result import ResultVisualizationRecorder
 from track360.visualization.time_counter import TimeCounter
 
@@ -105,9 +106,11 @@ def main(argv: list[str] | None = None) -> int:
             resultRecorder=resultRecorder,
             processingTimer=timeCounter,
             scoreCalibration=runtime.scoreCalibration,
+            useMotionScore=runtime.useMotionScore,
         )
         expectedCount = resultCount if getattr(source, "frameCount", 0) <= 0 else source.frameCount
         finalizeSink(runtime.sink, expectedCount)
+        writeRunMetadata(args.output, config)
         return 0
     except ConfigError as error:
         _report(error)

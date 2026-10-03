@@ -9,11 +9,10 @@ poisoning recovery.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 from track360.controller.decision_gate import FrameAggregate
-from track360.core.config import TrackingConfig
+from track360.core.config import BackendTuningConfig, TrackingConfig
 from track360.core.types import BBoxXYWH, TemplateCommandKind, TrackStatus
 
 
@@ -25,16 +24,16 @@ class TemplateDecision:
 
 
 class TemplatePolicy:
-    """Maintain a safe short/long-term online template pair.
+    """Maintain a safe short/long-term online template pair."""
 
-    The environment switch keeps the old controller-only API deterministic for
-    lightweight tests and third-party callers.  The production runtime enables
-    it explicitly when constructing the backend.
-    """
-
-    def __init__(self, trackingConfig: TrackingConfig) -> None:
+    def __init__(
+        self,
+        trackingConfig: TrackingConfig,
+        backendTuning: BackendTuningConfig | None = None,
+    ) -> None:
         self._tracking = trackingConfig
-        self._enabled = os.environ.get("TRACK360_ARTRACK_ONLINE_TEMPLATE", "0") == "1"
+        self._tuning = backendTuning or BackendTuningConfig()
+        self._enabled = self._tuning.onlineTemplate
 
     def decide(
         self,
@@ -58,17 +57,14 @@ class TemplatePolicy:
         # used by the legacy config (typical valid values are around 0.49).
         # Keep the threshold configurable so short-window tuning can lower it
         # without changing the immutable anchor policy.
-        try:
-            artrackMin = float(os.environ.get("TRACK360_ARTRACK_TEMPLATE_MIN_CONF", "0.515"))
-        except ValueError:
-            artrackMin = 0.515
+        artrackMin = self._tuning.templateMinConfidence
         configuredMin = self._tracking.candidateMinScore if not self._enabled else 0.0
         if confidence < max(configuredMin, artrackMin):
             return TemplateDecision(TemplateCommandKind.KEEP)
         # The production fast path intentionally uses one centered view for
         # small targets. Permit that route to refresh templates only at a
         # stronger confidence threshold; multi-view support remains preferred.
-        allowSingle = os.environ.get("TRACK360_ARTRACK_ALLOW_SINGLE_TEMPLATE", "1") == "1"
+        allowSingle = self._tuning.allowSingleViewTemplate
         if not aggregate.supported and not allowSingle and confidence < 0.84:
             return TemplateDecision(TemplateCommandKind.KEEP)
         if aggregate.supported and aggregate.agreementScore < 0.40:

@@ -1,6 +1,6 @@
 # Track360 V2 Plan
 
-> 起点：提交 `f04c76d`（比赛解耦与结构重组已完成）
+> 起点：提交 `f04c76d`（比赛解耦与结构重组已完成）；Phase 1 已完成，记录见 [CHANGELOG](../CHANGELOG.md)
 > 终点：发布 **Track360 V2.0**：在公开 benchmark **360VOT** 上明显超过已发表的 360 跟踪基线，结果可复现、工程规范，可以作为成熟开源项目发布和写进简历。
 >
 > 版本约定：**V1** 是面向比赛的版本（已结束）；**V2** 是本次开源重构，本计划全部完成后发布 **V2.0**；后续增强放在 V2.1 及以后（见第 6 节）。
@@ -42,14 +42,14 @@
 
 | 问题 | 影响 | 解决阶段 |
 |---|---|---|
-| 约 20 个 `TRACK360_ARTRACK_*` 环境变量在 `buildRuntime()` 里暗中改变控制器行为；单元测试不经过 `buildRuntime()` | 实际参数不在配置里，不可复现；测试覆盖的不是实际运行的行为 | Phase 1 |
-| `model.precision: fp16` 不生效；`runtime.*QueueCapacity` 和 `decisionGate` 段不起作用 | 配置名不副实 | Phase 1 |
+| 默认配置每帧只做一轮搜索（4 个视图）：`acceptAnyCandidate: true` 时评估器不请求第二轮。两轮搜索、融合门槛等逻辑只在 `configs/tests/legacy_off.yaml` 下被测试覆盖 | “两轮 8 视图”是否比单轮更好，没有在 ARTrackV2 上验证过 | Phase 4 |
+| 图像序列只支持 PNG（自己实现的解码器，4K 帧约 10 秒一帧）；读视频依赖系统里的 ffmpeg | 360VOT 是 JPG 序列，现有读取器不能用 | Phase 2 |
 | 没有任何公开数据集上的结果 | 无法和 benchmark 对比 | Phase 2 |
 | ARTrackV2 调用时 `seq_input=None`，没有使用模型的轨迹提示（trajectory prompt） | 很可能丢掉了 ARTrackV2 的大部分时序优势 | Phase 4 |
 | `LOST` / cubemap 找回路径保留了但从不触发 | 目标丢失后只能靠扩大局部搜索 | Phase 4 |
 | ARTrackV2 的分数集中在 0.5 附近，状态机和融合门槛依赖这个分数 | 门控不可靠 | Phase 4 |
 | 函数和变量用 camelCase，YAML 键也是 camelCase | 不符合 PEP 8 | Phase 3 |
-| 权重需要用户手动从官方链接下载；没有 CI | 上手门槛高，不是成熟的开源项目 | Phase 1 / 6 |
+| 权重需要用户手动从官方链接下载 | 上手门槛高，不是成熟的开源项目 | Phase 6 |
 
 ---
 
@@ -64,29 +64,20 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
                               └─▶ Phase 4 精度提升 ─▶ Phase 5 效率优化 ─▶ Phase 6 产品化 ─▶ Phase 7 发布 V2.0
 ```
 
-### Phase 1：配置收敛与工程底座（约 3 天）
+### Phase 1：配置收敛与工程底座（已完成）
 
-**目标**：让“实际运行的参数”和“测试覆盖的参数”完全来自同一份 YAML。
+完成的内容和回归方式记录在 [CHANGELOG](../CHANGELOG.md)。只剩一项需要确认：
 
-1. **记录迁移前的参考结果**：在 GPU 环境上用当前代码跑 2–3 段视频（AirSim360 或自录全景视频即可），保存逐帧结果文件，作为后面每一步的回归基准。
-2. **环境变量迁入 YAML**：新增 `backendTuning` 配置段（Phase 3 统一改为 snake_case），覆盖全部 `TRACK360_ARTRACK_*` 开关；`buildRuntime()` 不再写环境变量，各模块从配置读取。
-3. **测试同步**：单元测试改为加载同一份 `configs/default.yaml`；原来依赖“开关全关”的测试，改为显式加载一份 `configs/tests/legacy_off.yaml`，或者更新断言。
-4. **回归**：迁移后再跑第 1 步的视频，逐帧结果必须与迁移前**完全一致**。
-5. **清理无效配置**：`model.precision` 暂时只允许 `fp32`（Phase 5 再实现 FP16）；删除 `runtime` 队列段和 `decisionGate` 段及相关代码。
-6. **开源基础文件**：`CHANGELOG.md`；确认 `third_party/artrackv2/` 实际来自的上游 commit，写入 `NOTICE`。
-7. **CI**：GitHub Actions 跑 `ruff check`、`pytest`（CPU，Python 3.11 / 3.12）；加入 pre-commit。
-8. **可复现性**：固定随机种子，设置 `torch.backends.cudnn.deterministic`，在结果目录写入 git commit、配置哈希、GPU 型号、驱动和依赖版本。
-
-**验收**：`grep -r TRACK360_ARTRACK src` 无结果；回归视频逐帧一致；CI 通过。
+1. **CI 首次运行**：分支推送后确认 GitHub Actions 在 Linux 上通过。金标准回归是在 Windows 上录制的，如果 Linux 上的 OpenCV 重采样结果有差异导致 `tests/regression` 失败，需要在 CI 环境重新录制或放宽比较方式。
 
 ### Phase 2：360VOT 评测打通与基线（约 5 天，最关键）
 
 **目标**：拿到第一个能和论文直接对比的数字。
 
-1. **下载数据**：360VOT 测试集与标注（约 58.5 GB）；360VOS 训练集按需下载。数据放在仓库外，通过参数传入。
+1. **下载数据**：360VOT 测试集与标注（约 58.5 GB）；360VOS 训练集按需下载。数据放在仓库外，通过参数传入。每条序列是一个 zip，解压后是 `NNNN/image/000000.jpg…` 和一个 `NNNN/label.json`；`label.json` 以帧文件名为键，每帧包含 `bfov`、`rbfov`（`clon, clat, fov_h, fov_v, rotation`，度）和 `bbox`、`rbbox`（`cx, cy, w, h, rotation`，像素，**中心点表示**）。
 2. **检查数据重叠**：360VOS 中有一部分序列来自 360VOT。用于调参的序列必须**排除所有与 360VOT 测试集重叠的序列**，并把排除列表提交到仓库。
 3. **划分调参集**：从去重后的 360VOS 训练集中选 20–30 条序列作为 `tune` 集，覆盖跨缝、极点、快速运动、小目标、遮挡等属性。**之后所有参数和开关只在 tune 集上决定**。
-4. **数据加载器**：`datasets/vot360.py`，读取帧、BBox / BFoV / rBFoV 真值和属性标签；初始化框直接使用第 0 帧的 BFoV。
+4. **数据加载器**：`datasets/vot360.py`，读取帧、BBox / BFoV / rBFoV 真值和属性标签；初始化框直接使用第 0 帧的 BFoV。图像读取改用 OpenCV 解码并支持 JPG（现有的 PNG 解码器太慢）。
 5. **BFoV 初始化入口**：`track360 track` 支持 `--init-bfov clon,clat,fov_h,fov_v`（度）。
 6. **结果写入器**：按 360VOT 官方格式，每条序列输出一个 `NNNN.txt`。
 7. **评测对齐**：封装官方 toolkit 的指标（S<sub>dual</sub>、P<sub>dual</sub>、P<sub>angle</sub>），加一个交叉验证测试：同一份结果文件，本项目与官方脚本的数值误差 < 1e-3。
@@ -130,6 +121,7 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
 | P0 | 搜索区域与视图尺度对齐：让目标在 256 搜索图中的占比与 ARTrackV2 训练分布一致 | Controller / Backends | 减少尺度失配造成的框误差 |
 | P1 | 分数重校准：在 tune 集上拟合 IoU 感知的分数映射，替代 0.5 附近的原始分数 | Controller | 让融合、状态机和模板门控可靠 |
 | P1 | 运动分重新启用：在分数校准后重新评估“外观 + 运动”加权 | Controller | 抑制相似物体干扰 |
+| P1 | 单轮与两轮搜索对比：默认配置是单轮 4 视图，对比带门槛的两轮 8 视图（依赖分数重校准） | Controller | 确认第二轮是否值得它的前向开销 |
 | P1 | 启用 LOST 状态和 cubemap 找回，阈值在 tune 集上确定 | Controller | 目标丢失或出画后能找回 |
 | P2 | 视图数自适应：高置信度时单轮 4 视图，低置信度时两轮 8 视图 | Controller | 精度不降的前提下减少前向次数 |
 | P2 | 旋转 BFoV（rBFoV）输出：用回投边界点拟合旋转角 | Geometry | 提高极点附近和倾斜目标的 IoU |
@@ -178,9 +170,7 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
 
 ### 3.1 Core / 配置
 
-- **单一配置来源**：所有可调参数只存在于 YAML，删除全部 `os.environ` 读取（性能统计开关 `TRACK360_PROFILE` 也改为命令行参数）。
 - **配置分层**：`configs/default.yaml` + `configs/backends/<name>.yaml` + 命令行覆盖（`--set tracking.windowLength=7`），方便做消融。
-- **配置快照**：每次运行把最终生效的配置写入结果目录，保证实验可追溯。
 - **精简类型**：`ProjectedObservation` 字段很多，把诊断字段拆到独立的 `ObservationDiagnostics`，主流程只保留必要字段。
 
 ### 3.2 Geometry
@@ -247,7 +237,6 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
 
 ### 3.9 测试与 CI
 
-- 用假后端补一个端到端集成测试：合成一段目标匀速穿过经线接缝的全景视频，检查输出框连续、不会跳到另一侧。
 - GPU 测试加 `@pytest.mark.cuda` 标记，CI 只跑 CPU 部分；发布前在本地跑全量。
 - benchmark 金标准回归：从 tune 集选 3 条短序列，结果文件一旦变化测试就失败，必须显式更新基准。
 

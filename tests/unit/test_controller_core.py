@@ -5,13 +5,12 @@ from pathlib import Path
 import numpy as np
 
 from track360.controller import (
-    DecisionGate,
     SphericalMotionEstimator,
     TrackControllerImpl,
     TrackStateMachine,
 )
 from track360.controller.state_model import TransitionReason
-from track360.core.config import DecisionGateConfig, loadConfig
+from track360.core.config import loadConfig
 from track360.core.errors import ProtocolError
 from track360.core.types import (
     BBoxXYWH,
@@ -64,28 +63,6 @@ class ControllerTest(unittest.TestCase):
         self.assertTrue(-math.pi <= predicted.position[0] <= math.pi)
         with self.assertRaises(ProtocolError):
             estimator.predict(500_000_000)
-
-    def testDecisionGateFiltersOutliersAndRequiresMultiViewSupport(self) -> None:
-        gate = DecisionGate(
-            DecisionGateConfig(0.25, 0.15),
-            self.config.tracking,
-        )
-        center = makeSphericalPoint(0.0, 0.0)
-        target = BFoV(center, 0.8, 0.7)
-        outlier = BFoV(makeSphericalPoint(1.8, 0.0), 0.8, 0.7)
-        aggregate = gate.aggregate(
-            [_observation(0, target), _observation(1, target), _observation(2, outlier)],
-            self.geometry,
-            360,
-            180,
-        )
-
-        self.assertIsNotNone(aggregate)
-        assert aggregate is not None
-        self.assertEqual(aggregate.sourceViewIds, (0, 1))
-        self.assertTrue(aggregate.supported)
-        low = _observation(0, target, score=0.1)
-        self.assertIsNone(gate.aggregate([low], self.geometry, 360, 180))
 
     def testStateMachineUsesScoreGroupThresholds(self) -> None:
         state = TrackStateMachine(self.config.tracking)
