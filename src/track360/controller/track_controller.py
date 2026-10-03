@@ -185,12 +185,27 @@ class TrackControllerImpl(TrackControllerProtocol):
     def lastPipelineProfile(self) -> dict[str, object]:
         return dict(self._lastPipelineProfile)
 
-    def buildInitialization(self, frame: FramePacket, initialBox: BBoxXYWH) -> InitializationPlan:
+    def buildInitialization(
+        self,
+        frame: FramePacket,
+        initialBox: BBoxXYWH | None = None,
+        *,
+        initialBfov: BFoV | None = None,
+    ) -> InitializationPlan:
+        """Plan the template crop from the frame-0 target, given as an ERP box or a BFoV."""
         if self._initialized or self._initialPlan is not None:
             raise ProtocolError("controller is already initialized or has a pending initialization")
         if int(frame.frameIndex) != 0:
             raise ProtocolError("initialization must use frameIndex 0")
-        objectBfov = self._geometry.bboxToBfov(initialBox, frame.rgb.shape[1], frame.rgb.shape[0])
+        if (initialBox is None) == (initialBfov is None):
+            raise ProtocolError("initialization requires exactly one of initialBox or initialBfov")
+        frameWidthPx, frameHeightPx = frame.rgb.shape[1], frame.rgb.shape[0]
+        if initialBfov is not None:
+            objectBfov = initialBfov
+            initialBox = self._geometry.bfovToBbox(initialBfov, frameWidthPx, frameHeightPx)
+        else:
+            assert initialBox is not None
+            objectBfov = self._geometry.bboxToBfov(initialBox, frameWidthPx, frameHeightPx)
         templateScale = self._backendTuning.templateFovScale
         templateBfov = BFoV(
             center=objectBfov.center,

@@ -132,7 +132,9 @@ class TrackController(Protocol):
     def buildInitialization(
         self,
         frame: FramePacket,
-        initialBox: BBoxXYWH,
+        initialBox: BBoxXYWH | None = None,
+        *,
+        initialBfov: BFoV | None = None,
     ) -> InitializationPlan: ...
 
     def commitInitialization(

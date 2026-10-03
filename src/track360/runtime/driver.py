@@ -36,6 +36,7 @@ from track360.core.protocols import MoreViewsRequired, SphericalGeometry, Tracke
 from track360.core.protocols import ResultSink as ResultSinkProtocol
 from track360.core.types import (
     BBoxXYWH,
+    BFoV,
     FramePacket,
     LocalObservation,
     LocalView,
@@ -209,7 +210,8 @@ def buildRuntime(
 def runTracking(
     *,
     source: FrameSourceProtocol,
-    initialBox: BBoxXYWH,
+    initialBox: BBoxXYWH | None = None,
+    initialBfov: BFoV | None = None,
     geometry: SphericalGeometry,
     controller: TrackControllerImpl,
     backend: TrackerBackend,
@@ -221,7 +223,11 @@ def runTracking(
     scoreCalibration: ScoreCalibration,
     useMotionScore: bool,
 ) -> int:
-    """Run the sequential tracking pipeline and publish one result per frame."""
+    """Run the sequential tracking pipeline and publish one result per frame.
+
+    The frame-0 target is given as exactly one of ``initialBox`` (ERP pixels) or
+    ``initialBfov``.
+    """
     try:
         initializationStartedNs = _profileNow(profiler)
         _startProcessing(processingTimer)
@@ -230,7 +236,9 @@ def runTracking(
             frame0 = _requireFrame(source.read())
             _startProfileFrame(profiler, int(frame0.frameIndex), decodeStartedNs)
             with _profile(profiler, "controller"):
-                initPlan = controller.buildInitialization(frame0, initialBox)
+                initPlan = controller.buildInitialization(
+                    frame0, initialBox, initialBfov=initialBfov
+                )
             with _profile(profiler, "crop"):
                 templateView = geometry.cropViews(frame0, [initPlan.templateView])[0]
             _recordGeometryProfile(profiler, geometry)
