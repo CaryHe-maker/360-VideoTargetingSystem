@@ -32,7 +32,7 @@
 
 Geometry、Controller 和 I/O 只依赖 `core/` 中定义的协议，不依赖具体模型，因此更换跟踪后端不会影响其余部分。
 
-> **项目状态**：本仓库正在从比赛提交项目重构为通用的开源框架（第一阶段“去比赛化与结构整理”已基本完成）。下一步是在公开 benchmark [360VOT](https://360vot.hkustvgd.com) 上评测、支持更多后端和 TensorRT 导出，完整路线见 **[V2Plan](docs/V2Plan.md)**。
+> **项目状态**：已完成与比赛代码的解耦和结构整理，正在推进 **V2.0**（V1 为比赛版本）：在公开 benchmark [360VOT](https://360vot.hkustvgd.com) 上评测并超过已发表的 360 跟踪基线，同时完成效率优化和产品化。分阶段路线见 **[V2Plan](docs/V2Plan.md)**。
 
 ## 核心特性
 
@@ -90,15 +90,15 @@ src/track360/
 
 ## 安装
 
-环境要求：Python 3.11+、NVIDIA GPU 及 CUDA 版 PyTorch 2.11、[Git LFS](https://git-lfs.com)。
+环境要求：Python 3.11+、NVIDIA GPU 及 CUDA 版 PyTorch 2.11。
 
 ```bash
 git clone https://github.com/CaryHe-maker/360-VideoTargetingSystem.git
 cd 360-VideoTargetingSystem
-git lfs install
-git lfs pull                      # 下载 models/artrackv2_b_256.pth.tar（约 1.6 GB）
 pip install -e ".[dev]"
 ```
+
+模型权重不随仓库分发：请下载官方 ARTrackV2-B-256 checkpoint（约 1.6 GB），放到 `models/artrackv2_b_256.pth.tar`，下载方式和校验见 [models/README.md](models/README.md)。
 
 ## 快速上手
 
@@ -145,6 +145,7 @@ ruff check src tests tools
 [配置说明](docs/configuration.md) ·
 [Benchmark](docs/benchmark.md) ·
 [V2Plan](docs/V2Plan.md) ·
+[评测记录](docs/evaluation-log.md) ·
 [历史实验结论](docs/experiments.md)
 
 ## 路线图
@@ -154,7 +155,8 @@ ruff check src tests tools
 - [ ] 把后端调参用的环境变量迁入 YAML 配置，统一测试与运行行为
 - [x] 项目、Python 包和命令行统一命名为 Track360 / `track360`
 - [ ] 统一为 PEP 8 命名，提供 Python API
-- [ ] 权重改为从 Hugging Face Hub / Releases 下载，不再使用 Git LFS
+- [x] 权重不再通过 Git LFS 随仓库分发
+- [ ] 权重发布到 Hugging Face Hub / Releases，提供自动下载与校验
 - [ ] 360VOT / 360VOS 数据加载器，评测结果与官方 toolkit 交叉验证
 - [ ] 消融与效率 benchmark（GPU 几何、流水线、FP16、TensorRT）
 - [ ] 后端注册表，新增 OSTrack 后端和轻量速度档
@@ -168,4 +170,4 @@ ruff check src tests tools
 
 ## 许可证
 
-项目许可证待确定（建议与上游 ARTrack 一致，使用 Apache-2.0）。`third_party/` 下的代码沿用其原始许可证。
+Track360 使用 [Apache License 2.0](LICENSE)。`src/track360/third_party/artrackv2/` 中的代码来自 ARTrack，同样使用 Apache-2.0，原许可证保留在该目录下，来源说明见 [NOTICE](NOTICE)。模型权重和 360VOT / 360VOTS 数据集不属于本仓库，分别遵循其发布方的许可。

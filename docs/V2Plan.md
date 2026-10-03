@@ -1,310 +1,308 @@
-# Track360 V2 Plan：从比赛提交仓库到可展示的开源 360° 跟踪项目
+# Track360 V2 Plan
 
-> 分支：`SystemV2`（工作分支 `refactor/V2/structure`）　|　基线提交：`20c42e1`（ARTrackV2-B-256 后端）
-> 目标：去掉比赛专用的耦合，把仓库整理成结构规范、结果可复现、有公开 benchmark 数据的开源项目，用于实习简历和面试讲解。
+> 起点：提交 `f04c76d`（比赛解耦与结构重组已完成）
+> 终点：发布 **Track360 V2.0**：在公开 benchmark **360VOT** 上明显超过已发表的 360 跟踪基线，结果可复现、工程规范，可以作为成熟开源项目发布和写进简历。
 >
-> **进度**：Phase 1（清理与去比赛化）基本完成，剩余项见 §6；测试集选型已完成，见 [benchmark.md](benchmark.md)。
+> 版本约定：**V1** 是面向比赛的版本（已结束）；**V2** 是本次开源重构，本计划全部完成后发布 **V2.0**；后续增强放在 V2.1 及以后（见第 6 节）。
+>
+> 本文只列**尚未完成**的工作。每完成一项，直接从本文删除，并在 `CHANGELOG.md` 中记录。每一轮评测结果都记录在 [evaluation-log.md](evaluation-log.md)。
 
 ---
 
-## 0. TL;DR
+## 0. 成功标准
 
-| 维度 | 现在 | V2 目标 |
+### 0.1 精度（360VOT 测试集，BFoV 标注，官方 toolkit 计算）
+
+| 对比对象 | 当前已知数值 | V2.0 目标 |
 |---|---|---|
-| 定位 | 比赛提交镜像 + 内部实验仓库 | **360° 全景视频单目标跟踪框架**：插拔式 SOT 后端 + 球面几何 + 多视图控制器 |
-| Benchmark | 私有比赛数据，序列数和后端都在变，数字不可复现 | **公开的 [360VOT](https://360vot.hkustvgd.com)（ICCV 2023）** 为主，[360VOTS](https://arxiv.org/abs/2404.13953) 为辅；指标与官方 toolkit 对齐 |
-| 对照基线 | 只有内部历史版本互相比较 | ① 原生 ERP 直接跟踪 ② 论文中的 360 框架基线（AiATrack-360 等）③ 本项目，并做逐组件消融 |
-| 后端 | 只有 ARTrackV2-B-256，checkpoint 1.6 GB 走 Git LFS | `TrackerBackend` 注册表：ARTrackV2 / OSTrack / 轻量 HiT（可选 SAM2 系）；权重放 HF Hub 或 Releases，按需下载并校验 |
-| 性能 | GPU Geometry + Pipeline 在旧 HiT 后端上测过 P50 355.9 → 86.9 ms | 在 ARTrackV2 上重新测：FP16 / `torch.compile` / TensorRT，报告 FPS 和 P50/P95 |
-| 工程 | 无 LICENSE / CI；`.vs/` 被跟踪；Python 用 camelCase；很多 placeholder 测试 | LICENSE、CI、pre-commit、PEP 8、类型检查、CPU 可跑的测试、文档站、Demo |
+| 论文中的最佳 360 框架基线 AiATrack-360 | S<sub>dual</sub> 0.534 / P<sub>dual</sub> 0.506 / P<sub>angle</sub> 0.574 | **S<sub>dual</sub> ≥ 0.56**（至少 +2.5 个点），P<sub>angle</sub> 同步提升 |
+| 论文中最好的通用跟踪器 OSTrack（直接在 ERP 上跟踪） | S<sub>dual</sub> 0.447 | 超过 10 个点以上 |
+| 本项目 B0：ARTrackV2 直接在 ERP 上跟踪 | Phase 2 测出 | Track360 相对 B0 提升 ≥ 8 个点 |
 
-**一句话简历描述（V2 完成后才成立）**：
-“在 360VOT 上把通用 SOT 模型（ARTrackV2）扩展到全景视频：通过球面多视图搜索、跨缝融合和运动预测，dual success AUC 比直接在 ERP 上跟踪高 X 个点；通过 GPU 球面重采样、流水线和 FP16/TensorRT 把单帧延迟从 A ms 降到 B ms（RTX 4060 Laptop）。”
+> 论文基线数值摘自 [360VOTS 论文](https://arxiv.org/abs/2404.13953)，写进 README 前要对照原文表格核实，并确认与本项目使用的是同一种标注（BBox / BFoV）。
 
----
+### 0.2 效率（RTX 4060 Laptop，固定功率模式，CUDA event 计时）
 
-## 1. 现状诊断
-
-### 1.1 值得保留的核心资产
-
-1. **球面几何层**（`geometry/`）：ERP↔球面↔透视视图转换、BFoV、跨经线（seam）循环区间、最小覆盖区间、GPU 双线性重采样（像素回归 P99 误差为 0）。这是项目的技术亮点。
-2. **多视图控制器**（`controller/`）：四角视图（VStype1）、旋转 cubemap 恢复（VStype2）、两轮 Fusor 引导搜索、球面运动估计（Huber + 切平面）、ScoreGroup 自适应阈值状态机、帧事务和一次性原子提交。
-3. **协议化分层**（`core/protocols.py`、`core/types.py`）：Controller 和 Geometry 不依赖具体模型类型，更换后端的成本低。
-4. **评估工具**：circular ERP IoU、球面 BFoV IoU（cos 纬度加权）、球面中心角误差、success 曲线、tracking loss rate、RuntimeProfiler。
-5. **实验方法论**：V1 阶段的多份 A/B 报告（单变量、硬回归序列门槛、宏/微平均、P95），已整理为 [experiments.md](experiments.md)。
-
-### 1.2 必须处理的问题
-
-| # | 问题 | 位置 | 影响 | 状态 |
-|---|---|---|---|---|
-| P1 | 比赛耦合 | `track.py`、`app/competition.py`、`adapters/competition_adapter.py`、`docs/Competition/`、`Dockerfile`（7 层 scratch 重组、`sm_120` 断言、`DATASET_DIR`/`RESULT_DIR`）、`.dockerignore`、`tests/unit/test_competition_submission.py` | 外人看不懂，也不是通用工具 | ✅ 已删除 |
-| P2 | 数据不可公开、结果不可复现 | 文档中大量本地私有数据路径；所有指标基于私有 manifest | 简历数字无法被验证，这是最大短板 | 🟡 文档已清理私有路径；公开数据待 Phase 3 |
-| P3 | 基线混乱 | `backendBaseline.md` 的 0.256 IoU 是旧 HiT 生产版本；ARTrackV2 没有完整对比数据；各报告的序列集合不同 | 拿不出一个“干净”的提升数字 | ⏳ Phase 3 |
-| P4 | 权重分发 | 1.6 GB `.pth.tar` 走 Git LFS | GitHub LFS 免费额度很小，别人 clone 很容易失败；仓库也很臃肿 | ⏳ Phase 2 |
-| P5 | 缺少开源仓库的基本文件 | 无 `LICENSE`、`CONTRIBUTING`、`CITATION.cff`、`CHANGELOG`、CI | 不是“规范开源项目” | ⏳ |
-| P6 | IDE 文件被跟踪 | `.vs/` 4 个文件 | 一看就不专业 | ✅ 已删除 |
-| P7 | 代码风格 | 全仓库 Python 用 camelCase 函数和变量（`buildRuntime`、`frameIndex`），YAML 也是 camelCase | 违反 PEP 8；面试官会注意到 | ⏳ Phase 2 |
-| P8 | 第三方代码合规 | `vendor/artrackv2` 没有附原仓库 LICENSE 和来源说明 | 开源合规风险 | 🟡 已改为 `third_party/`，LICENSE 待补 |
-| P9 | 测试质量 | `*_placeholder.py` 6 个；不少测试依赖 CUDA 和真实权重 | 无法在 CI 中运行 | ✅ placeholder 已删除或改名；GPU 测试无 torch 时自动跳过 |
-| P10 | 死代码与历史包袱 | `classifier.py`（生产路径不调用）、`speculative_pipeline`（默认关闭）、LOST 路径“保留但不触发”、`onnx_backend.py`/`tensorrt_backend.py` 状态不明、`training/` 依赖私有数据 | 增加阅读成本，主线不清晰 | ✅ 已删除 classifier / speculative / onnx、tensorrt 桩 / training / utils；LOST 路径待评估 |
-| P11 | 文档 | 中文过程文档约 50 篇，混着计划、报告和规范；部分链接指向不存在的文件（如 `viewTypes.md`、`scoreCalibration.md`） | 需要重组 | ✅ 已重组为中文文档集 |
-| P12 | 命令名 | `run`、`getInstanceID` 作为全局 console script 名过于通用，容易冲突 | 改成统一 CLI | ✅ 统一为 `track360 <command>` |
-| P13 | 包名 | 原包名带比赛和品牌色彩，与项目定位不符 | 改名 | ✅ 项目、包、命令行统一为 **Track360** / `track360`（GitHub 仓库名保持 `360-VideoTargetingSystem`） |
-| P14 | 隐藏配置 | `buildRuntime()` 用约 20 个 `TRACK360_ARTRACK_*` 环境变量调整控制器行为（关闭运动分、放宽融合门槛、recent 模板等）；单元测试不经过 `buildRuntime()`，测的是另一套行为 | 实际运行的参数不在 YAML 里，不可复现；测试覆盖与生产不一致 | ⏳ Phase 2 首要任务，见 [configuration.md](configuration.md#环境变量待迁移) |
-| P15 | 无效配置 | `model.precision: fp16` 会通过校验，但推理始终是 FP32；`runtime.*QueueCapacity` 只校验不使用；`decisionGate` 段生产路径不使用 | 配置名不副实 | ⏳ Phase 2 / 4 |
-
----
-
-## 2. 参考的成熟开源项目
-
-| 项目 | 借鉴点 |
+| 指标 | V2.0 目标 |
 |---|---|
-| [HuajianUP/360VOT](https://github.com/HuajianUP/360VOT)（ICCV 2023） | **Benchmark 与评测协议**：BFoV / rBFoV 标注、dual success、dual precision、angle precision；论文中的“360 tracking framework”是最直接的对照对象（AiATrack-360 dual success 0.534，原始 AiATrack 0.405） |
-| [miv-xjtu/ARTrack](https://github.com/miv-xjtu/artrack)（CVPR 2023 / 2024） | 当前后端的上游；参考它的模型 zoo 表格、权重下载方式和引用格式 |
-| [botaoye/OSTrack](https://github.com/botaoye/OSTrack) | 最常用的 one-stream ViT 跟踪器，适合作为第二个后端，用来证明框架与后端无关 |
-| [visionml/pytracking](https://github.com/visionml/pytracking) | 跟踪器统一接口、数据集抽象、`analysis` 模块（success / precision 曲线绘制） |
-| [got-10k/toolkit](https://github.com/got-10k/toolkit) | 轻量、`pip install` 即可使用的评测 toolkit 风格 |
-| [ultralytics/ultralytics](https://github.com/ultralytics/ultralytics) | **工程化标杆**：统一 CLI（`yolo track ...`）、Python API、权重自动下载、导出（ONNX/TensorRT）、文档站、徽章 |
-| [facebookresearch/sam2](https://github.com/facebookresearch/sam2) / [yangchris11/samurai](https://github.com/yangchris11/samurai) | 可选的强后端；README 中 demo GIF、benchmark 表的写法 |
-| [sunset1995/py360convert](https://github.com/sunset1995/py360convert) | 全景几何库的 API 设计；也可以作为几何正确性的交叉验证对象 |
+| 端到端 P50 单帧延迟（含解码，3840×1920） | ≤ 100 ms（≥ 10 FPS） |
+| TensorRT FP16 档 | ≥ 20 FPS，S<sub>dual</sub> 下降 ≤ 0.3 个点 |
+| 峰值显存 | ≤ 6 GB |
 
-由此得到的共同规范：**一句话定位 → Demo GIF → 结果表（含基线）→ 安装 → Quick Start（三行能跑）→ Model Zoo → 复现实验 → 架构 → 引用 / 致谢 / License**。
+### 0.3 发布标准
 
----
-
-## 3. 新定位与命名
-
-- **项目名**：**Track360**（Python 包和命令行为 `track360`）。GitHub 仓库名保持 `360-VideoTargetingSystem` 不变。
-- **定位**：*A modular framework that turns any single-object tracker into a 360° (equirectangular) video tracker via spherical multi-view search.*
-- **核心卖点**（面试讲解的三条主线）：
-  1. **几何**：ERP 畸变、跨经线 seam、极点；用球面 BFoV 表示目标，在局部透视视图中做推理。
-  2. **系统**：插拔式后端 + 控制器（状态机 / 运动预测 / 融合）+ 帧事务；GPU 重采样和解码、推理流水线。
-  3. **评估**：在公开 benchmark 上用严格的消融和延迟统计证明每个组件的贡献。
+- 任何人按 README 操作，都能在 ±0.5 个点内复现主表；
+- CI 通过（lint、类型检查、CPU 测试）；有 LICENSE、CITATION、CHANGELOG 和文档站；
+- 权重可以通过 `track360 download` 自动下载并校验；
+- 有 Demo GIF 和在线演示。
 
 ---
 
-## 4. Benchmark 方案
+## 1. 当前的已知问题（起点）
 
-### 4.1 数据集（选型已完成，尚未下载）
-
-详细对比、标注格式和官方评测命令见 [benchmark.md](benchmark.md)。
-
-| 数据集 | 用途 | 说明 |
+| 问题 | 影响 | 解决阶段 |
 |---|---|---|
-| **360VOT 测试集** | 主 benchmark | 120 条 ERP 序列，约 113K 帧，3840×1920，32 类，带 BBox / rBBox / BFoV / rBFoV 真值；测试集与标注约 58.5 GB；官方 toolkit（MIT）提供评测脚本；论文给出 OSTrack、AiATrack、AiATrack-360 等基线，可以直接对比 |
-| **360VOS 训练集**（360VOTS） | 调参 / 验证 / 可选微调 | 170 条序列，与测试集同源；许可 CC BY-NC-SA 4.0。所有参数在这里确定，**测试集只跑最终配置** |
-| PanoVOS | 不采用 | 分割任务，没有跟踪协议和 BFoV 基线 |
-| AirSim360 / 自采数据 | 只用于开发调试 | 不进入主表；不在仓库中出现私有路径 |
-
-下载入口：[360VOT 官网](https://360vot.hkustvgd.com)、[Hugging Face](https://huggingface.co/datasets/xuyzshaun/360VOTS)、[toolkit](https://github.com/HuajianUP/360VOT)。
-
-### 4.2 指标（与 360VOT toolkit 对齐）
-
-- **S_dual（AUC）**：主指标，跨缝的 dual success。
-- **P_dual / P_angle**：中心像素精度和球面角精度。
-- **BFoV spherical IoU**（项目已实现，需要和官方实现对齐数值）。
-- **Tracking loss rate**：项目自定义的补充指标。
-- **效率**：FPS、P50/P95 单帧延迟、每帧 forward 次数、峰值显存。固定硬件（RTX 4060 Laptop，注明驱动、CUDA 版本和功率模式），用 CUDA event 同步计时。
-
-> 第一步必须写**官方 toolkit 交叉验证测试**：同一份结果文件，本项目的 `eval` 和 360VOT 官方脚本算出的数值误差 < 1e-3。否则表格不可信。
-
-### 4.3 对照组与消融（README 主表的结构）
-
-| ID | 方法 | 说明 |
-|---|---|---|
-| B0 | ARTrackV2 on raw ERP | 直接在 ERP 帧上跟踪（下采样到合适分辨率），用 seam-aware IoU 评估：**naive baseline** |
-| B1 | 论文中的 360 框架基线 | 引用 360VOT 论文数值（AiATrack-360 等），不需要复现 |
-| B2 | ARTrackV2 + 单视图 local tracking | 以上一帧 BFoV 为中心生成一个透视视图（≈ 360VOT 框架的思路） |
-| A1 | + 四角多视图（VStype1）+ Fusor | 本项目核心 |
-| A2 | + 两轮引导搜索 | |
-| A3 | + 球面运动预测 | |
-| A4 | + 自适应状态机 / cubemap 恢复 | 需要重新启用 LOST 路径并做 A/B |
-| **Ours** | 完整系统 | |
-| Ours-OSTrack | 换后端 | 证明与后端无关 |
-
-效率消融：CPU geometry → GPU geometry → + decode/infer pipeline → + FP16 → + TensorRT。
-
-按 360VOT 的挑战属性分层报告（快速运动、跨缝、极点区域、小目标、遮挡等），用雷达图展示。
-
-### 4.4 已有的、可以作为“历史数据”参考的内部数字（不能直接放进简历）
-
-- HiT 后端、单条仿真序列、8 views / 2 forwards：P50 **355.9 → 86.9 ms（-75.6%）**，P99 **628.9 → 123.9 ms（-80.3%）**，IoU 0.176 → 0.220（详见 [experiments.md](experiments.md)）。
-- 4 条 validation 序列 mean IoU 0.359、P95 355.8 ms。
-
-它们说明优化方向有效，但后端、数据和序列集合都不同，**必须在 360VOT + ARTrackV2 上重新测量**后才能写进 README 和简历。
+| 约 20 个 `TRACK360_ARTRACK_*` 环境变量在 `buildRuntime()` 里暗中改变控制器行为；单元测试不经过 `buildRuntime()` | 实际参数不在配置里，不可复现；测试覆盖的不是实际运行的行为 | Phase 1 |
+| `model.precision: fp16` 不生效；`runtime.*QueueCapacity` 和 `decisionGate` 段不起作用 | 配置名不副实 | Phase 1 |
+| 没有任何公开数据集上的结果 | 无法和 benchmark 对比 | Phase 2 |
+| ARTrackV2 调用时 `seq_input=None`，没有使用模型的轨迹提示（trajectory prompt） | 很可能丢掉了 ARTrackV2 的大部分时序优势 | Phase 4 |
+| `LOST` / cubemap 找回路径保留了但从不触发 | 目标丢失后只能靠扩大局部搜索 | Phase 4 |
+| ARTrackV2 的分数集中在 0.5 附近，状态机和融合门槛依赖这个分数 | 门控不可靠 | Phase 4 |
+| 函数和变量用 camelCase，YAML 键也是 camelCase | 不符合 PEP 8 | Phase 3 |
+| 权重需要用户手动从官方链接下载；没有 CI | 上手门槛高，不是成熟的开源项目 | Phase 1 / 6 |
 
 ---
 
-## 5. 目标仓库结构
+## 2. 分阶段计划
 
-当前已完成的结构调整：
+整体顺序：**先能复现 → 再有基线数字 → 再规范代码 → 再提精度 → 再提速度 → 最后发布**。每个 Phase 单独开分支和 PR，验收通过后合并。
 
 ```text
-src/track360/
-├── cli.py / __main__.py    统一命令行：track360 track | airsim360 | list-instances
-├── core/                   types, protocols, config, errors
-├── geometry/               projection, seam, bfov projector, gpu geometry
-├── controller/             planner, evaluator, fusor, motion, state machine, transaction
-├── backends/               ARTrackV2 session + adapter（原 tracker/）
-├── runtime/                driver, track_video, track_airsim360（原 app/）
-├── datasets/               video / image sequence / AirSim360 sources, instance ids（原 data/）
-├── io/                     readers and writers
-├── evaluation/             metrics, profiler（原 eval/）
-├── visualization/
-└── third_party/artrackv2/  上游代码（原 vendor/）
-configs/default.yaml        （原 RGBonly.yaml）
-docs/                       中文文档：getting-started / architecture / configuration / benchmark / modules/*
-tools/run_airsim360_dataset.py
+Phase 1 配置收敛与工程底座   ─┐
+Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用基线结果做回归）
+                              │
+                              └─▶ Phase 4 精度提升 ─▶ Phase 5 效率优化 ─▶ Phase 6 产品化 ─▶ Phase 7 发布 V2.0
 ```
 
-最终目标结构：
+### Phase 1：配置收敛与工程底座（约 3 天）
 
-```text
-track360/
-├── README.md（中文）/ LICENSE / CITATION.cff / CHANGELOG.md / CONTRIBUTING.md
-├── pyproject.toml              # 依赖分组：core / cuda / trt / dev / docs
-├── configs/
-│   ├── default.yaml            # snake_case 键
-│   └── backends/{artrackv2_b256,ostrack_b256,hit_base}.yaml
-├── src/track360/
-│   ├── api.py                  # Track360Tracker(...).track(video, init_bfov)
-│   ├── cli.py                  # track360 track | eval | benchmark | export | download
-│   ├── core/                   # types, protocols, config, errors
-│   ├── geometry/               # projection, seam, bfov, gpu sampler（CPU 参考实现 + CUDA 实现）
-│   ├── controller/             # planner, fusion, motion, state machine, transaction
-│   ├── backends/               # registry + artrackv2/ ostrack/ hit/ (+ onnx/trt runtime)
-│   ├── datasets/               # 360vot.py, 360vots.py, video_folder.py
-│   ├── evaluation/             # metrics（对齐官方）、report、plots
-│   ├── runtime/                # driver、prefetch、profiler
-│   ├── visualization/
-│   └── hub.py                  # 权重下载 + sha256 校验 + 缓存
-├── third_party/artrackv2/      # 附原 LICENSE 和 NOTICE，记录 commit
-├── tools/                      # benchmark.py、ablation.py、plot_results.py、export_trt.py
-├── tests/                      # unit（CPU，可在 CI 运行）、gpu（标记 @pytest.mark.cuda）
-├── docs/                       # mkdocs：getting-started / architecture / benchmark / api / design-notes
-├── assets/                     # demo.gif、架构图、结果曲线图
-├── docker/Dockerfile           # 标准单阶段 CUDA 运行镜像
-└── .github/workflows/          # ci.yml（ruff + mypy + pytest-cpu）、docs.yml、release.yml
-```
+**目标**：让“实际运行的参数”和“测试覆盖的参数”完全来自同一份 YAML。
+
+1. **记录迁移前的参考结果**：在 GPU 环境上用当前代码跑 2–3 段视频（AirSim360 或自录全景视频即可），保存逐帧结果文件，作为后面每一步的回归基准。
+2. **环境变量迁入 YAML**：新增 `backendTuning` 配置段（Phase 3 统一改为 snake_case），覆盖全部 `TRACK360_ARTRACK_*` 开关；`buildRuntime()` 不再写环境变量，各模块从配置读取。
+3. **测试同步**：单元测试改为加载同一份 `configs/default.yaml`；原来依赖“开关全关”的测试，改为显式加载一份 `configs/tests/legacy_off.yaml`，或者更新断言。
+4. **回归**：迁移后再跑第 1 步的视频，逐帧结果必须与迁移前**完全一致**。
+5. **清理无效配置**：`model.precision` 暂时只允许 `fp32`（Phase 5 再实现 FP16）；删除 `runtime` 队列段和 `decisionGate` 段及相关代码。
+6. **开源基础文件**：`CHANGELOG.md`；确认 `third_party/artrackv2/` 实际来自的上游 commit，写入 `NOTICE`。
+7. **CI**：GitHub Actions 跑 `ruff check`、`pytest`（CPU，Python 3.11 / 3.12）；加入 pre-commit。
+8. **可复现性**：固定随机种子，设置 `torch.backends.cudnn.deterministic`，在结果目录写入 git commit、配置哈希、GPU 型号、驱动和依赖版本。
+
+**验收**：`grep -r TRACK360_ARTRACK src` 无结果；回归视频逐帧一致；CI 通过。
+
+### Phase 2：360VOT 评测打通与基线（约 5 天，最关键）
+
+**目标**：拿到第一个能和论文直接对比的数字。
+
+1. **下载数据**：360VOT 测试集与标注（约 58.5 GB）；360VOS 训练集按需下载。数据放在仓库外，通过参数传入。
+2. **检查数据重叠**：360VOS 中有一部分序列来自 360VOT。用于调参的序列必须**排除所有与 360VOT 测试集重叠的序列**，并把排除列表提交到仓库。
+3. **划分调参集**：从去重后的 360VOS 训练集中选 20–30 条序列作为 `tune` 集，覆盖跨缝、极点、快速运动、小目标、遮挡等属性。**之后所有参数和开关只在 tune 集上决定**。
+4. **数据加载器**：`datasets/vot360.py`，读取帧、BBox / BFoV / rBFoV 真值和属性标签；初始化框直接使用第 0 帧的 BFoV。
+5. **BFoV 初始化入口**：`track360 track` 支持 `--init-bfov clon,clat,fov_h,fov_v`（度）。
+6. **结果写入器**：按 360VOT 官方格式，每条序列输出一个 `NNNN.txt`。
+7. **评测对齐**：封装官方 toolkit 的指标（S<sub>dual</sub>、P<sub>dual</sub>、P<sub>angle</sub>），加一个交叉验证测试：同一份结果文件，本项目与官方脚本的数值误差 < 1e-3。
+8. **批量运行工具**：`tools/benchmark.py --dataset 360vot --split test --method <name>`，支持断点续跑和多进程。
+9. **跑基线**：
+   - B0：ARTrackV2 直接在下采样的 ERP 上跟踪；
+   - B2：单个透视视图跟随上一帧 BFoV（等价于 360VOT 论文中的框架思路）；
+   - Ours-v0：当前默认配置。
+10. **记录结果**：三组结果、按属性分层的结果写入 [evaluation-log.md](evaluation-log.md)（记录 E001 起），复现命令写入 `docs/benchmark.md`。
+
+**验收**：三组结果齐全并记入 [evaluation-log.md](evaluation-log.md)；官方 toolkit 交叉验证通过；在 tune 集上 Ours-v0 至少不差于 B2。如果 Ours-v0 比 B2 差，先进入 Phase 4 的问题排查，再继续。
+
+### Phase 3：代码规范化（约 4 天）
+
+**目标**：在有可靠回归手段的前提下完成全仓库 PEP 8 改名，结果不能有任何变化。
+
+1. 函数、变量、参数改为 snake_case；类名保持 PascalCase；用 ruff 的 `N` 规则检查。
+2. YAML 键改为 snake_case；`loadConfig()` 在一个版本周期内兼容旧键，并给出弃用警告。
+3. 按模块分批提交（core → geometry → controller → backends → runtime → 其他），每批都跑全量测试。
+4. 加入 mypy（先用宽松模式），给公开 API 补全类型注解。
+5. **回归**：在 tune 集上重新跑 Ours-v0，结果文件必须与 Phase 2 **逐字节一致**。
+
+**验收**：ruff `N` 规则无报错；tune 集结果逐字节一致；mypy 通过。
+
+### Phase 4：精度提升（约 2–3 周，核心）
+
+**目标**：在 tune 集上把 S<sub>dual</sub> 提升到预期能超过 0.56 的水平，再在测试集上**只跑一次**确认。
+
+工作方法：
+
+1. **先诊断再动手**：在 tune 集上把每一帧的失败归类：没有视图覆盖到目标 / 覆盖到了但后端框错 / 后端框对但融合或状态选错 / 回投误差 / 跨缝或极点。每类统计帧数占比，按占比从高到低处理。
+2. **一次只改一个变量**，每项实验都报告 S<sub>dual</sub>、P<sub>angle</sub>、丢失率、每帧前向次数和 P95 延迟。
+3. **硬回归门槛**：每项改动先在 tune 集中最容易出问题的 5 条序列上跑，任何一条下降超过 2 个点就停止。
+4. **每一轮实验都在 [evaluation-log.md](evaluation-log.md) 追加一条记录**（不论是否采纳）；被采纳的改动进入 README 的消融表。
+
+按预期收益排序的实验清单（详细说明见第 3 节对应模块）：
+
+| 优先级 | 实验 | 模块 | 预期作用 |
+|---|---|---|---|
+| P0 | 恢复 ARTrackV2 轨迹提示（`seq_input`），把上一帧轨迹映射到每个视图的局部坐标 | Backends | 恢复模型的时序能力，预计收益最大 |
+| P0 | 搜索区域与视图尺度对齐：让目标在 256 搜索图中的占比与 ARTrackV2 训练分布一致 | Controller / Backends | 减少尺度失配造成的框误差 |
+| P1 | 分数重校准：在 tune 集上拟合 IoU 感知的分数映射，替代 0.5 附近的原始分数 | Controller | 让融合、状态机和模板门控可靠 |
+| P1 | 运动分重新启用：在分数校准后重新评估“外观 + 运动”加权 | Controller | 抑制相似物体干扰 |
+| P1 | 启用 LOST 状态和 cubemap 找回，阈值在 tune 集上确定 | Controller | 目标丢失或出画后能找回 |
+| P2 | 视图数自适应：高置信度时单轮 4 视图，低置信度时两轮 8 视图 | Controller | 精度不降的前提下减少前向次数 |
+| P2 | 旋转 BFoV（rBFoV）输出：用回投边界点拟合旋转角 | Geometry | 提高极点附近和倾斜目标的 IoU |
+| P3 | 第二个后端 OSTrack-B256，验证框架与后端无关 | Backends | 证明方法的通用性 |
+
+**验收**：tune 集 S<sub>dual</sub> 稳定达到目标；360VOT 测试集**只跑最终配置一次**，结果写入主表；消融表中每一行都有数据。
+
+### Phase 5：效率优化（约 1 周）
+
+**目标**：精度不降（S<sub>dual</sub> 下降 ≤ 0.3 个点）的前提下达到第 0.2 节的速度目标。每项单独 A/B。
+
+1. **性能剖析**：用 `RuntimeProfiler` + CUDA event 拆分 decode / crop / backend / project / controller 的耗时，确认瓶颈；
+2. **GPU 解码**：使用 NVDEC（如 PyNvVideoCodec 或 decord 的 GPU 解码），4K 视频解码往往是第一个瓶颈；
+3. **GPU 几何默认开启**：先确认 GPU 重采样与 CPU 路径在 tune 集上的结果差异可以接受；
+4. **FP16 / BF16**：实现 `model.precision: fp16`（autocast），模板特征用半精度缓存；
+5. **`torch.compile`**：模板编码和搜索前向分开编译，固定 batch 尺寸（4 / 8）避免重编译；
+6. **TensorRT**：导出 ONNX → TensorRT FP16，作为独立的速度档后端（`track360 export`）；
+7. **流水线**：解码、几何和推理分到不同的 CUDA stream，下一帧的解码与当前帧推理重叠。
+
+**验收**：Model Zoo 表中至少有 “ARTrackV2 FP32 / FP16 / TensorRT” 三档的速度和精度，效率数据记入 [evaluation-log.md](evaluation-log.md) 第 2.3 节。
+
+### Phase 6：产品化（约 1 周）
+
+1. **Python API**：`Track360Tracker.from_pretrained("artrackv2-b256").track("video.mp4", init_bfov=(...))`，返回逐帧结果对象；
+2. **权重分发**：上传到 Hugging Face Hub（或 GitHub Releases，需确认上游许可允许再分发；否则 `hub.py` 直接指向官方链接），`hub.py` 负责下载、SHA-256 校验和缓存，并提供 `track360 download`；
+3. **命令行补全**：`track360 eval`、`track360 benchmark`、`track360 export`、`track360 download`；
+4. **后端注册表**：`@register_backend("artrackv2")`，配置中按名称选择后端；
+5. **可视化**：生成 ERP 全图 + 局部视图并排的结果视频，制作 README 顶部的 Demo GIF；
+6. **在线演示**：Hugging Face Space（Gradio），上传全景视频、点选初始目标、返回跟踪视频；
+7. **文档站**：mkdocs-material + GitHub Pages，内容来自现有 `docs/`；
+8. **Docker**：发布带 CUDA 的镜像，并写好 GPU 运行示例。
+
+**验收**：新用户只用 README 上的三条命令就能跑通 Demo。
+
+### Phase 7：发布 V2.0（约 2 天）
+
+1. README 主表：B0、论文基线、Track360 各档位，加上 success / precision 曲线、按属性的雷达图、速度—精度散点图；
+2. 消融表：每个组件的贡献；
+3. `CITATION.cff`、致谢（ARTrack、360VOT、OSTrack）；
+4. 把版本号从 `2.0.0.dev0` 改为 `2.0.0`，打 `v2.0.0` tag，发布 GitHub Release（附权重链接、CHANGELOG、结果文件压缩包）；
+5. 把 [evaluation-log.md](evaluation-log.md) 中最终结果对应的结果文件附到 Release，方便别人用官方 toolkit 直接验证。
 
 ---
 
-## 6. 分阶段执行计划
+## 3. 按模块的优化建议
 
-每个阶段单独开 PR，合并到 `SystemV2`，最后再合并回 `main`。
+### 3.1 Core / 配置
 
-### Phase 1：清理与去比赛化（约 2–3 天）
+- **单一配置来源**：所有可调参数只存在于 YAML，删除全部 `os.environ` 读取（性能统计开关 `TRACK360_PROFILE` 也改为命令行参数）。
+- **配置分层**：`configs/default.yaml` + `configs/backends/<name>.yaml` + 命令行覆盖（`--set tracking.windowLength=7`），方便做消融。
+- **配置快照**：每次运行把最终生效的配置写入结果目录，保证实验可追溯。
+- **精简类型**：`ProjectedObservation` 字段很多，把诊断字段拆到独立的 `ObservationDiagnostics`，主流程只保留必要字段。
 
-- [x] 删除 `.vs/`，精简 `.gitignore`（删除 CMake / C++ 规则）。
-- [x] 删除 `track.py`、`app/competition.py`、`adapters/`、`docker/partition_image.py`、比赛文档和对应测试。360VOT 格式的 BFoV 结果写入器在 Phase 3 按官方格式重新实现。
-- [x] Dockerfile 改成标准运行镜像：去掉 `sm_120` 断言、7 层重组和 checkpoint 拷贝，权重通过挂载目录提供。
-- [x] 文档清理：删除所有私有路径；旧的过程文档合并为中文文档集，实验结论整理到 [experiments.md](experiments.md)。
-- [x] 删除死代码：`classifier.py`、`speculative_pipeline` / `speculative_scheduler`（构建了但从未被调用）、`onnx_backend.py` / `tensorrt_backend.py` / `utils/`（只有 TODO 的空文件）、依赖私有 manifest 的 `training/` 和 7 个工具脚本、未使用的队列消息类型。
-- [x] 包结构调整：`tracker→backends`、`data→datasets`、`eval→evaluation`、`app→runtime`、`vendor→third_party`，统一 CLI。
-- [ ] 加入项目 `LICENSE`。上游 ARTrack 为 **Apache-2.0**，建议本项目也用 Apache-2.0；`third_party/artrackv2/` 需要放入上游 LICENSE 原文和 NOTICE（记录来源 commit）。
+### 3.2 Geometry
 
-**验收**：源码、测试、工具和配置中不再出现比赛和私有路径相关内容；CPU 环境下 `pytest` 全部通过（GPU 测试自动跳过）。
+- **rBFoV**：现在只拟合无旋转的 BFoV。可以用回投边界点求最小外接旋转区域，得到带 roll 的 BFoV，直接对齐 360VOT 的 rBFoV 标注。
+- **GPU 路径成为默认**：补一组在 tune 集上的端到端 A/B，确认差异可以接受后默认开启。
+- **批量回投**：现在逐个框回投；可以把一帧所有候选的边界点合并成一个张量一次计算（GPU 上效果更明显）。
+- **极点测试**：补充纬度 ±85° 以上的回投和裁剪测试，并在报告中按纬度分层统计误差。
+- **抗锯齿**：视图视场很大（120°）时，从 4K ERP 采样到 256×256 会产生混叠；可以先构建 ERP 图像金字塔，按视场选择对应层级采样。
 
-### Phase 2：工程规范化（约 3–4 天）
+### 3.3 Controller
 
-- [ ] **把 `TRACK360_ARTRACK_*` 环境变量迁入 YAML**（P14）：新增一个后端调参配置段，`buildRuntime()` 不再写环境变量；测试使用同一份配置，保证测试覆盖的就是实际运行的行为。这一步会改变单元测试的默认路径，必须在 GPU 环境上对比迁移前后的逐帧结果，确认完全一致。
-- [ ] 清理无效配置（P15）：`model.precision` 要么实现 FP16，要么暂时只允许 `fp32`；删除或实现 `runtime` 队列段；删除 `decisionGate` 段。
-- [x] 包改名为 `track360`（用 `git mv` 保留历史；环境变量前缀同步改为 `TRACK360_`）。
-- [ ] PEP 8 重命名：函数和变量改为 snake_case，YAML 键改为 snake_case。用 ruff 的 `N` 规则辅助检查；分模块提交，每次提交保证测试通过。
-- [x] 统一 CLI：`track360 track | airsim360 | list-instances`（已完成；后续增加 `eval / benchmark / export / download`）。
-- [ ] Python API：`Track360Tracker.from_pretrained("artrackv2-b256").track("video.mp4", init_bfov=(clon, clat, fov_h, fov_v))`。
-- [ ] 权重分发：上传到 Hugging Face Hub（或 GitHub Releases），`hub.py` 负责下载、sha256 校验和缓存；**从仓库和 LFS 中移除 1.6 GB checkpoint**，必要时用 `git filter-repo` 清理历史以缩小仓库。
-- [ ] 质量工具：pre-commit（ruff format + ruff lint + mypy 宽松模式）、GitHub Actions CI（Python 3.11/3.12，CPU）。
-- [ ] Geometry 提供纯 NumPy/Torch-CPU 参考实现，让几何测试能在 CI 运行；GPU 实现与参考实现做数值一致性测试。
+- **视图规划**
+  - 让 ARTrackV2 搜索区域中的目标占比与训练分布一致：目前视图视场是目标的 3 倍，再叠加后端 4 倍的搜索裁剪，需要统计实际占比并调整（P0）。
+  - 视图数自适应：根据上一帧的置信度和运动不确定度，在 1 / 4 / 8 个视图之间切换。
+  - 启用 cubemap 找回时，只接受分数显著高于背景的候选，并设置冷却帧数，防止跳到相似物体。
+- **评估与融合**
+  - 融合常量（0.70 重叠率、0.15 奖励、0.03 上限）改为配置项，在 tune 集上用网格搜索确定。
+  - 融合时考虑投影质量：靠近视图边缘（`edgeMargin` 小）或包络膨胀大的候选降权。
+- **分数**
+  - 在 tune 集上收集“原始分数 → 候选与真值的 IoU”，拟合单调校准（isotonic 或 Beta），让分数近似“IoU > 0.5 的概率”。
+  - 校准后重新评估运动先验的权重，50/50 加权可能重新有效。
+- **运动模型**
+  - 现在是常速度模型。可以换成球面上的 Kalman 滤波（状态：方向 + 角速度 + log 尺度），用协方差决定搜索视图的大小。
+  - 相机自身旋转补偿：全景相机手持或车载时，背景整体旋转会让目标的世界方向变化很大；可以用光流或特征点估计帧间旋转，先补偿再预测。
+- **状态机**
+  - 用 tune 集数据拟合 `TRACKING / UNCERTAIN / LOST` 的阈值，替代手工的分位数规则；至少把“第 5 / 第 8 名”这两个分位点改为配置项。
+- **模板**
+  - recent 模板的更新条件改为“校准后分数 + 连续 N 帧稳定 + 尺度变化小”，保留 anchor 回退。
+  - 研究 ARTrackV2 原生的外观提示能否跨帧传递，作为模板更新的替代方案。
 
-**验收**：CI 通过；新用户按 README 三条命令就能跑通 demo。
+### 3.4 Backends
 
-### Phase 3：公开 Benchmark（约 4–6 天，最核心）
+- **轨迹提示（最高优先级）**：官方 ARTrackV2 推理时会把前几帧的框坐标作为 `seq_input` 输入，当前实现传入 `None`。需要对照官方 tracker 代码确认输入格式，再把上一帧的球面轨迹投影到每个视图的局部坐标系，转换成 400-bin 的坐标 token。
+- **FP16 生效**：实现 `model.precision: fp16`，模板特征在初始化时缓存为半精度。
+- **模板编码缓存**：确认同一帧多个视图共享同一份模板特征，没有重复编码。
+- **注册表与多后端**：抽象出 `encode_template / infer_batch / decode` 三步，新增 OSTrack-B256；可选一个轻量后端（如 HiT）作为速度档。
 
-- [ ] `datasets/vot360.py`：读取 360VOT 的序列、真值（BFoV/rBFoV/BBox）和属性标签。
-- [ ] `evaluation/`：实现或封装官方指标，加入**与官方 toolkit 的交叉验证测试**。
-- [ ] `tools/benchmark.py`：一条命令跑完全量序列，输出 `results/<method>/<seq>.txt` 和 `report.json`（含 git commit、配置哈希、硬件、版本）。
-- [ ] 跑 B0、B2、A1…Ours 和效率消融；画 success/precision 曲线、属性雷达图、速度-精度散点图。
-- [ ] [benchmark.md](benchmark.md)：补充完整表格 + 复现命令（选型和协议已写好）。
+### 3.5 Runtime
 
-**验收**：任何人用 README 中的命令都能复现主表，误差在 ±0.5 个点内（固定随机性，记录 cudnn 设置）。
+- **GPU 解码 + 多 stream 流水线**：解码、重采样和推理重叠执行，取代现在只有解码在后台线程的结构。
+- **批量序列评测**：benchmark 工具支持多进程，按序列并行。
+- **失败隔离**：单条序列出错时记录错误并继续下一条，最后汇总失败列表。
+- **结构化日志**：用 `logging` 输出每条序列的进度、FPS 和错误，取代 `print`。
 
-### Phase 4：后端与性能优化（约 5–7 天）
+### 3.6 Datasets / IO
 
-- [ ] **Backend 注册表**：`@register_backend("artrackv2")`；统一的 `encode_template / infer_batch` 协议。
-- [ ] **新增 OSTrack-B256**（社区最常见），证明框架与后端无关；**可选 HiT** 这类轻量模型，做速度档位（Model Zoo 中分 accuracy / speed 两档）。
-- [ ] **推理优化**（每一项单独 A/B，精度门槛：S_dual 下降 ≤ 0.3 个点）：
-  - FP16 / BF16 autocast；
-  - `torch.compile`（模板编码与搜索 forward 分开编译）；
-  - 模板特征缓存（同一模板，多视图 batch 只编码一次）；
-  - ONNX → TensorRT FP16 导出（`track360 export`），在 Model Zoo 中给出速度对比；
-  - 视图数自适应：TRACKING 置信度高时 4 视图单轮，低时 8 视图两轮（预期 forward 数降低 30–50%，需要用数据证明）。
-- [ ] **算法改进候选**（有数据支撑才进入主线，沿用 [experiments.md](experiments.md) 中的“单变量 + 硬回归门槛”方法）：
-  - 重新启用并调优 LOST → cubemap 恢复（之前“保留但不触发”）；用 360VOT 中目标消失再出现的序列评估恢复率；
-  - 动态模板更新（之前的 NewPic 实验有正信号，宏平均 IoU 0.3116 → 0.3208）；
-  - 可选：在 360 合成数据上微调后端（第 7 节风险中有说明）。
+- 新增 `vot360.py`（360VOT / 360VOS 读取，含属性标签和序列去重列表）。
+- 通用视频读取支持 `--init-bfov`，并提供交互式选择初始框的小工具（OpenCV 窗口画框 → 转为 BFoV）。
+- 结果写入器支持三种格式：ERP 框、BFoV、360VOT 官方格式。
+- AirSim360 读取器保留为开发数据，在文档中标明它不是 benchmark。
 
-**验收**：Model Zoo 表中至少有 2 个后端 × 2 种精度的速度和精度数据。
+### 3.7 Evaluation
 
-### Phase 5：展示层（约 2–3 天）
+- 与官方 toolkit 的交叉验证测试（见 Phase 2）。
+- 按属性分层报告、失败帧自动归类（见 Phase 4 工作方法第 1 步）。
+- 自动生成 success / precision 曲线、属性雷达图、速度—精度散点图（`tools/plot_results.py`）。
+- 显著性：对主要消融做按序列的 bootstrap，给出置信区间，避免把噪声当作提升。
 
-- [ ] Demo GIF：同一段视频并排显示 ERP 全图（含跨缝框）和局部多视图，放在 README 顶部。
-- [ ] Hugging Face Space / Gradio demo：上传全景视频，点选初始框，返回跟踪视频。
-- [ ] mkdocs-material 文档站 + GitHub Pages，包括架构图（数据流：Decode → GPU Resample → Batched Backend → Fusion → Motion/State → Commit）。
-- [ ] `CITATION.cff`，README 中致谢 ARTrack、360VOT、OSTrack。
-- [ ] 发布 `v1.0.0` Release（附权重链接和 CHANGELOG）。
+### 3.8 Visualization
+
+- 结果视频：ERP 全图（含跨缝框）+ 当前帧的局部视图拼接，标注状态和分数。
+- 失败帧画廊：按失败类别导出关键帧，便于定位问题和写文档。
+
+### 3.9 测试与 CI
+
+- 用假后端补一个端到端集成测试：合成一段目标匀速穿过经线接缝的全景视频，检查输出框连续、不会跳到另一侧。
+- GPU 测试加 `@pytest.mark.cuda` 标记，CI 只跑 CPU 部分；发布前在本地跑全量。
+- benchmark 金标准回归：从 tune 集选 3 条短序列，结果文件一旦变化测试就失败，必须显式更新基准。
+
+### 3.10 文档
+
+- 每个 Phase 完成后同步更新 `docs/` 中对应的模块文档和 README。
+- 新增“如何接入新后端”“如何复现 benchmark”两篇教程。
+- 把 Phase 4 的失败分析和消融结论整理进 `docs/experiments.md`，作为面试素材。
 
 ---
 
-## 7. 风险与对策
+## 4. 实验纪律
+
+1. **测试集只用来报告**：所有参数、开关和模型选择只在 tune 集上决定；测试集在 V2.0 之前最多跑两次（Phase 2 基线、Phase 4 最终配置）。
+2. **一次只改一个变量**，结果目录包含配置快照、git commit 和环境信息。
+3. **同时看多个指标**：S<sub>dual</sub>、P<sub>angle</sub>、丢失率、每帧前向次数、P95 延迟。只涨平均 IoU 但丢失率变差的方案不采用（V1 阶段多次出现这种情况，见 [experiments.md](experiments.md)）。
+4. **硬回归序列早停**：先跑最容易出问题的序列，不通过就不扩大实验。
+5. **结论写进文档**：每一轮评测都在 [evaluation-log.md](evaluation-log.md) 追加记录；阶段性的经验总结写入 `docs/experiments.md`。
+
+---
+
+## 5. 风险与对策
 
 | 风险 | 对策 |
 |---|---|
-| 360VOT 上的结果不如论文中的基线 | 这仍然是有价值的结论；重点放在“相对 naive ERP 的提升”和效率优化上；同时通过消融找到短板（通常是尺度估计和恢复） |
-| 数据集许可限制 | 只公开结果文件和代码，不分发数据；README 中指向官方下载页 |
-| ARTrack 上游许可与本项目 LICENSE 不兼容 | Phase 1 先核对上游 LICENSE；必要时本项目也采用相同许可 |
-| 4060 Laptop 显存只有 8 GB | 默认 batch ≤ 8 views，FP16；benchmark 中注明功率模式 |
-| PEP 8 大规模重命名引入 bug | 分模块、小提交；每次提交都跑全量测试；用 ruff 自动检查 |
-| 从 Git 历史中移除大文件会改写历史 | 单独做、提前备份；或者只在新提交中删除，并在 README 中说明 |
-| 微调后端的训练成本 | 作为可选的 stretch goal，不阻塞 v1.0 |
+| 优化后仍然达不到 0.56 | 先保证明显超过 B0 和论文中直接在 ERP 上跟踪的基线；重点放在消融分析和效率上；更强的后端或微调留到 V2.1 |
+| 360VOS 与 360VOT 序列重叠造成数据泄漏 | Phase 2 第 2 步强制去重，排除列表提交到仓库 |
+| 数据集许可（360VOTS 为 CC BY-NC-SA 4.0） | 只公开代码和结果文件，不分发数据 |
+| 4060 Laptop 显存 8 GB | 默认 batch ≤ 8，使用 FP16 |
+| PEP 8 大规模改名引入 bug | Phase 3 用逐字节一致的结果回归保护 |
 
 ---
 
-## 8. 简历和面试素材（数字在 Phase 3/4 完成后填写）
+## 6. V2.1 及以后
 
-**项目描述模板**：
+以下内容**不进入 V2.0**，V2.0 发布后再评估：
+
+- **后端微调**：用 360VOS 训练集（与 360VOT 测试集去重后）生成“透视视图 + 局部框”训练对，在 ARTrackV2 上做少量轮次微调，适应全景投影的外观分布；训练集与测试集严格隔离；微调权重受数据集许可（CC BY-NC-SA 4.0）约束，需注明非商业使用；显存不足时使用梯度累积。
+- 更强或更轻量的后端（如 SAM2 系、HiT）作为新的精度档 / 速度档。
+
+---
+
+## 7. 简历与面试素材（数字在 Phase 4 / 5 完成后填写，以 evaluation-log.md 中的记录为准）
 
 > **Track360：360° 全景视频单目标跟踪框架**（Python / PyTorch / CUDA / TensorRT）
-> - 设计球面多视图跟踪框架：把 ERP 帧按预测 BFoV 重采样为多个透视视图，批量送入 ARTrackV2/OSTrack，再经跨缝融合、球面运动预测和自适应状态机输出球面框；在 360VOT 上 S_dual 从 __ 提升到 __（+__ pts），超过论文基线 AiATrack-360（0.534）__。
-> - 实现 CUDA 球面重采样和“解码 / 推理”流水线，加上 FP16/TensorRT，单帧 P50 延迟 __ ms → __ ms（RTX 4060 Laptop），FPS ×__。
-> - 建立可复现的 benchmark 与消融体系（与官方 toolkit 数值对齐、CI、按属性分层分析），开源后获得 __ star。
+> - 设计球面多视图跟踪框架：按预测 BFoV 把 ERP 帧重采样为多个透视视图，批量送入 ARTrackV2，经跨缝融合、球面运动预测和自适应状态机输出球面框；在 360VOT 上 S<sub>dual</sub> 达到 __，比论文中的最佳 360 基线 AiATrack-360（0.534）高 __ 个点，比直接在 ERP 上跟踪高 __ 个点。
+> - 实现 CUDA 球面重采样、GPU 解码和多 stream 流水线，结合 FP16 / TensorRT，把单帧延迟从 __ ms 降到 __ ms（RTX 4060 Laptop）。
+> - 建立可复现的评测体系：与官方 toolkit 数值对齐、tune / test 严格隔离、按属性分层与 bootstrap 置信区间、CI 回归。
 
-**面试可能被追问的点（提前准备）**：
-1. 为什么不直接在 ERP 上跟踪？（畸变、跨缝、极点分辨率；B0 vs Ours 的数据）
-2. 跨缝 bbox 的 IoU 和融合怎么算？（循环区间、最小覆盖弧）
-3. 多视图结果冲突时如何融合？（Fusor 和参考面积裁剪）
-4. 状态机阈值如何自适应？（ScoreGroup 分位数）
-5. GPU 重采样如何保证和 CPU 结果一致？（像素回归测试）
-6. 延迟的瓶颈在哪里？（profiler 分解：decode / crop / infer / project）
-7. 哪些尝试失败了，为什么？（[experiments.md](experiments.md)：ERP direct crop、refinement head，平均 IoU 上升但 loss rate 恶化）
+面试中可能被追问的问题：
 
----
-
-## 9. 时间线（建议）
-
-| 周 | 内容 | 产出 |
-|---|---|---|
-| W1 | Phase 1 + Phase 2 前半 | 干净的仓库、CI 通过 |
-| W2 | Phase 2 后半 + Phase 3 数据和评测 | 能在 360VOT 上跑出 B0 和 Ours |
-| W3 | Phase 3 消融 + Phase 4 性能 | 主表、效率表、曲线图 |
-| W4 | Phase 4 第二个后端 + Phase 5 | Demo、文档站、v1.0.0 Release |
-
----
-
-## 10. 待你决定的事项
-
-1. LICENSE：上游 ARTrack 是 Apache-2.0，建议本项目也用 Apache-2.0，是否同意？
-2. 是否改写 Git 历史以彻底移除 1.6 GB 权重？
-3. 是否把后端微调列入 v1.0 的范围？
-
-（已确定：README 只保留中文版；项目名为 Track360，仓库名不变。）
+1. 为什么不直接在 ERP 上跟踪？（形变、跨缝、分辨率；B0 与 Track360 的对比数据）
+2. 跨缝的框怎么求 IoU 和融合？（循环区间、最小覆盖弧）
+3. 多个视图的结果冲突时怎么选？（融合规则、分数校准）
+4. ARTrackV2 的轨迹提示在多视图下怎么用？（坐标系转换）
+5. 状态机阈值如何确定？
+6. 延迟瓶颈在哪里，怎么定位和优化的？
+7. 哪些尝试失败了，为什么？

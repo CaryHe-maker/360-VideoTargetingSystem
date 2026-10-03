@@ -3,16 +3,13 @@
 ## 环境要求
 
 - Python 3.11 或 3.12
-- NVIDIA GPU 和 CUDA 版 PyTorch 2.11（默认运行路径使用 CUDA 几何重采样）
-- [Git LFS](https://git-lfs.com)（用于下载模型权重）
+- NVIDIA GPU 和 CUDA 版 PyTorch 2.11
 
 ## 安装
 
 ```bash
 git clone https://github.com/CaryHe-maker/360-VideoTargetingSystem.git
 cd 360-VideoTargetingSystem
-git lfs install
-git lfs pull
 pip install -e ".[dev]"
 ```
 
@@ -20,13 +17,7 @@ pip install -e ".[dev]"
 
 ## 模型权重
 
-默认配置读取 `models/artrackv2_b_256.pth.tar`（官方 ARTrackV2-B-256 checkpoint，约 1.6 GB），详见 [models/README.md](../models/README.md)。
-
-```bash
-git lfs ls-files
-```
-
-输出中显示 `*` 表示实体文件已下载，显示 `-` 表示只有 LFS 指针，需要重新执行 `git lfs pull`。
+默认配置读取 `models/artrackv2_b_256.pth.tar`（官方 ARTrackV2-B-256 checkpoint，约 1.6 GB）。权重不随仓库分发，需要单独下载并放到该路径，下载方式和 SHA-256 校验见 [models/README.md](../models/README.md)。
 
 ## 命令行
 

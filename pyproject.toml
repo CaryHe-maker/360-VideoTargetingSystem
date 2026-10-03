@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "track360"
-version = "0.2.0"
+version = "2.0.0.dev0"
 description = "Spherical multi-view single-object tracking for 360-degree (equirectangular) video"
 readme = "README.md"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26,<3",
@@ -34,7 +35,7 @@ track360 = "track360.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"track360.third_party.artrackv2" = ["*.yaml", "lib/**/*.py"]
+"track360.third_party.artrackv2" = ["*.yaml", "LICENSE", "lib/**/*.py"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

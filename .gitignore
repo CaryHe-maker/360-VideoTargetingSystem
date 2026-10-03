@@ -35,10 +35,9 @@ runs/
 # The Python package named ``datasets`` is source code, not data.
 !src/track360/datasets/
 
-# Model weights: only the documented ARTrackV2 checkpoint (Git LFS) is tracked.
+# Model weights are downloaded separately and never committed.
 models/*
 !models/README.md
-!models/artrackv2_b_256.pth.tar
 weights/
 checkpoints/
 *.pt
