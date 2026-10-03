@@ -77,7 +77,7 @@ python scripts/eval_360VOT.py -d <dataset_dir> -b <results>/bbox -f <results>/bf
    - B2：ARTrackV2 + 以上一帧 BFoV 为中心的单个透视视图；
    - Ours：完整系统，并逐个组件做消融（多视图、两轮搜索、融合、运动、状态机）。
 2. **一致性**：同一份结果文件分别跑官方脚本和本项目的评测代码，结果必须一致。已验证：24 条序列、两组人为加噪的结果、BBox 和 BFoV 两种表示，官方脚本打印的 12 个数字与本项目全部相同（官方只打印三位小数）。
-3. **不在测试集上调参**：所有参数和开关在 360VOS 训练集（或其中划出的验证子集）上确定，测试集只跑最终配置。
+3. **不在测试集上调参**：所有参数和开关在 tune 集上确定，测试集只跑最终配置。tune 集是 360VOS 训练集中排除了与测试集重叠的序列后选出的 25 条，见 [Datasets](modules/datasets.md#360vos-训练集与-tune-集)。
 4. **效率**：固定 GPU（RTX 4060 Laptop），注明驱动和 CUDA 版本，报告 FPS、P50 / P95 延迟、每帧前向次数和峰值显存。批量运行工具记录的是端到端的墙钟时间（两帧结果提交之间的间隔，含解码）；分阶段的 CUDA 计时在 Phase 5 做。
 5. **分层分析**：按 360VOT 的挑战属性（快速运动、跨缝、极点区域、小目标、遮挡等）分别报告。
 6. **可复现**：结果目录中保存 git commit、配置哈希、硬件和依赖版本。
@@ -113,5 +113,19 @@ outputs/360vot/bfov/<方法>/0001.txt      clon,clat,fov_h,fov_v,rotation
 outputs/360vot/reports/<方法>/run.json   方法、生效的配置、配置哈希、git commit、环境
 outputs/360vot/reports/<方法>/0001.json  帧数、FPS、P50 / P95 延迟、无效帧数
 ```
+
+### 在 tune 集上运行
+
+tune 集的序列在训练集压缩包里，标注在单独的目录，所以多两个参数；打分时加 `--info` 可以按挑战属性分层：
+
+```bash
+python tools/benchmark.py run  --dataset-root <train> --label-root <labels/train> \
+    --sequence-file configs/splits/360vos_tune.txt --output-root outputs/tune --method ours
+python tools/benchmark.py eval --dataset-root <train> --label-root <labels/train> \
+    --sequence-file configs/splits/360vos_tune.txt --output-root outputs/tune \
+    --info <360vots-info.csv> --attribute-set 360vos-train
+```
+
+在测试集上按属性分层时用 `--info <360vots-info.csv>`（`--attribute-set` 默认就是 `360vot`）。
 
 在 RTX 4060 Laptop 上用两条序列各 25 帧试跑的速度（只用来估算总耗时，不是正式的效率数据）：`ours` 约 5 FPS，`b2` 和 `b0` 约 12–18 FPS。按 11.3 万帧估算，`ours` 跑完整个测试集约需 6 小时。

@@ -15,9 +15,13 @@
 - 360VOT 评测 `evaluation/vot360_metrics.py`：直接调用官方 toolkit 的指标代码（放在 `third_party/vot360_toolkit/`）。与官方脚本交叉验证：24 条序列、两组结果、两种表示，官方打印的 12 个数字与本项目全部相同。
 - 批量运行工具 `tools/benchmark.py`：`run` 按方法批量跟踪（断点续跑、分片、失败隔离、记录 FPS 和延迟），`eval` 统一打分。
 - 基线方法 `b0`（ARTrackV2 直接在 ERP 上跟踪）和 `b2`（单个透视视图）。
+- 序列信息表解析 `datasets/vots_info.py` 和按挑战属性分层打分（`tools/benchmark.py eval --info`）。
+- 360VOS 训练序列的读取，以及从分割掩码拟合 360VOT 格式标注的 `datasets/mask_labels.py`。
+- tune 集：`configs/splits/360vos_tune.txt`（25 条，14,923 帧）和排除列表 `configs/splits/360vos_train_excluded.csv`，由 `tools/prepare_tune_set.py` 生成。
 
 #### 确认的事实
 
+- **360VOS 的 170 条训练序列里有 97 条就是 360VOT 的测试序列**，另有 5 条与测试序列剪自同一个源视频。这 102 条都不能用于调参。
 - 官方 toolkit 只对 BBox 结果计算 S<sub>dual</sub>；BFoV 结果给出的是 S<sub>sphere</sub>。V2Plan 的精度目标相应改为按 BBox 结果计算。
 - 官方 S<sub>dual</sub> 只把真值向左平移一个图像宽度。结果写入器把跨缝框写成负的 `x1`，这是唯一能同时匹配两种跨缝标注写法的位置。
 - 官方 S<sub>sphere</sub> 把纬度当作极角传入球面 IoU，几何有疑问，暂不用它下结论。详见 [docs/benchmark.md](docs/benchmark.md#官方指标实现的几个特点)。

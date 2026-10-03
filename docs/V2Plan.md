@@ -75,13 +75,9 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
 **目标**：拿到第一个能和论文直接对比的数字。
 
 1. **下载数据**：360VOT 测试集与标注（约 58.5 GB）；360VOS 训练集按需下载。数据放在仓库外，通过参数传入。加载器可以直接读 zip，测试集不需要解压；运行官方评测脚本前需要把各序列的 `label.json` 解压出来。
-2. **检查数据重叠**：360VOS 中有一部分序列来自 360VOT。用于调参的序列必须**排除所有与 360VOT 测试集重叠的序列**，并把排除列表提交到仓库。
-3. **划分调参集**：从去重后的 360VOS 训练集中选 20–30 条序列作为 `tune` 集，覆盖跨缝、极点、快速运动、小目标、遮挡等属性。**之后所有参数和开关只在 tune 集上决定**。
-4. **数据加载器（剩余部分）**：帧和四种真值的读取已完成（见 [Datasets](modules/datasets.md)）。还差属性标签的读取，以及 360VOS 训练集的读取。
-5. **用官方发布的结果复核数据**：下载官方 toolkit README 里提供的 benchmark 结果文件，用 `tools/benchmark.py eval` 打分，确认论文基线的数值能复现。这一步同时验证下载的数据和标注没有问题。
-6. **按属性分层打分**：`eval` 目前只给总分；接入属性标签后按属性分别输出。
-7. **跑基线**（工具和三种方法都已就绪，命令见 [benchmark.md](benchmark.md#复现命令)）：先在 tune 集上跑，确认流程和结果合理，再在测试集上跑 `b0`、`b2`、`ours` 各一次。
-8. **记录结果**：三组结果、按属性分层的结果写入 [evaluation-log.md](evaluation-log.md)（记录 E001 起），复现命令写入 `docs/benchmark.md`。
+2. **用官方发布的结果复核数据**：下载官方 toolkit README 里提供的 benchmark 结果文件，用 `tools/benchmark.py eval` 打分，确认论文基线的数值能复现。这一步同时验证下载的数据和标注没有问题。
+3. **跑基线**（工具和三种方法都已就绪，命令见 [benchmark.md](benchmark.md#复现命令)）：先在 tune 集上跑，确认流程和结果合理，再在测试集上跑 `b0`、`b2`、`ours` 各一次。
+4. **记录结果**：三组结果、按属性分层的结果写入 [evaluation-log.md](evaluation-log.md)（记录 E001 起），复现命令写入 `docs/benchmark.md`。
 
 **验收**：三组结果齐全并记入 [evaluation-log.md](evaluation-log.md)；官方 toolkit 交叉验证通过；在 tune 集上 Ours-v0 至少不差于 B2。如果 Ours-v0 比 B2 差，先进入 Phase 4 的问题排查，再继续。
 
@@ -245,7 +241,7 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
 
 ## 4. 实验纪律
 
-1. **测试集只用来报告**：所有参数、开关和模型选择只在 tune 集上决定；测试集在 V2.0 之前最多跑两次（Phase 2 基线、Phase 4 最终配置）。
+1. **测试集只用来报告**：所有参数、开关和模型选择只在 tune 集（[`configs/splits/360vos_tune.txt`](../configs/splits/360vos_tune.txt)，25 条）上决定；测试集在 V2.0 之前最多跑两次（Phase 2 基线、Phase 4 最终配置）。
 2. **一次只改一个变量**，结果目录包含配置快照、git commit 和环境信息。
 3. **同时看多个指标**：S<sub>dual</sub>、P<sub>angle</sub>、丢失率、每帧前向次数、P95 延迟。只涨平均 IoU 但丢失率变差的方案不采用（V1 阶段多次出现这种情况，见 [experiments.md](experiments.md)）。
 4. **硬回归序列早停**：先跑最容易出问题的序列，不通过就不扩大实验。
