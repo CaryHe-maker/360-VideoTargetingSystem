@@ -1,10 +1,14 @@
-"""Run and score tracking methods on a 360VOT dataset.
+"""Run and score tracking methods on a 360VOT-style dataset.
 
     python tools/benchmark.py run  --dataset-root <dir> --output-root <dir> --method ours
     python tools/benchmark.py eval --dataset-root <dir> --output-root <dir>
 
 ``run`` writes result files in the layout the official toolkit evaluates and resumes
 an interrupted run.  ``eval`` scores every method found under the output root.
+
+The tune set lives in the 360VOS training archives, which carry no labels of their
+own; pass ``--label-root`` (see ``tools/prepare_tune_set.py``) and
+``--sequence-file configs/splits/360vos_tune.txt``.
 """
 
 from __future__ import annotations
@@ -17,10 +21,13 @@ from pathlib import Path
 
 from track360.core.config import loadConfig
 from track360.core.errors import Track360Error
+from track360.datasets.tune_split import readSequenceFile
+from track360.datasets.vots_info import loadVotsInfo
 from track360.evaluation.vot360_metrics import Vot360Scores
 from track360.runtime.benchmark import METHODS, evaluateResults, runBenchmark
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
+ATTRIBUTE_SETS = ("360vot", "360vos-train")
 
 
 def buildParser() -> argparse.ArgumentParser:
@@ -30,7 +37,7 @@ def buildParser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     run = commands.add_parser("run", help="track sequences and write result files")
-    _addRoots(run)
+    _addCommon(run)
     run.add_argument(
         "--method",
         required=True,
@@ -38,7 +45,6 @@ def buildParser() -> argparse.ArgumentParser:
         help="; ".join(f"{name}: {text}" for name, text in METHODS.items()),
     )
     run.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    run.add_argument("--sequences", default=None, help="comma-separated names; default: all")
     run.add_argument("--max-frames", type=int, default=None, help="smoke runs only")
     run.add_argument(
         "--shard",
@@ -48,9 +54,21 @@ def buildParser() -> argparse.ArgumentParser:
     run.add_argument("--no-resume", action="store_true", help="rerun finished sequences")
 
     evaluate = commands.add_parser("eval", help="score the result files of every method")
-    _addRoots(evaluate)
+    _addCommon(evaluate)
     evaluate.add_argument("--methods", default=None, help="comma-separated; default: all found")
     evaluate.add_argument("--json", type=Path, default=None, help="also write scores as JSON")
+    evaluate.add_argument(
+        "--info",
+        type=Path,
+        default=None,
+        help="360vots-info.csv; adds scores per challenge attribute",
+    )
+    evaluate.add_argument(
+        "--attribute-set",
+        choices=ATTRIBUTE_SETS,
+        default="360vot",
+        help="which sequence IDs the dataset uses: 360VOT test or 360VOS training",
+    )
     evaluate.add_argument(
         "--allow-partial",
         action="store_true",
@@ -63,30 +81,47 @@ def main(argv: list[str] | None = None) -> int:
     args = buildParser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     try:
+        sequences = _sequences(args)
         if args.command == "run":
             summary = runBenchmark(
                 datasetRoot=args.dataset_root,
                 outputRoot=args.output_root,
+                labelRoot=args.label_root,
                 method=args.method,
                 config=loadConfig(args.config),
-                sequences=_split(args.sequences),
+                sequences=sequences,
                 maxFrames=args.max_frames,
                 resume=not args.no_resume,
                 shard=_parseShard(args.shard),
             )
             return 1 if summary.failures else 0
-        scores = evaluateResults(
-            datasetRoot=args.dataset_root,
-            outputRoot=args.output_root,
-            methods=_split(args.methods),
-            allowPartial=args.allow_partial,
-        )
+
+        def score(only: list[str] | None) -> dict[str, dict[str, Vot360Scores]]:
+            return evaluateResults(
+                datasetRoot=args.dataset_root,
+                outputRoot=args.output_root,
+                labelRoot=args.label_root,
+                methods=_split(args.methods),
+                allowPartial=args.allow_partial,
+                only=only,
+            )
+
+        scores = score(sequences)
         print(formatScores(scores))
+        payload: dict[str, object] = {"overall": _payload(scores)}
+        if args.info is not None:
+            byAttribute = {}
+            for name, members in _attributeSequences(args.info, args.attribute_set).items():
+                wanted = [m for m in members if sequences is None or m in sequences]
+                if wanted:
+                    try:
+                        byAttribute[name] = score(wanted)
+                    except Track360Error:
+                        continue  # no method has results for this attribute yet
+            print()
+            print(formatAttributeScores(byAttribute))
+            payload["byAttribute"] = {name: _payload(item) for name, item in byAttribute.items()}
         if args.json is not None:
-            payload = {
-                method: {kind: _scorePayload(item) for kind, item in byKind.items()}
-                for method, byKind in scores.items()
-            }
             args.json.parent.mkdir(parents=True, exist_ok=True)
             args.json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         return 0
@@ -119,11 +154,54 @@ def formatScores(scores: dict[str, dict[str, Vot360Scores]]) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _addRoots(parser: argparse.ArgumentParser) -> None:
+def formatAttributeScores(byAttribute: dict[str, dict[str, dict[str, Vot360Scores]]]) -> str:
+    """One row per attribute: S_dual / P_angle of each method on the BBox results."""
+    methods = sorted({method for scores in byAttribute.values() for method in scores})
+    lines = ["S_dual / P_angle per attribute (BBox results)"]
+    lines.append(f"  {'attribute':<10}{'seqs':>5}" + "".join(f"{name:>16}" for name in methods))
+    for name, scores in byAttribute.items():
+        cells = []
+        count = 0
+        for method in methods:
+            item = scores.get(method, {}).get("bbox")
+            if item is None:
+                cells.append(f"{'-':>16}")
+            else:
+                count = max(count, item.sequenceCount)
+                cells.append(f"{item.success:>9.3f} /{item.anglePrecision:>5.3f}")
+        lines.append(f"  {name:<10}{count:>5}" + "".join(cells))
+    return "\n".join(lines)
+
+
+def _addCommon(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--dataset-root", required=True, help="directory of 360VOT sequence folders or zips"
+        "--dataset-root", required=True, help="directory of sequence folders or zips"
     )
     parser.add_argument("--output-root", required=True, help="where bbox/, bfov/, reports/ live")
+    parser.add_argument(
+        "--label-root", default=None, help="labels for sequences shipped without label.json"
+    )
+    parser.add_argument("--sequences", default=None, help="comma-separated names; default: all")
+    parser.add_argument(
+        "--sequence-file", type=Path, default=None, help="file with one sequence name per line"
+    )
+
+
+def _sequences(args: argparse.Namespace) -> list[str] | None:
+    if args.sequences is not None and args.sequence_file is not None:
+        raise ValueError("give --sequences or --sequence-file, not both")
+    if args.sequence_file is not None:
+        return readSequenceFile(args.sequence_file)
+    return _split(args.sequences)
+
+
+def _attributeSequences(infoPath: Path, attributeSet: str) -> dict[str, list[str]]:
+    info = loadVotsInfo(infoPath)
+    attributes = info.votAttributes() if attributeSet == "360vot" else info.vosAttributes("train")
+    return {
+        name: sorted(sequence for sequence, names in attributes.items() if name in names)
+        for name in info.attributeNames
+    }
 
 
 def _split(text: str | None) -> list[str] | None:
@@ -138,6 +216,13 @@ def _parseShard(text: str) -> tuple[int, int]:
     except ValueError as error:
         raise ValueError("--shard must look like i/n, for example 0/2") from error
     return index, count
+
+
+def _payload(scores: dict[str, dict[str, Vot360Scores]]) -> dict[str, object]:
+    return {
+        method: {kind: _scorePayload(item) for kind, item in byKind.items()}
+        for method, byKind in scores.items()
+    }
 
 
 def _scorePayload(scores: Vot360Scores) -> dict[str, object]:

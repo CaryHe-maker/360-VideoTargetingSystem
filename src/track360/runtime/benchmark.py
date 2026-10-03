@@ -122,6 +122,7 @@ def runBenchmark(
     outputRoot: str | Path,
     method: str,
     config: AppConfig,
+    labelRoot: str | Path | None = None,
     sequences: Sequence[str] | None = None,
     maxFrames: int | None = None,
     resume: bool = True,
@@ -132,10 +133,11 @@ def runBenchmark(
 
     ``shard=(i, n)`` keeps every n-th sequence starting at i, so several processes can
     split a run.  With ``resume`` a sequence whose result files are already complete is
-    skipped.
+    skipped.  ``labelRoot`` supplies labels for sequences shipped without them, such as
+    the tune set.
     """
     effective = methodConfig(config, method)
-    dataset = Vot360Dataset(datasetRoot)
+    dataset = Vot360Dataset(datasetRoot, labelRoot)
     names = _selectSequences(dataset, sequences, shard)
     output = Path(outputRoot)
     reportRoot = output / REPORT_DIRECTORY / method
@@ -147,6 +149,7 @@ def runBenchmark(
             "method": method,
             "description": METHODS[method],
             "datasetRoot": str(dataset.root),
+            "labelRoot": None if dataset.labelRoot is None else str(dataset.labelRoot),
             "sequences": list(names),
             "maxFrames": maxFrames,
             "shard": list(shard),
@@ -163,9 +166,7 @@ def runBenchmark(
     reports: list[SequenceReport] = []
     try:
         for position, name in enumerate(names, start=1):
-            report = _runOne(
-                dataset.root, output, method, effective, name, session, maxFrames, resume
-            )
+            report = _runOne(dataset, output, method, effective, name, session, maxFrames, resume)
             reports.append(report)
             _writeJson(reportRoot / f"{name}.json", asdict(report))
             LOGGER.info(
@@ -197,16 +198,20 @@ def evaluateResults(
     *,
     datasetRoot: str | Path,
     outputRoot: str | Path,
+    labelRoot: str | Path | None = None,
     methods: Sequence[str] | None = None,
     allowPartial: bool = False,
+    only: Sequence[str] | None = None,
 ) -> dict[str, dict[str, Vot360Scores]]:
     """Score every method under ``outputRoot`` in both result representations.
 
     Each method is scored on the sequences it has result files for.  A result file
     shorter than its sequence is an error unless ``allowPartial`` is set, which
-    truncates the ground truth to match and is only meant for smoke runs.
+    truncates the ground truth to match and is only meant for smoke runs.  ``only``
+    restricts scoring to the named sequences, for example those with one attribute; a
+    method with no result for any of them is left out.
     """
-    dataset = Vot360Dataset(datasetRoot)
+    dataset = Vot360Dataset(datasetRoot, labelRoot)
     output = Path(outputRoot)
     scores: dict[str, dict[str, Vot360Scores]] = {}
     for representation in (BBOX_DIRECTORY, BFOV_DIRECTORY):
@@ -218,6 +223,10 @@ def evaluateResults(
             if method not in available:
                 raise DecodeError(f"no {representation} results for method '{method}' in {root}")
             results = loadTrackerResults(root / method)
+            if only is not None:
+                results = {name: rows for name, rows in results.items() if name in only}
+                if not results:
+                    continue
             groundTruth = {}
             for name, rows in results.items():
                 sequence = dataset.sequence(name)
@@ -253,7 +262,7 @@ def _selectSequences(
 
 
 def _runOne(
-    datasetRoot: Path,
+    dataset: Vot360Dataset,
     outputRoot: Path,
     method: str,
     config: AppConfig,
@@ -262,9 +271,9 @@ def _runOne(
     maxFrames: int | None,
     resume: bool,
 ) -> SequenceReport:
-    source = Vot360DataSource(maxFrames=maxFrames)
+    source = Vot360DataSource(maxFrames=maxFrames, labelRoot=dataset.labelRoot)
     try:
-        source.open(str(datasetRoot), name)
+        source.open(str(dataset.root), name)
         frameCount = source.frameCount
         if resume and _isComplete(outputRoot, method, name, frameCount):
             return SequenceReport(sequence=name, status="skipped", frames=frameCount)
