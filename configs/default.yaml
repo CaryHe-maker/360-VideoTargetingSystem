@@ -71,6 +71,9 @@ backendTuning:
   fusionSourceMinConfidence: 0.35
   fusionOverlap: 0.45
   fusionBoxMode: null
+reproducibility:
+  seed: 0
+  deterministic: true
 visualization:
   enabled: false
   outputRoot: ../outputs/visualization

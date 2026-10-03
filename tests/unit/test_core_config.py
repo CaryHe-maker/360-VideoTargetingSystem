@@ -41,6 +41,8 @@ class CoreConfigTest(unittest.TestCase):
             config.backendTuning.singleViewHorizontalFovCapRad, 1.5707963267948966
         )
         self.assertIsNone(config.backendTuning.fourViewFovCapRad)
+        self.assertEqual(config.reproducibility.seed, 0)
+        self.assertTrue(config.reproducibility.deterministic)
         self.assertEqual(
             config.visualization.outputRoot,
             REPOSITORY_ROOT / "outputs" / "visualization",

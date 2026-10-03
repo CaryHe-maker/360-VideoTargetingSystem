@@ -44,6 +44,7 @@ from track360.core.types import (
 )
 from track360.geometry import GpuGeometryImpl, SphericalGeometryImpl
 from track360.io.result_sink import FileResultSink
+from track360.runtime.reproducibility import seedEverything
 
 if TYPE_CHECKING:
     from track360.backends.artrack_model import ARTrackSession
@@ -154,6 +155,7 @@ def buildRuntime(
     profile: bool = False,
 ) -> RuntimeBundle:
     tuning = config.backendTuning
+    seedEverything(config.reproducibility)
     if geometryFactory is not None:
         geometry = geometryFactory(config.geometry.boundarySamplesPerEdge)
     elif config.geometry.resampler == "cuda":

@@ -74,6 +74,9 @@ backendTuning:
   fusionSourceMinConfidence: null
   fusionOverlap: null
   fusionBoxMode: null
+reproducibility:
+  seed: 0
+  deterministic: true
 visualization:
   enabled: false
   outputRoot: ../../outputs/visualization

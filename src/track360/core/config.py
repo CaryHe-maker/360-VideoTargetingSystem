@@ -266,6 +266,18 @@ class BackendTuningConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ReproducibilityConfig:
+    seed: int = 0
+    deterministic: bool = True
+
+    def __post_init__(self) -> None:
+        if isinstance(self.seed, bool) or not isinstance(self.seed, int) or self.seed < 0:
+            raise ConfigError("reproducibility.seed must be a non-negative integer")
+        if not isinstance(self.deterministic, bool):
+            raise ConfigError("reproducibility.deterministic must be boolean")
+
+
+@dataclass(frozen=True, slots=True)
 class VisualizationConfig:
     enabled: bool
     outputRoot: Path
@@ -290,6 +302,7 @@ class AppConfig:
     tracking: TrackingConfig
     recovery: RecoveryConfig
     backendTuning: BackendTuningConfig
+    reproducibility: ReproducibilityConfig
     visualization: VisualizationConfig
     sourcePath: Path
 
@@ -324,6 +337,7 @@ def loadConfig(path: str | Path) -> AppConfig:
             "tracking",
             "recovery",
             "backendTuning",
+            "reproducibility",
             "visualization",
         },
     )
@@ -435,6 +449,7 @@ def loadConfig(path: str | Path) -> AppConfig:
             "fusionBoxMode",
         },
     )
+    reproducibilityRaw = _section(root, "reproducibility", {"seed", "deterministic"})
     visualizationRaw = _section(root, "visualization", {"enabled", "outputRoot", "stages"})
 
     weightsValue = _requireStr("model.weights", modelRaw["weights"])
@@ -636,6 +651,12 @@ def loadConfig(path: str | Path) -> AppConfig:
                 None
                 if tuningRaw["fusionBoxMode"] is None
                 else _requireStr("backendTuning.fusionBoxMode", tuningRaw["fusionBoxMode"])
+            ),
+        ),
+        reproducibility=ReproducibilityConfig(
+            seed=_requireInt("reproducibility.seed", reproducibilityRaw["seed"]),
+            deterministic=_requireBool(
+                "reproducibility.deterministic", reproducibilityRaw["deterministic"]
             ),
         ),
         visualization=VisualizationConfig(
