@@ -16,6 +16,13 @@ from track360.datasets.registry import (
     registerDatasetFormat,
     registeredDatasetFormats,
 )
+from track360.datasets.vot360 import (
+    Vot360Annotation,
+    Vot360Dataset,
+    Vot360DataSource,
+    Vot360Representation,
+    Vot360Sequence,
+)
 
 __all__ = [
     "AirSim360DataSource",
@@ -26,6 +33,11 @@ __all__ = [
     "MaskPseudoTrackBuilder",
     "PseudoTrackBuilder",
     "VideoFrameSource",
+    "Vot360Annotation",
+    "Vot360DataSource",
+    "Vot360Dataset",
+    "Vot360Representation",
+    "Vot360Sequence",
     "DatasetSource",
     "collectInstanceIdGroups",
     "formatInstanceIdDocument",

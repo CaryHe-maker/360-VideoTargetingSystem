@@ -1,4 +1,9 @@
-"""Image decoding helpers with a small dependency surface."""
+"""Image decoding helpers.
+
+RGB frames are decoded with OpenCV.  ``readImageArray`` keeps the exact PNG decoder
+used for label planes such as AirSim360 segmentation, where channel layout and bit
+depth must be preserved.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ import numpy as np
 from track360.core.errors import DecodeError
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+RGB_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg"})
 
 
 def readImageArray(path: str | Path) -> np.ndarray:
@@ -28,6 +34,13 @@ def readImageArray(path: str | Path) -> np.ndarray:
 
 def readRgbImage(path: str | Path) -> np.ndarray:
     """Read one RGB image as a ``uint8`` HWC array."""
+    imagePath = Path(path)
+    if imagePath.suffix.lower() in RGB_IMAGE_EXTENSIONS:
+        try:
+            payload = imagePath.read_bytes()
+        except OSError as error:
+            raise DecodeError(f"cannot read image {imagePath}: {error}") from error
+        return decodeRgbImage(payload, str(imagePath))
     array = readImageArray(path)
     if array.ndim == 2:
         return np.repeat(array[..., None], 3, axis=2).astype(np.uint8, copy=False)
@@ -40,6 +53,17 @@ def readRgbImage(path: str | Path) -> np.ndarray:
     if array.shape[2] == 1:
         return np.repeat(array, 3, axis=2).astype(np.uint8, copy=False)
     raise DecodeError(f"unsupported image channel count: {array.shape}")
+
+
+def decodeRgbImage(payload: bytes, name: str = "<bytes>") -> np.ndarray:
+    """Decode an encoded PNG or JPEG payload to a ``uint8`` RGB HWC array."""
+    import cv2
+
+    buffer = np.frombuffer(payload, dtype=np.uint8)
+    bgr = cv2.imdecode(buffer, cv2.IMREAD_COLOR) if buffer.size else None
+    if bgr is None:
+        raise DecodeError(f"cannot decode image: {name}")
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
 def _readPng(path: Path) -> np.ndarray:

@@ -12,6 +12,7 @@ from typing import Protocol
 from track360.core.errors import DecodeError
 from track360.core.types import FramePacket
 from track360.datasets.airsim360_source import AirSim360DataSource
+from track360.datasets.vot360 import Vot360DataSource
 
 
 class DatasetSource(Protocol):
@@ -23,7 +24,10 @@ class DatasetSource(Protocol):
 
 
 SourceFactory = Callable[[], DatasetSource]
-_FACTORIES: dict[str, SourceFactory] = {"airsim360": AirSim360DataSource}
+_FACTORIES: dict[str, SourceFactory] = {
+    "airsim360": AirSim360DataSource,
+    "360vot": Vot360DataSource,
+}
 
 
 def registerDatasetFormat(name: str, factory: SourceFactory) -> None:
