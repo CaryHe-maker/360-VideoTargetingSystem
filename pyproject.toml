@@ -36,6 +36,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "track360.third_party.artrackv2" = ["*.yaml", "LICENSE", "lib/**/*.py"]
+"track360.third_party.vot360_toolkit" = ["LICENSE"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

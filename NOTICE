@@ -42,3 +42,19 @@ Modified from upstream, to keep only what inference needs:
 The ARTrackV2-B-256 model weights are distributed by the upstream authors and
 are not part of this repository.
 ------------------------------------------------------------------------------
+360VOT toolkit
+https://github.com/HuajianUP/360VOT
+Licensed under the MIT License. Copyright (c) 2023 Huajian.
+
+Location in this repository: src/track360/third_party/vot360_toolkit/
+The upstream license is reproduced in src/track360/third_party/vot360_toolkit/LICENSE.
+
+Upstream revision: a729a743d3f5c43c4ab409189620ceb35dda18d1 (2026-01-16).
+ope_benchmark.py (upstream: eval/OPEBenchmark_360VOT.py) and sphiou.py (upstream:
+eval/sphiou.py) hold the benchmark's metric code.  Two changes, neither of which
+alters a computed value: sphiou is imported relatively, and one assignment in
+SphIoU.interArea takes .item() so that it runs on NumPy 2.
+
+The 360VOT dataset is distributed by its authors under CC BY-NC-SA 4.0 and is not
+part of this repository.
+------------------------------------------------------------------------------
