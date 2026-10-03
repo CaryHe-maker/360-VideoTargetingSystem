@@ -55,7 +55,7 @@ src/track360/
 ├── io/                 图像与视频读取、结果写入
 ├── evaluation/         平面、循环、球面指标与性能统计
 ├── visualization/      中间视图与结果图
-└── third_party/        上游 ARTrackV2 模型代码（推理子集）
+└── third_party/        上游 ARTrackV2 模型代码（推理子集）、360VOT toolkit 的指标代码
 ```
 
 ### 依赖规则
@@ -68,7 +68,7 @@ cli ─▶ runtime ─┬─▶ controller ─▶ geometry ─▶ core
 
 - `core` 不依赖任何其他包；所有跨模块的数据都使用 `core/types.py` 中的类型。
 - `controller` 和 `geometry` 只通过 `core/protocols.py` 中的协议使用后端，不依赖具体模型类型，因此更换后端不影响控制逻辑。
-- 只有 `backends/` 可以导入 `third_party/`。
+- `third_party/` 只能被对应的模块导入：`backends/` 导入 ARTrackV2 模型代码，`evaluation/` 导入 360VOT toolkit 的指标代码。
 - `runtime/driver.py` 是唯一的组合根：在这里创建并连接所有组件。
 
 ## 帧事务协议

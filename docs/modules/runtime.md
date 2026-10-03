@@ -7,6 +7,7 @@ Runtime 是组合根和执行器，本身不实现状态判定或模型算法。
 | `runtime/driver.py` | `buildRuntime()` 装配组件；`runTracking()` 逐帧多轮循环；`_PrefetchReader` 后台预取 |
 | `runtime/track_video.py` | `track360 track`：视频 / 图像序列入口 |
 | `runtime/track_airsim360.py` | `track360 airsim360`：AirSim360 入口，负责生命周期和计时产物 |
+| `runtime/benchmark.py` | 360VOT 批量运行：按方法逐序列跟踪、断点续跑、写结果和运行报告；`tools/benchmark.py` 是它的命令行入口 |
 | `cli.py` | 统一命令行，分发到上面两个入口和 `list-instances` |
 
 ## 组件装配

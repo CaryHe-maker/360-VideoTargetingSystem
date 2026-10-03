@@ -11,7 +11,7 @@
 
 ## 0. 成功标准
 
-### 0.1 精度（360VOT 测试集，BFoV 标注，官方 toolkit 计算）
+### 0.1 精度（360VOT 测试集，BBox 结果，官方 toolkit 计算）
 
 | 对比对象 | 当前已知数值 | V2.0 目标 |
 |---|---|---|
@@ -19,7 +19,7 @@
 | 论文中最好的通用跟踪器 OSTrack（直接在 ERP 上跟踪） | S<sub>dual</sub> 0.447 | 超过 10 个点以上 |
 | 本项目 B0：ARTrackV2 直接在 ERP 上跟踪 | Phase 2 测出 | Track360 相对 B0 提升 ≥ 8 个点 |
 
-> 论文基线数值摘自 [360VOTS 论文](https://arxiv.org/abs/2404.13953)，写进 README 前要对照原文表格核实，并确认与本项目使用的是同一种标注（BBox / BFoV）。
+> 论文基线数值摘自 [360VOTS 论文](https://arxiv.org/abs/2404.13953)，写进 README 前要对照原文表格核实。官方 toolkit 只对 BBox 结果计算 S<sub>dual</sub> / P<sub>dual</sub>，所以对比用 BBox 结果；BFoV 结果的 S<sub>sphere</sub> 在官方实现里几何有疑问，暂不作为目标（见 [benchmark.md](benchmark.md#官方指标实现的几个特点)）。
 
 ### 0.2 效率（RTX 4060 Laptop，固定功率模式，CUDA event 计时）
 
@@ -78,15 +78,10 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
 2. **检查数据重叠**：360VOS 中有一部分序列来自 360VOT。用于调参的序列必须**排除所有与 360VOT 测试集重叠的序列**，并把排除列表提交到仓库。
 3. **划分调参集**：从去重后的 360VOS 训练集中选 20–30 条序列作为 `tune` 集，覆盖跨缝、极点、快速运动、小目标、遮挡等属性。**之后所有参数和开关只在 tune 集上决定**。
 4. **数据加载器（剩余部分）**：帧和四种真值的读取已完成（见 [Datasets](modules/datasets.md)）。还差属性标签的读取，以及 360VOS 训练集的读取。
-5. **BFoV 初始化入口**：`track360 track` 支持 `--init-bfov clon,clat,fov_h,fov_v`（度）。
-6. **结果写入器**：按 360VOT 官方格式，每条序列输出一个 `NNNN.txt`。
-7. **评测对齐**：封装官方 toolkit 的指标（S<sub>dual</sub>、P<sub>dual</sub>、P<sub>angle</sub>），加一个交叉验证测试：同一份结果文件，本项目与官方脚本的数值误差 < 1e-3。
-8. **批量运行工具**：`tools/benchmark.py --dataset 360vot --split test --method <name>`，支持断点续跑和多进程。
-9. **跑基线**：
-   - B0：ARTrackV2 直接在下采样的 ERP 上跟踪；
-   - B2：单个透视视图跟随上一帧 BFoV（等价于 360VOT 论文中的框架思路）；
-   - Ours-v0：当前默认配置。
-10. **记录结果**：三组结果、按属性分层的结果写入 [evaluation-log.md](evaluation-log.md)（记录 E001 起），复现命令写入 `docs/benchmark.md`。
+5. **用官方发布的结果复核数据**：下载官方 toolkit README 里提供的 benchmark 结果文件，用 `tools/benchmark.py eval` 打分，确认论文基线的数值能复现。这一步同时验证下载的数据和标注没有问题。
+6. **按属性分层打分**：`eval` 目前只给总分；接入属性标签后按属性分别输出。
+7. **跑基线**（工具和三种方法都已就绪，命令见 [benchmark.md](benchmark.md#复现命令)）：先在 tune 集上跑，确认流程和结果合理，再在测试集上跑 `b0`、`b2`、`ours` 各一次。
+8. **记录结果**：三组结果、按属性分层的结果写入 [evaluation-log.md](evaluation-log.md)（记录 E001 起），复现命令写入 `docs/benchmark.md`。
 
 **验收**：三组结果齐全并记入 [evaluation-log.md](evaluation-log.md)；官方 toolkit 交叉验证通过；在 tune 集上 Ours-v0 至少不差于 B2。如果 Ours-v0 比 B2 差，先进入 Phase 4 的问题排查，再继续。
 

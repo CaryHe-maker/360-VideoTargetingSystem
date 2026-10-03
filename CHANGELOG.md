@@ -10,6 +10,17 @@
 
 - 360VOT 数据加载器 `datasets/vot360.py`：序列发现、帧读取、四种真值标注（BBox / rBBox / BFoV / rBFoV）。可以直接读发布时的 zip，不需要解压；`groundTruth()` 返回与官方 toolkit 相同的数组布局，`annotation()` 返回本项目的类型。注册为数据格式 `360vot`。
 - 图像序列支持 JPG。
+- BFoV 初始化：`track360 track --init-bfov clon,clat,fov_h,fov_v`，控制器和 `runTracking()` 接受 `initialBfov`。
+- 360VOT 官方格式的结果写入器 `io/vot360_results.py`：每条序列同时输出 BBox 和 BFoV 两种结果文件。
+- 360VOT 评测 `evaluation/vot360_metrics.py`：直接调用官方 toolkit 的指标代码（放在 `third_party/vot360_toolkit/`）。与官方脚本交叉验证：24 条序列、两组结果、两种表示，官方打印的 12 个数字与本项目全部相同。
+- 批量运行工具 `tools/benchmark.py`：`run` 按方法批量跟踪（断点续跑、分片、失败隔离、记录 FPS 和延迟），`eval` 统一打分。
+- 基线方法 `b0`（ARTrackV2 直接在 ERP 上跟踪）和 `b2`（单个透视视图）。
+
+#### 确认的事实
+
+- 官方 toolkit 只对 BBox 结果计算 S<sub>dual</sub>；BFoV 结果给出的是 S<sub>sphere</sub>。V2Plan 的精度目标相应改为按 BBox 结果计算。
+- 官方 S<sub>dual</sub> 只把真值向左平移一个图像宽度。结果写入器把跨缝框写成负的 `x1`，这是唯一能同时匹配两种跨缝标注写法的位置。
+- 官方 S<sub>sphere</sub> 把纬度当作极角传入球面 IoU，几何有疑问，暂不用它下结论。详见 [docs/benchmark.md](docs/benchmark.md#官方指标实现的几个特点)。
 
 #### 变更
 

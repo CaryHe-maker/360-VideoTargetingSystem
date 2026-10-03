@@ -6,7 +6,9 @@ Evaluation 读取预测结果和真值，计算平面、循环 ERP、球面和�
 |---|---|
 | `evaluation/otb_metrics.py` | 平面 / 循环 IoU、成功曲线、AUC、跟踪丢失率 |
 | `evaluation/spherical_metrics.py` | 球面中心误差、BFoV 球面 IoU |
+| `evaluation/vot360_metrics.py` | 360VOT benchmark 分数，调用官方 toolkit 的指标代码 |
 | `evaluation/profiler.py` | 命名代码段耗时统计 |
+| `tools/benchmark.py` | 360VOT：批量运行各方法并打分，用法见 [Benchmark 数据集](../benchmark.md#复现命令) |
 | `tools/run_airsim360_dataset.py` | AirSim360 单序列：运行跟踪、生成伪真值、输出逐帧 IoU 和汇总 |
 
 ## 指标定义
@@ -46,9 +48,26 @@ trackingLossRate = lostFrameCount / 参与评估的可见帧数
 - 只报告 meanIoU 不够。至少同时报告：循环 IoU / AUC、跟踪丢失率、球面 IoU、球面中心误差、每帧平均视图数和前向次数、P50 / P95 / P99 延迟；
 - 单条序列上的提升不能作为结论，必须在完整的测试集上比较，并同时给出按序列平均和按帧加权的结果。
 
-## 公开 Benchmark
+## 360VOT 指标
 
-公开评测计划使用 360VOT，指标与官方 toolkit 对齐（dual success、dual precision、angle precision）。选型理由和评测协议见 [Benchmark 数据集](../benchmark.md)。
+对外报告的分数全部来自 `evaluation/vot360_metrics.py`。它不重新实现指标，而是调用放在 `third_party/vot360_toolkit/` 里的官方代码（MIT 许可），只在外面做输入检查和汇总。这样做是因为官方实现有一些不容易从论文里看出来的行为（见 [Benchmark 数据集](../benchmark.md#官方指标实现的几个特点)），自己重写的指标即使“更正确”，分数也无法和别人的结果比较。
+
+```python
+from track360.evaluation.vot360_metrics import evaluateVot360
+
+scores = evaluateVot360(groundTruth, results, "bbox")
+scores.success          # S_dual（bbox）或 S_sphere（bfov / rbfov）
+scores.precision        # P_dual，只有 bbox 有
+scores.anglePrecision   # P_angle
+scores.perSequence      # 每条序列的分数
+```
+
+- `groundTruth` 来自 `Vot360Sequence.groundTruth()`，`results` 是按序列名组织的结果数组，两者都是官方布局；
+- 汇总方式与官方脚本相同：**先算每条序列的分数，再对序列取平均**，所以长序列和短序列的权重一样；
+- 结果文件必须覆盖序列的全部帧，长度不一致会直接报错；
+- 支持 `bbox`、`bfov`、`rbfov`。`rbbox` 的旋转 IoU 依赖一个需要 CUDA 的外部库，没有接入。
+
+本文前面几节的指标（循环 IoU、跟踪丢失率、`bfovSphericalIoU` 等）是项目自己的诊断指标，用于开发中分析问题，不用于对外报告。选型理由和评测协议见 [Benchmark 数据集](../benchmark.md)。
 
 ## 回归检查
 
