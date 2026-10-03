@@ -285,7 +285,15 @@ class PyTorchARTrackV2Session:
         templateFeatures: Sequence[object],
         *,
         imageFovs: Sequence[tuple[float, float]] | None = None,
+        priorBoxes: Sequence[BBoxXYWH] | None = None,
     ) -> tuple[ARTrackPrediction, ...]:
+        """Predict one box per image.
+
+        The search crop is centered on the newest template's box by default, which
+        suits views the controller already centers on the target.  ``priorBoxes``
+        gives the previous box of each image instead, for tracking in a fixed image
+        frame.
+        """
         self._requireOpen()
         templates = tuple(item for item in templateFeatures if isinstance(item, ARTrackTemplate))
         if not templates:
@@ -293,6 +301,8 @@ class PyTorchARTrackV2Session:
         images = tuple(rgbs)
         if imageFovs is not None and len(imageFovs) != len(images):
             raise ProtocolError("ARTrackV2 image FOV metadata must match the image batch")
+        if priorBoxes is not None and len(priorBoxes) != len(images):
+            raise ProtocolError("ARTrackV2 prior boxes must match the image batch")
         states: list[BBoxXYWH] = []
         crops: list[NDArray[np.uint8]] = []
         resizeFactors: list[float] = []
@@ -303,10 +313,14 @@ class PyTorchARTrackV2Session:
             # spherical controller centers its views on the current estimate, so
             # carrying a previous local box across viewIds would introduce drift.
             fov = imageFovs[index] if imageFovs is not None else None
-            state = _scaledPrior(
-                templates[-1], image.shape[1], image.shape[0],
-                fov[0] if fov is not None else None,
-                fov[1] if fov is not None else None,
+            state = (
+                priorBoxes[index]
+                if priorBoxes is not None
+                else _scaledPrior(
+                    templates[-1], image.shape[1], image.shape[0],
+                    fov[0] if fov is not None else None,
+                    fov[1] if fov is not None else None,
+                )
             )
             if useFullView:
                 crop = np.ascontiguousarray(image)

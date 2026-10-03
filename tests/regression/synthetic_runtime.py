@@ -58,6 +58,19 @@ class FakeARTrackSession:
         )
         return tuple(_locate(rgb, len(templateFeatures)) for rgb in rgbs)
 
+    def inferBatch(
+        self,
+        rgbs: Sequence[NDArray[np.uint8]],
+        templateFeatures: Sequence[object],
+        *,
+        imageFovs: Sequence[tuple[float, float]] | None = None,
+        priorBoxes: Sequence[BBoxXYWH] | None = None,
+    ) -> tuple[ARTrackPrediction, ...]:
+        """Whole-image search, used when tracking directly on ERP frames."""
+        del imageFovs
+        self.calls.append({"op": "inferErp", "views": len(rgbs), "priors": priorBoxes is not None})
+        return tuple(_locate(rgb, len(templateFeatures)) for rgb in rgbs)
+
     def close(self) -> None:
         self.calls.append({"op": "close"})
 
