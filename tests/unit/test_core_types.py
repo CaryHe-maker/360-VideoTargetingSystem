@@ -2,8 +2,8 @@ import unittest
 
 import numpy as np
 
-from instatarget.core.errors import ProtocolError
-from instatarget.core.types import (
+from track360.core.errors import ProtocolError
+from track360.core.types import (
     BBoxXYWH,
     FrameIndex,
     FramePacket,

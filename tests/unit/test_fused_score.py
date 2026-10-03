@@ -7,8 +7,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from instatarget.app.driver import _projectObservation, _projectValidObservations
-from instatarget.controller import (
+from track360.controller import (
     BetaCalibration,
     MotionScore,
     ScoreCalibration,
@@ -18,8 +17,8 @@ from instatarget.controller import (
     scoreMotionConsistency,
     scoreViewCenterMotion,
 )
-from instatarget.core.errors import GeometryError
-from instatarget.core.types import (
+from track360.core.errors import GeometryError
+from track360.core.types import (
     BBoxXYWH,
     BFoV,
     FrameIndex,
@@ -30,10 +29,11 @@ from instatarget.core.types import (
     SequenceId,
     ViewSpec,
 )
-from instatarget.geometry import makeSphericalPoint
+from track360.geometry import makeSphericalPoint
+from track360.runtime.driver import _projectObservation, _projectValidObservations
 
 TEST_CALIBRATION = ScoreCalibration(
-    format="instatarget.score-calibration.v1",
+    format="track360.score-calibration.v1",
     checkpointSha256="1" * 64,
     manifestSha256="2" * 64,
     split="calibration",
@@ -174,7 +174,8 @@ class FusedScoreRemappingTest(unittest.TestCase):
         )
         viewScore = MotionScore(0.8, 0.8, 0.8, 0.5, (pi / 3.0) ** 2)
 
-        with patch("instatarget.app.driver.scoreViewCenterMotion", return_value=viewScore) as score:
+        target = "track360.runtime.driver.scoreViewCenterMotion"
+        with patch(target, return_value=viewScore) as score:
             projected = _projectObservation(
                 frame=frame,
                 view=view,

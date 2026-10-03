@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from instatarget.core.types import (
+from track360.core.types import (
     BBoxXYWH,
     BFoV,
     FrameIndex,
@@ -13,10 +13,10 @@ from instatarget.core.types import (
     TrackResult,
     TrackStatus,
 )
-from instatarget.io.image_reader import readRgbImage
-from instatarget.io.result_sink import FileResultSink
-from instatarget.io.video_source import VideoFrameSource
-from instatarget.visualization.png import writeRgbPng
+from track360.io.image_reader import readRgbImage
+from track360.io.result_sink import FileResultSink
+from track360.io.video_source import VideoFrameSource
+from track360.visualization.png import writeRgbPng
 
 
 class IoRuntimeTest(unittest.TestCase):

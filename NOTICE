@@ -1,0 +1,25 @@
+Track360
+Copyright 2026 CaryHe-maker
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes software developed by third parties:
+
+------------------------------------------------------------------------------
+ARTrack / ARTrackV2
+https://github.com/MIV-XJTU/ARTrack
+Licensed under the Apache License, Version 2.0.
+
+Location in this repository: src/track360/third_party/artrackv2/
+The upstream license is reproduced in src/track360/third_party/artrackv2/LICENSE.
+
+Only the subset of the upstream code needed for inference is included (model
+definition, ViT backbone, configuration, and supporting utilities).
+
+The exact upstream commit the code was copied from was not recorded. The
+upstream default branch was at 5931f4af8dd3f3f04af52f9ca7d6f2d5da54592e when
+this notice was written (2026-10-03).
+
+The ARTrackV2-B-256 model weights are distributed by the upstream authors and
+are not part of this repository.
+------------------------------------------------------------------------------

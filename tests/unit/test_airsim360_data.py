@@ -5,9 +5,9 @@ from pathlib import Path
 
 import numpy as np
 
-from instatarget.data.airsim360_source import AirSim360DataSource
-from instatarget.data.pseudo_track_builder import PseudoTrackBuilder
-from instatarget.visualization.png import writeRgbPng
+from track360.datasets.airsim360_source import AirSim360DataSource
+from track360.datasets.pseudo_track_builder import PseudoTrackBuilder
+from track360.visualization.png import writeRgbPng
 
 
 class AirSim360DataTest(unittest.TestCase):

@@ -1,143 +1,52 @@
-# Build directories
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
 build/
-build-*/
-out/
-bin/
-lib/
-cmake-build-*/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# CMake generated files
-CMakeCache.txt
-CMakeFiles/
-CMakeScripts/
-Testing/
-Makefile
-cmake_install.cmake
-install_manifest.txt
-CTestTestfile.cmake
-CPackConfig.cmake
-CPackSourceConfig.cmake
-compile_commands.json
-_deps/
-*.cmake.tmp
-CMakeUserPresets.json
-CMakeLists.txt.user
-
-# Native build outputs
-*.o
-*.obj
-*.lo
-*.la
-*.a
-*.lib
-*.so
-*.so.*
-*.dll
-*.dylib
-*.exe
-*.out
-*.app
-*.pdb
-*.ilk
-*.exp
-
-# IDE and editor state
+# IDE and OS files
 .idea/
 .vscode/
-*.suo
-*.user
-*.userosscache
-*.sln.docstates
-*.VC.db
-*.VC.VC.opendb
+.vs/
 *.code-workspace
-
-# OS files
 .DS_Store
 Thumbs.db
 Desktop.ini
 
-# Runtime logs and temporary files
-logs/
+# Logs and temporary files
 *.log
 *.tmp
-*.temp
-*.cache
-*.pid
-artifacts/
-*.db
-*.sqlite
-*.sqlite3
 
-# Python helper caches
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-*.egg-info/
-.venv/
-venv/
-
-# Datasets, videos, and generated experiment outputs
+# Datasets, videos, and run outputs
 data/
 datasets/
 videos/
 results/
 outputs/
+artifacts/
 runs/
-experiments/*
 
-# Python source package named ``data`` is code, not a dataset artifact.
-!src/instatarget/data/
-!src/instatarget/data/*.py
-!experiments/.gitkeep
-!experiments/README.md
+# The Python package named ``datasets`` is source code, not data.
+!src/track360/datasets/
 
-# Model weights and inference engines
-models/
+# Model weights are downloaded separately and never committed.
+models/*
+!models/README.md
 weights/
 checkpoints/
 *.pt
 *.pth
 *.onnx
 *.engine
-*.plan
 *.trt
 
-# The bundled ARTrackV2 implementation is source code, not a model artifact.
-!src/instatarget/vendor/artrackv2/
-!src/instatarget/vendor/artrackv2/**
-src/instatarget/vendor/artrackv2/**/__pycache__/
-src/instatarget/vendor/artrackv2/**/*.pyc
-
-# Vendored reference implementations
-third_party/
-
-# Docker and package artifacts
-*.tar
-*.tar.gz
+# Archives
 *.zip
 *.7z
-docker/*.tar
-
-# Keep source, build scripts, docs, and configuration templates tracked.
-!CMakeLists.txt
-!cmake/
-!src/
-!include/
-!apps/
-!tests/
-!tools/
-!docs/
-!docker/
-!*.example
-!*.template
-
-# GitHub clones must contain the complete competition Docker build context.
-# Keep the ARTrackV2 checkpoint if it is supplied locally; raw training weights
-# and generated artifacts remain ignored.
-!models/
-models/*
-!models/README.md
-!models/artrackv2_b_256.pth.tar
+*.tar.gz

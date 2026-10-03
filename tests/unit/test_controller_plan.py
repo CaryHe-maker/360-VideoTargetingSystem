@@ -2,8 +2,7 @@ import math
 import unittest
 from pathlib import Path
 
-from instatarget.controller import (
-    Classifier,
+from track360.controller import (
     FrameAggregate,
     FusionBoxMode,
     Fusor,
@@ -11,16 +10,16 @@ from instatarget.controller import (
     TemplatePolicy,
     ViewSpecType1,
 )
-from instatarget.controller.state_model import ScoreGroup
-from instatarget.core.config import loadConfig
-from instatarget.core.types import (
+from track360.controller.state_model import ScoreGroup
+from track360.core.config import loadConfig
+from track360.core.types import (
     BBoxXYWH,
     BFoV,
     ProjectedObservation,
     TemplateCommandKind,
     TrackStatus,
 )
-from instatarget.geometry import SphericalGeometryImpl, makeSphericalPoint
+from track360.geometry import SphericalGeometryImpl, makeSphericalPoint
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -49,7 +48,7 @@ def _observation(
 
 class ControllerPlanTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.config = loadConfig(ROOT / "configs" / "RGBonly.yaml")
+        self.config = loadConfig(ROOT / "configs" / "default.yaml")
         self.geometry = SphericalGeometryImpl(
             boundarySamplesPerEdge=self.config.geometry.boundarySamplesPerEdge
         )
@@ -275,20 +274,6 @@ class ControllerPlanTest(unittest.TestCase):
         self.assertTrue(result.fused)
         self.assertGreater(result.overlapRate or 0.0, 0.70)
         self.assertGreater(result.bbox.widthPx, 0.0)
-
-    def testClassifierEnforcesSphericalThirtyDegreeRadiusAndRanksTopThree(self) -> None:
-        result = Classifier().classify(
-            (
-                _observation(0, 0.0, 0.9),
-                _observation(1, math.radians(10.0), 0.8),
-                _observation(2, math.radians(120.0), 0.7),
-                _observation(3, math.radians(-120.0), 0.6),
-            )
-        )
-        self.assertEqual(len(result), 3)
-        self.assertEqual(result[0].memberCount, 2)
-        self.assertEqual(result[0].memberViewIds, (0, 1))
-        self.assertTrue(all(item.memberCount == 1 for item in result[1:]))
 
     def testScoreGroupUsesWarmupAndRollingOrderStatistics(self) -> None:
         group = ScoreGroup()

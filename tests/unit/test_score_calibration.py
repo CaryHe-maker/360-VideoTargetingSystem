@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from instatarget.controller.score_calibration import loadScoreCalibration
-from instatarget.core.errors import ConfigError
+from track360.controller.score_calibration import loadScoreCalibration
+from track360.core.errors import ConfigError
 
 
 class ScoreCalibrationArtifactTest(unittest.TestCase):
@@ -86,7 +86,7 @@ class ScoreCalibrationArtifactTest(unittest.TestCase):
 
 def _artifactPayload(checkpoint: Path) -> dict[str, object]:
     return {
-        "format": "instatarget.score-calibration.v1",
+        "format": "track360.score-calibration.v1",
         "checkpointSha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
         "manifestSha256": "1" * 64,
         "split": "calibration",

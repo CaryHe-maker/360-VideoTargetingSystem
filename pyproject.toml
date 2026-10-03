@@ -3,9 +3,11 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "instatarget"
-version = "0.1.0"
-description = "Spherical RGB-only single-object tracking system"
+name = "track360"
+version = "2.0.0.dev0"
+description = "Spherical multi-view single-object tracking for 360-degree (equirectangular) video"
+readme = "README.md"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26,<3",
@@ -18,26 +20,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-artrackv2 = [
-  "torch>=2.11,<2.12",
-  "torchvision>=0.26,<0.27",
-  "timm==0.5.4",
-  "easydict>=1.13,<2",
-]
 dev = [
   "pytest>=8,<9",
   "ruff>=0.12,<1",
 ]
 
+[project.urls]
+Repository = "https://github.com/CaryHe-maker/360-VideoTargetingSystem"
+
 [project.scripts]
-run = "instatarget.app.commands:runMain"
-getInstanceID = "instatarget.app.commands:getInstanceIdMain"
+track360 = "track360.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"instatarget.vendor.artrackv2" = ["*.yaml", "lib/**/*.py"]
+"track360.third_party.artrackv2" = ["*.yaml", "LICENSE", "lib/**/*.py"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -46,7 +44,7 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["src/instatarget/vendor"]
+extend-exclude = ["src/track360/third_party"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
