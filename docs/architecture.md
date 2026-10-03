@@ -51,7 +51,7 @@ src/track360/
 ├── controller/         视图规划、候选评估与融合、运动预测、状态机、帧事务
 ├── backends/           ARTrackV2 会话、批量推理适配、模板缓存
 ├── runtime/            组件装配（buildRuntime）与逐帧循环（runTracking）
-├── datasets/           视频 / 图像序列 / AirSim360 读取，伪真值生成
+├── datasets/           360VOT / AirSim360 / 视频 / 图像序列读取，伪真值生成
 ├── io/                 图像与视频读取、结果写入
 ├── evaluation/         平面、循环、球面指标与性能统计
 ├── visualization/      中间视图与结果图

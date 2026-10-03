@@ -19,6 +19,7 @@
 | [Controller](modules/controller.md) | 视图规划、候选融合、运动预测、状态机 |
 | [Backends](modules/backends.md) | ARTrackV2 推理运行时与后端接入方式 |
 | [Runtime](modules/runtime.md) | 运行时装配、逐帧循环、预取、计时 |
+| [Datasets](modules/datasets.md) | 360VOT / AirSim360 读取、图像解码、标注的坐标约定 |
 | [Evaluation](modules/evaluation.md) | 平面 / 循环 / 球面指标与性能统计 |
 | [Visualization](modules/visualization.md) | 中间视图与结果图的诊断产物 |
 

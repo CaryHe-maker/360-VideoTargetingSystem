@@ -1,6 +1,6 @@
 # Benchmark 数据集
 
-本文记录测试集的选型结论和评测协议；每一轮的评测结果记录在 [evaluation-log.md](evaluation-log.md)。**数据集尚未下载**；下载、加载器和评测脚本是 [V2Plan](V2Plan.md) Phase 2 的任务。
+本文记录测试集的选型结论和评测协议；每一轮的评测结果记录在 [evaluation-log.md](evaluation-log.md)。数据读取见 [Datasets](modules/datasets.md)；评测脚本是 [V2Plan](V2Plan.md) Phase 2 的任务。
 
 ## 结论
 
@@ -23,7 +23,8 @@
 
 - **下载**：测试集与标注约 58.5 GB，从[官网下载页](https://360vot.hkustvgd.com)或 [Hugging Face](https://huggingface.co/datasets/xuyzshaun/360VOTS) 获取；
 - **toolkit**：[HuajianUP/360VOT](https://github.com/HuajianUP/360VOT)，提供评测与可视化脚本；
-- **标注格式**（角度单位为度）：
+- **数据布局**：每条序列一个 zip，内含 `NNNN/image/000000.jpg…` 和 `NNNN/label.json`；标注字段和坐标约定见 [Datasets](modules/datasets.md#360vot)；
+- **结果文件每行的格式**（角度单位为度）：
   - BBox：`[x1, y1, w, h]`
   - rBBox：`[cx, cy, w, h, rotation]`
   - BFoV / rBFoV：`[clon, clat, fov_h, fov_v, rotation]`

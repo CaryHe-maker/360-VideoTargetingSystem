@@ -43,7 +43,7 @@
 | 问题 | 影响 | 解决阶段 |
 |---|---|---|
 | 默认配置每帧只做一轮搜索（4 个视图）：`acceptAnyCandidate: true` 时评估器不请求第二轮。两轮搜索、融合门槛等逻辑只在 `configs/tests/legacy_off.yaml` 下被测试覆盖 | “两轮 8 视图”是否比单轮更好，没有在 ARTrackV2 上验证过 | Phase 4 |
-| 图像序列只支持 PNG（自己实现的解码器，4K 帧约 10 秒一帧）；读视频依赖系统里的 ffmpeg | 360VOT 是 JPG 序列，现有读取器不能用 | Phase 2 |
+| 读视频文件依赖系统里的 ffmpeg / ffprobe | 没装 ffmpeg 的机器只能跟踪图像序列 | Phase 6 |
 | 没有任何公开数据集上的结果 | 无法和 benchmark 对比 | Phase 2 |
 | ARTrackV2 调用时 `seq_input=None`，没有使用模型的轨迹提示（trajectory prompt） | 很可能丢掉了 ARTrackV2 的大部分时序优势 | Phase 4 |
 | `LOST` / cubemap 找回路径保留了但从不触发 | 目标丢失后只能靠扩大局部搜索 | Phase 4 |
@@ -74,10 +74,10 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
 
 **目标**：拿到第一个能和论文直接对比的数字。
 
-1. **下载数据**：360VOT 测试集与标注（约 58.5 GB）；360VOS 训练集按需下载。数据放在仓库外，通过参数传入。每条序列是一个 zip，解压后是 `NNNN/image/000000.jpg…` 和一个 `NNNN/label.json`；`label.json` 以帧文件名为键，每帧包含 `bfov`、`rbfov`（`clon, clat, fov_h, fov_v, rotation`，度）和 `bbox`、`rbbox`（`cx, cy, w, h, rotation`，像素，**中心点表示**）。
+1. **下载数据**：360VOT 测试集与标注（约 58.5 GB）；360VOS 训练集按需下载。数据放在仓库外，通过参数传入。加载器可以直接读 zip，测试集不需要解压；运行官方评测脚本前需要把各序列的 `label.json` 解压出来。
 2. **检查数据重叠**：360VOS 中有一部分序列来自 360VOT。用于调参的序列必须**排除所有与 360VOT 测试集重叠的序列**，并把排除列表提交到仓库。
 3. **划分调参集**：从去重后的 360VOS 训练集中选 20–30 条序列作为 `tune` 集，覆盖跨缝、极点、快速运动、小目标、遮挡等属性。**之后所有参数和开关只在 tune 集上决定**。
-4. **数据加载器**：`datasets/vot360.py`，读取帧、BBox / BFoV / rBFoV 真值和属性标签；初始化框直接使用第 0 帧的 BFoV。图像读取改用 OpenCV 解码并支持 JPG（现有的 PNG 解码器太慢）。
+4. **数据加载器（剩余部分）**：帧和四种真值的读取已完成（见 [Datasets](modules/datasets.md)）。还差属性标签的读取，以及 360VOS 训练集的读取。
 5. **BFoV 初始化入口**：`track360 track` 支持 `--init-bfov clon,clat,fov_h,fov_v`（度）。
 6. **结果写入器**：按 360VOT 官方格式，每条序列输出一个 `NNNN.txt`。
 7. **评测对齐**：封装官方 toolkit 的指标（S<sub>dual</sub>、P<sub>dual</sub>、P<sub>angle</sub>），加一个交叉验证测试：同一份结果文件，本项目与官方脚本的数值误差 < 1e-3。
@@ -218,7 +218,7 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
 
 ### 3.6 Datasets / IO
 
-- 新增 `vot360.py`（360VOT / 360VOS 读取，含属性标签和序列去重列表）。
+- `vot360.py` 补充属性标签、360VOS 读取和序列去重列表。
 - 通用视频读取支持 `--init-bfov`，并提供交互式选择初始框的小工具（OpenCV 窗口画框 → 转为 BFoV）。
 - 结果写入器支持三种格式：ERP 框、BFoV、360VOT 官方格式。
 - AirSim360 读取器保留为开发数据，在文档中标明它不是 benchmark。
