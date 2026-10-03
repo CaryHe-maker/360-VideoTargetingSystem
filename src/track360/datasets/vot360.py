@@ -6,6 +6,10 @@ zip archive it is distributed as::
     <root>/0001/image/000000.jpg ...      <root>/0001.zip
     <root>/0001/label.json                  (same layout inside the archive)
 
+The 360VOS training archives hold ``image/`` and ``mask/`` directly, without the
+sequence directory and without ``label.json``.  They are read the same way; their
+labels come from a separate label root (see ``datasets/mask_labels.py``).
+
 ``label.json`` maps each frame file name to four annotations.  Angles are in
 degrees and follow the official toolkit (https://github.com/HuajianUP/360VOT):
 ``clon`` grows to the right and is 0 at the image center, ``clat`` grows upward,
@@ -63,11 +67,13 @@ class Vot360Annotation:
 class Vot360Sequence:
     """Frames and annotations of one sequence, read lazily from a directory or zip."""
 
-    def __init__(self, location: Path) -> None:
+    def __init__(self, location: Path, labelPath: Path | None = None) -> None:
         self._location = location
+        self._labelPath = labelPath
         self._isArchive = location.is_file()
         self.name = location.stem if self._isArchive else location.name
         self._archive: zipfile.ZipFile | None = None
+        self._memberPrefix: str | None = None
         self._labels: list[dict[str, Any]] | None = None
         self._frameNames: tuple[str, ...] = ()
         self._frameSize: tuple[int, int] | None = None
@@ -77,8 +83,18 @@ class Vot360Sequence:
         return self._location
 
     @property
+    def hasLabels(self) -> bool:
+        if self._labelPath is not None:
+            return self._labelPath.is_file()
+        return self.hasMember(LABEL_FILE)
+
+    @property
     def frameNames(self) -> tuple[str, ...]:
-        self._loadLabels()
+        if not self._frameNames:
+            if self.hasLabels:
+                self._loadLabels()
+            else:
+                self._frameNames = self._listImages()
         return self._frameNames
 
     @property
@@ -96,7 +112,7 @@ class Vot360Sequence:
     def readRgb(self, frameIndex: int) -> NDArray[np.uint8]:
         name = self._frameName(frameIndex)
         member = f"{IMAGE_DIRECTORY}/{name}"
-        rgb = decodeRgbImage(self._readBytes(member), f"{self.name}/{member}")
+        rgb = decodeRgbImage(self.readMember(member), f"{self.name}/{member}")
         size = (int(rgb.shape[1]), int(rgb.shape[0]))
         if self._frameSize is None:
             self._frameSize = size
@@ -109,6 +125,7 @@ class Vot360Sequence:
 
     def annotation(self, frameIndex: int) -> Vot360Annotation:
         self._frameName(frameIndex)
+        self._loadLabels()
         assert self._labels is not None
         label = self._labels[frameIndex]
         return Vot360Annotation(
@@ -173,11 +190,70 @@ class Vot360Sequence:
             )
         return names[frameIndex]
 
+    def readMember(self, member: str) -> bytes:
+        """Read one file of the sequence, for example ``image/000000.jpg``."""
+        try:
+            if self._isArchive:
+                return self._openArchive().read(self._prefix() + member)
+            return (self._location / member).read_bytes()
+        except (OSError, KeyError, zipfile.BadZipFile) as error:
+            raise DecodeError(
+                f"cannot read {member} from 360VOT sequence {self._location}: {error}"
+            ) from error
+
+    def hasMember(self, member: str) -> bool:
+        if self._isArchive:
+            try:
+                self._openArchive().getinfo(self._prefix() + member)
+            except KeyError:
+                return False
+            return True
+        return (self._location / member).is_file()
+
+    def _openArchive(self) -> zipfile.ZipFile:
+        if self._archive is None:
+            try:
+                self._archive = zipfile.ZipFile(self._location)
+            except (OSError, zipfile.BadZipFile) as error:
+                raise DecodeError(
+                    f"cannot open 360VOT archive {self._location}: {error}"
+                ) from error
+        return self._archive
+
+    def _prefix(self) -> str:
+        """Archives either wrap everything in ``<name>/`` or hold ``image/`` directly."""
+        if self._memberPrefix is None:
+            wrapped = f"{self.name}/"
+            names = self._openArchive().namelist()
+            self._memberPrefix = wrapped if any(n.startswith(wrapped) for n in names) else ""
+        return self._memberPrefix
+
+    def _listImages(self) -> tuple[str, ...]:
+        folder = f"{IMAGE_DIRECTORY}/"
+        if self._isArchive:
+            start = self._prefix() + folder
+            names = [
+                name[len(start) :]
+                for name in self._openArchive().namelist()
+                if name.startswith(start) and not name.endswith("/")
+            ]
+        else:
+            directory = self._location / IMAGE_DIRECTORY
+            names = [entry.name for entry in directory.iterdir()] if directory.is_dir() else []
+        if not names:
+            raise DecodeError(f"no images in 360VOT sequence {self._location}")
+        return tuple(sorted(names))
+
     def _loadLabels(self) -> None:
         if self._labels is not None:
             return
         try:
-            payload = json.loads(self._readBytes(LABEL_FILE))
+            if self._labelPath is not None:
+                payload = json.loads(self._labelPath.read_bytes())
+            else:
+                payload = json.loads(self.readMember(LABEL_FILE))
+        except OSError as error:
+            raise DecodeError(f"cannot read 360VOT labels {self._labelPath}: {error}") from error
         except json.JSONDecodeError as error:
             raise DecodeError(f"invalid 360VOT label file in {self._location}: {error}") from error
         if not isinstance(payload, dict) or not payload:
@@ -191,24 +267,14 @@ class Vot360Sequence:
         self._frameNames = names
         self._labels = labels
 
-    def _readBytes(self, member: str) -> bytes:
-        try:
-            if self._isArchive:
-                if self._archive is None:
-                    self._archive = zipfile.ZipFile(self._location)
-                return self._archive.read(f"{self.name}/{member}")
-            return (self._location / member).read_bytes()
-        except (OSError, KeyError, zipfile.BadZipFile) as error:
-            raise DecodeError(
-                f"cannot read {member} from 360VOT sequence {self._location}: {error}"
-            ) from error
-
 
 class Vot360Dataset:
     """All sequences under a 360VOT root, addressed by name in sorted order."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, labelRoot: str | Path | None = None) -> None:
+        """``labelRoot`` holds ``<sequence>/label.json`` for sequences shipped without one."""
         self.root = Path(root).expanduser().resolve()
+        self.labelRoot = None if labelRoot is None else Path(labelRoot).expanduser().resolve()
         if not self.root.is_dir():
             raise DecodeError(f"360VOT dataset root is not a directory: {self.root}")
         locations: dict[str, Path] = {}
@@ -216,7 +282,9 @@ class Vot360Dataset:
             if entry.is_file() and entry.suffix.lower() == ".zip":
                 # An extracted directory wins over the archive it came from.
                 locations.setdefault(entry.stem, entry)
-            elif entry.is_dir() and (entry / LABEL_FILE).is_file():
+            elif entry.is_dir() and (
+                (entry / LABEL_FILE).is_file() or (entry / IMAGE_DIRECTORY).is_dir()
+            ):
                 locations[entry.name] = entry
         if not locations:
             raise DecodeError(f"no 360VOT sequences found in {self.root}")
@@ -230,13 +298,15 @@ class Vot360Dataset:
         return len(self._locations)
 
     def __iter__(self) -> Iterator[Vot360Sequence]:
-        return (Vot360Sequence(location) for location in self._locations.values())
+        return (self.sequence(name) for name in self._locations)
 
     def sequence(self, name: str) -> Vot360Sequence:
         try:
-            return Vot360Sequence(self._locations[name])
+            location = self._locations[name]
         except KeyError as error:
             raise DecodeError(f"unknown 360VOT sequence '{name}' in {self.root}") from error
+        labelPath = None if self.labelRoot is None else self.labelRoot / name / LABEL_FILE
+        return Vot360Sequence(location, labelPath)
 
 
 @dataclass(slots=True)
@@ -244,6 +314,7 @@ class Vot360DataSource:
     """Read one 360VOT sequence through the common frame contract."""
 
     maxFrames: int | None = None
+    labelRoot: str | Path | None = None
     _sequence: Vot360Sequence | None = field(init=False, default=None, repr=False)
     _cursor: int = field(init=False, default=0, repr=False)
 
@@ -264,7 +335,7 @@ class Vot360DataSource:
         if self.maxFrames is not None and self.maxFrames <= 0:
             raise ProtocolError("maxFrames must be positive")
         self.close()
-        dataset = Vot360Dataset(root)
+        dataset = Vot360Dataset(root, self.labelRoot)
         if sequenceId is None:
             if len(dataset) != 1:
                 raise DecodeError(
