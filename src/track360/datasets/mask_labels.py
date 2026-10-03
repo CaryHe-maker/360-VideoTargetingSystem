@@ -47,6 +47,13 @@ def readTargetMask(sequence: Vot360Sequence, frameIndex: int) -> NDArray[np.bool
     return (bgr[..., 2] == red) & (bgr[..., 1] == green) & (bgr[..., 0] == blue)
 
 
+def masksMatchFrames(sequence: Vot360Sequence) -> bool:
+    """Whether every frame has a mask of the same name and no mask is left over."""
+    frames = {Path(name).stem for name in sequence.frameNames}
+    masks = {Path(name).stem for name in sequence.listMembers(MASK_DIRECTORY)}
+    return frames == masks
+
+
 def labelFromMask(mask: NDArray[np.bool_]) -> dict[str, dict[str, float]]:
     """Fit the label of one frame; an empty mask gives the absent-target label."""
     import cv2
@@ -107,6 +114,8 @@ def buildSequenceLabels(sequence: Vot360Sequence) -> dict[str, Any]:
 
 def writeSequenceLabels(sequence: Vot360Sequence, labelRoot: str | Path) -> Path:
     """Write ``<labelRoot>/<sequence>/label.json`` and return its path."""
+    if not masksMatchFrames(sequence):
+        raise DecodeError(f"sequence {sequence.name} has frames and masks that do not pair up")
     labels = buildSequenceLabels(sequence)
     if not next(iter(labels.values()))["bbox"]["w"]:
         raise DecodeError(f"sequence {sequence.name} has no target in frame 0")
@@ -122,6 +131,7 @@ __all__ = [
     "FIRST_OBJECT_RGB",
     "buildSequenceLabels",
     "labelFromMask",
+    "masksMatchFrames",
     "readTargetMask",
     "writeSequenceLabels",
 ]

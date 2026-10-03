@@ -19,8 +19,14 @@ from pathlib import Path
 import numpy as np
 
 from track360.core.errors import Track360Error
-from track360.datasets.mask_labels import labelFromMask, readTargetMask, writeSequenceLabels
+from track360.datasets.mask_labels import (
+    labelFromMask,
+    masksMatchFrames,
+    readTargetMask,
+    writeSequenceLabels,
+)
 from track360.datasets.tune_split import (
+    Exclusion,
     excludedTrainClips,
     leakFreePool,
     readSequenceFile,
@@ -72,13 +78,20 @@ def main(argv: list[str] | None = None) -> int:
 def _split(args: argparse.Namespace) -> int:
     info = loadVotsInfo(args.info)
     dataset = Vot360Dataset(args.train_root)
-    excluded = excludedTrainClips(info)
-    pool = leakFreePool(info)
+    excluded = list(excludedTrainClips(info))
     frameCounts = {}
-    for clip in pool:
+    usable = []
+    for clip in leakFreePool(info):
         sequence = dataset.sequence(clip.vosId)
         frameCounts[clip.vosId] = sequence.frameCount
+        # A sequence whose masks do not pair up with its frames cannot be labelled.
+        if masksMatchFrames(sequence):
+            usable.append(clip)
+        else:
+            excluded.append(Exclusion(clip.vosId, "masks_do_not_match_frames", ""))
         sequence.close()
+    pool = tuple(usable)
+    excluded.sort(key=lambda item: item.vosId)
     tune = selectTuneSet(pool, frameCounts, size=TUNE_SIZE, maxFrames=TUNE_MAX_FRAMES)
 
     SPLIT_DIRECTORY.mkdir(parents=True, exist_ok=True)

@@ -228,6 +228,21 @@ class Vot360Sequence:
             self._memberPrefix = wrapped if any(n.startswith(wrapped) for n in names) else ""
         return self._memberPrefix
 
+    def listMembers(self, directory: str) -> tuple[str, ...]:
+        """File names directly inside one directory of the sequence, sorted."""
+        folder = f"{directory}/"
+        if self._isArchive:
+            start = self._prefix() + folder
+            names = [
+                name[len(start) :]
+                for name in self._openArchive().namelist()
+                if name.startswith(start) and not name.endswith("/")
+            ]
+        else:
+            target = self._location / directory
+            names = [entry.name for entry in target.iterdir()] if target.is_dir() else []
+        return tuple(sorted(names))
+
     def _listImages(self) -> tuple[str, ...]:
         folder = f"{IMAGE_DIRECTORY}/"
         if self._isArchive:

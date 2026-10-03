@@ -25,6 +25,7 @@ vos_train_id,reason,detail
 044,is_360vot_sequence,0039
 045,is_360vot_sequence,0040
 046,is_360vot_sequence,0041
+052,masks_do_not_match_frames,
 053,same_video_as_360vot_sequence,0027
 056,is_360vot_sequence,0044
 057,is_360vot_sequence,0045
