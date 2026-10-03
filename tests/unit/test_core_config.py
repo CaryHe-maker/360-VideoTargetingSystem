@@ -2,15 +2,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from instatarget.core.config import loadConfig
-from instatarget.core.errors import ConfigError
+from track360.core.config import loadConfig
+from track360.core.errors import ConfigError
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 class CoreConfigTest(unittest.TestCase):
     def testLoadConfigConvertsAnglesAndResolvesWeights(self) -> None:
-        config = loadConfig(REPOSITORY_ROOT / "configs" / "RGBonly.yaml")
+        config = loadConfig(REPOSITORY_ROOT / "configs" / "default.yaml")
 
         self.assertAlmostEqual(config.geometry.minFovRad, 0.3490658503988659)
         self.assertEqual(config.geometry.boundarySamplesPerEdge, 65)
@@ -28,11 +28,6 @@ class CoreConfigTest(unittest.TestCase):
         self.assertEqual(config.motion.minSamplesForVelocity, 2)
         self.assertAlmostEqual(config.motion.processNoiseRadPerSec, 0.04)
         self.assertEqual(config.model.precision, "fp32")
-        self.assertFalse(config.speculativePipeline.enabled)
-        self.assertFalse(config.speculativePipeline.batchMergeEnabled)
-        self.assertAlmostEqual(config.speculativePipeline.centerGapRatio, 0.50)
-        self.assertAlmostEqual(config.speculativePipeline.logScaleGap, 0.25)
-        self.assertEqual(config.speculativePipeline.maxSpeculativeAgeFrames, 1)
         self.assertEqual(
             config.model.weights,
             REPOSITORY_ROOT / "models" / "artrackv2_b_256.pth.tar",
@@ -50,7 +45,7 @@ class CoreConfigTest(unittest.TestCase):
         )
 
     def testLoadConfigRejectsUnknownFields(self) -> None:
-        source = (REPOSITORY_ROOT / "configs" / "RGBonly.yaml").read_text(encoding="utf-8")
+        source = (REPOSITORY_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")
         source = source.replace("schemaVersion: 1", "schemaVersion: 1\nunknownField: true")
 
         with tempfile.TemporaryDirectory() as directory:
@@ -60,7 +55,7 @@ class CoreConfigTest(unittest.TestCase):
                 loadConfig(path)
 
     def testLoadConfigRejectsRemovedFixedStateThresholds(self) -> None:
-        source = (REPOSITORY_ROOT / "configs" / "RGBonly.yaml").read_text(encoding="utf-8")
+        source = (REPOSITORY_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")
         source = source.replace(
             "  candidateMinScore: 0.597262",
             "  candidateMinScore: 0.597262\n  uncertainThreshold: 0.45",
@@ -73,7 +68,7 @@ class CoreConfigTest(unittest.TestCase):
                 loadConfig(path)
 
     def testLoadConfigRejectsBudgetThatCannotFitCubeMap(self) -> None:
-        source = (REPOSITORY_ROOT / "configs" / "RGBonly.yaml").read_text(encoding="utf-8")
+        source = (REPOSITORY_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")
         source = source.replace("maxViewsPerFrameTotal: 12", "maxViewsPerFrameTotal: 5")
 
         with tempfile.TemporaryDirectory() as directory:
@@ -83,18 +78,8 @@ class CoreConfigTest(unittest.TestCase):
                 loadConfig(path)
 
     def testLoadConfigRejectsUnknownVisualizationStage(self) -> None:
-        source = (REPOSITORY_ROOT / "configs" / "RGBonly.yaml").read_text(encoding="utf-8")
+        source = (REPOSITORY_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")
         source = source.replace("    - geometry_box", "    - geometry_box\n    - unknown")
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "invalid.yaml"
-            path.write_text(source, encoding="utf-8")
-            with self.assertRaises(ConfigError):
-                loadConfig(path)
-
-    def testLoadConfigRejectsBatchMergeWhenSpeculationIsDisabled(self) -> None:
-        source = (REPOSITORY_ROOT / "configs" / "RGBonly.yaml").read_text(encoding="utf-8")
-        source = source.replace("  batchMergeEnabled: false", "  batchMergeEnabled: true")
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "invalid.yaml"

@@ -5,17 +5,17 @@ from pathlib import Path
 
 import numpy as np
 
-from instatarget.controller import (
+from track360.controller import (
     DecisionGate,
     RecoveryPlanner,
     SphericalMotionEstimator,
     TrackControllerImpl,
     scoreMotionConsistency,
 )
-from instatarget.controller.state_model import TrackMode
-from instatarget.core.config import DecisionGateConfig, loadConfig
-from instatarget.core.protocols import FrameCommitted, MoreViewsRequired
-from instatarget.core.types import (
+from track360.controller.state_model import TrackMode
+from track360.core.config import DecisionGateConfig, loadConfig
+from track360.core.protocols import FrameCommitted, MoreViewsRequired
+from track360.core.types import (
     BBoxXYWH,
     BFoV,
     FrameIndex,
@@ -25,7 +25,7 @@ from instatarget.core.types import (
     SequenceId,
     TrackStatus,
 )
-from instatarget.geometry import SphericalGeometryImpl, makeSphericalPoint
+from track360.geometry import SphericalGeometryImpl, makeSphericalPoint
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -92,7 +92,7 @@ def _scoredCandidate(
 
 class ControllerV2Test(unittest.TestCase):
     def setUp(self) -> None:
-        self.config = loadConfig(ROOT / "configs" / "RGBonly.yaml")
+        self.config = loadConfig(ROOT / "configs" / "default.yaml")
         self.geometry = SphericalGeometryImpl(
             boundarySamplesPerEdge=self.config.geometry.boundarySamplesPerEdge
         )

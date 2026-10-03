@@ -2,7 +2,9 @@ import unittest
 
 import numpy as np
 
-from instatarget.core.types import (
+from track360.backends import ARTrackBackend, ARTrackPrediction, TrackerBackendImpl
+from track360.backends.artrack_model import ARTrackTemplate
+from track360.core.types import (
     BBoxXYWH,
     BFoV,
     LocalView,
@@ -11,8 +13,6 @@ from instatarget.core.types import (
     TemplateCommandKind,
     ViewSpec,
 )
-from instatarget.tracker import ARTrackBackend, ARTrackPrediction, TrackerBackendImpl
-from instatarget.tracker.artrack_model import ARTrackTemplate
 
 
 class _FakeARTrackSession:

@@ -1,6 +1,6 @@
 import unittest
 
-from instatarget.core.protocols import FrameSource, ResultSink
+from track360.core.protocols import FrameSource, ResultSink
 
 
 class _FrameSourceImplementation:

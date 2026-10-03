@@ -2,15 +2,18 @@ import unittest
 
 import numpy as np
 
-from instatarget.core.types import BFoV, FrameIndex, FramePacket, SequenceId, ViewSpec
-from instatarget.geometry import SphericalGeometryImpl, makeSphericalPoint
-from instatarget.geometry.gpu_geometry import GpuGeometryImpl
+from track360.core.types import BFoV, FrameIndex, FramePacket, SequenceId, ViewSpec
+from track360.geometry import SphericalGeometryImpl, makeSphericalPoint
+from track360.geometry.gpu_geometry import GpuGeometryImpl
 
 
 class GpuGeometryTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        import torch
+        try:
+            import torch
+        except ImportError as error:
+            raise unittest.SkipTest(f"PyTorch is unavailable: {error}") from error
 
         if not torch.cuda.is_available():
             raise unittest.SkipTest("CUDA is required for GPU Geometry regression")

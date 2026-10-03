@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-from instatarget.core.config import VisualizationConfig
-from instatarget.core.types import (
+from track360.core.config import VisualizationConfig
+from track360.core.types import (
     BBoxXYWH,
     BFoV,
     FrameIndex,
@@ -23,15 +23,17 @@ from instatarget.core.types import (
     SphericalPoint,
     ViewSpec,
 )
-from instatarget.visualization import (
+from track360.datasets.instance_ids import (
+    collectInstanceIdGroups,
+    formatInstanceIdDocument,
+    writeInstanceIdDocument,
+)
+from track360.visualization import (
     FLUORESCENT_GREEN_RGB,
     ResultVisualizationRecorder,
     TimeCounter,
     VisualizationRecorder,
-    collectInstanceIdGroups,
     drawBoxRgb,
-    formatInstanceIdDocument,
-    writeInstanceIdDocument,
 )
 
 
@@ -49,7 +51,7 @@ class VisualizationRecorderTest(unittest.TestCase):
 
             self.assertEqual(written, output)
             payload = json.loads(output.read_text(encoding="utf-8"))
-            self.assertEqual(payload["format"], "instatarget.time.v1")
+            self.assertEqual(payload["format"], "track360.time.v1")
             self.assertEqual(payload["scope"], "tracking_processing")
             self.assertGreater(payload["elapsedNanoseconds"], 0)
             self.assertGreater(payload["elapsedSeconds"], 0.0)
@@ -113,7 +115,7 @@ class VisualizationRecorderTest(unittest.TestCase):
             observation = _localObservation(BBoxXYWH(1.0, 1.0, 4.0, 3.0))
 
             with patch(
-                "instatarget.visualization.recorder.drawBoxRgb", wraps=drawBoxRgb
+                "track360.visualization.recorder.drawBoxRgb", wraps=drawBoxRgb
             ) as draw:
                 paths = recorder.recordBackendBoxes(frame, [view], [observation])
 
@@ -134,7 +136,7 @@ class VisualizationRecorderTest(unittest.TestCase):
             observation = _projectedObservation(BBoxXYWH(10.0, 2.0, 4.0, 3.0))
 
             with patch(
-                "instatarget.visualization.recorder.drawBoxRgb", wraps=drawBoxRgb
+                "track360.visualization.recorder.drawBoxRgb", wraps=drawBoxRgb
             ) as draw:
                 paths = recorder.recordGeometryBoxes(frame, [observation])
 
@@ -162,7 +164,7 @@ class VisualizationRecorderTest(unittest.TestCase):
             recorder = ResultVisualizationRecorder(Path(directory))
 
             with patch(
-                "instatarget.visualization.result.drawBoxRgb", wraps=drawBoxRgb
+                "track360.visualization.result.drawBoxRgb", wraps=drawBoxRgb
             ) as draw:
                 path = recorder.record(frame, result, stateScore=0.625, roundCount=2)
 
@@ -295,7 +297,7 @@ def _projectedObservation(bbox: BBoxXYWH) -> ProjectedObservation:
 
 
 def _trackResult(bbox: BBoxXYWH):
-    from instatarget.core.types import ResultSource, TrackResult, TrackStatus
+    from track360.core.types import ResultSource, TrackResult, TrackStatus
 
     return TrackResult(
         sequenceId=SequenceId("sequence/a"),
