@@ -146,9 +146,12 @@ class ARTrackBackend:
         rgbs: Sequence[NDArray[np.uint8]],
         templateFeatures: Sequence[object],
         imageFovs: Sequence[tuple[float, float]] | None = None,
+        priorBoxes: Sequence[BBoxXYWH] | None = None,
     ) -> tuple[ARTrackPrediction, ...]:
         self._requireOpen()
         images = tuple(rgbs)
+        if priorBoxes is not None and len(priorBoxes) != len(images):
+            raise ProtocolError("ARTrackV2 prior boxes must match the image batch")
         if imageFovs is not None and len(imageFovs) != len(images):
             raise ProtocolError("ARTrackV2 image FOV metadata must match the image batch")
         for rgb in images:
@@ -158,7 +161,13 @@ class ARTrackBackend:
         if not templateFeatures:
             raise ProtocolError("ARTrackV2 inference requires at least one template feature")
         try:
-            if imageFovs and callable(getattr(self._session, "inferBatchWithFovs", None)):
+            if priorBoxes is not None:
+                predictions = tuple(
+                    self._session.inferBatch(
+                        images, templateFeatures, imageFovs=imageFovs, priorBoxes=priorBoxes
+                    )
+                )
+            elif imageFovs and callable(getattr(self._session, "inferBatchWithFovs", None)):
                 predictions = tuple(
                     self._session.inferBatchWithFovs(images, templateFeatures, imageFovs)
                 )

@@ -123,6 +123,8 @@ class BackendTuningConfig:
     viewHorizontalFovCapRad: float | None = pi / 2.0
     viewVerticalFovCapRad: float | None = pi / 2.0
     fullViewSearch: bool = False
+    alignedSearch: bool = False
+    alignedMinFovRad: float = pi / 90.0
     useMotionScore: bool = False
     templateFovScale: float = 2.5
     onlineTemplate: bool = True
@@ -133,6 +135,7 @@ class BackendTuningConfig:
         for name in (
             "acceptAnyCandidate",
             "fullViewSearch",
+            "alignedSearch",
             "useMotionScore",
             "onlineTemplate",
             "holdWeakBox",
@@ -143,6 +146,12 @@ class BackendTuningConfig:
             value = getattr(self, name)
             if value is not None and not 0.0 < value < pi:
                 raise ConfigError(f"backendTuning.{name} must be in (0, pi)")
+        if self.alignedSearch and self.fullViewSearch:
+            raise ConfigError(
+                "backendTuning.alignedSearch and fullViewSearch cannot both be enabled"
+            )
+        if not 0.0 < self.alignedMinFovRad < pi:
+            raise ConfigError("backendTuning.alignedMinFovDeg must be in (0, 180)")
         if not isfinite(self.templateFovScale) or self.templateFovScale < 1.0:
             raise ConfigError("backendTuning.templateFovScale must be at least 1")
         _requireProbability("backendTuning.templateMinConfidence", self.templateMinConfidence)
@@ -278,6 +287,8 @@ def loadConfig(path: str | Path) -> AppConfig:
             "viewHorizontalFovCapDeg",
             "viewVerticalFovCapDeg",
             "fullViewSearch",
+            "alignedSearch",
+            "alignedMinFovDeg",
             "useMotionScore",
             "templateFovScale",
             "onlineTemplate",
@@ -385,6 +396,13 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
             fullViewSearch=_requireBool(
                 "backendTuning.fullViewSearch", tuningRaw["fullViewSearch"]
+            ),
+            alignedSearch=_requireBool(
+                "backendTuning.alignedSearch", tuningRaw["alignedSearch"]
+            ),
+            alignedMinFovRad=_degreesToRadians(
+                "backendTuning.alignedMinFovDeg",
+                _requireFloat("backendTuning.alignedMinFovDeg", tuningRaw["alignedMinFovDeg"]),
             ),
             useMotionScore=_requireBool(
                 "backendTuning.useMotionScore", tuningRaw["useMotionScore"]

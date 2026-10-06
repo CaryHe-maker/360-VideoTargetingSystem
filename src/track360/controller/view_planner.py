@@ -1,14 +1,17 @@
-"""Plan the single perspective search view of a frame."""
+"""Plan the template view and the single perspective search view of a frame."""
 
 from __future__ import annotations
 
-from math import pi
+from math import atan, pi, sqrt, tan
 
 from track360.core.config import BackendTuningConfig, GeometryConfig, TrackingConfig
 from track360.core.types import BBoxXYWH, BFoV, SphericalPoint, ViewSpec
 
 # The search view spans this many times the predicted target extent on each axis.
 SEARCH_FOV_SCALE = 3.0
+# With ``alignedSearch`` the view is this many times the mean target size: the search
+# factor the tracker was trained with, which is also the crop the backend takes.
+ALIGNED_SEARCH_FACTOR = 4.0
 SEARCH_VIEW_ID = 0
 
 
@@ -32,6 +35,34 @@ class ViewPlanner:
         verticalSizeRad: float,
     ) -> ViewSpec:
         """Return the search view for a target of the given predicted angular size."""
+        if self._tuning.alignedSearch:
+            # A square view with isotropic pixels whose side is
+            # ``ALIGNED_SEARCH_FACTOR`` times the geometric-mean target size, as in
+            # the tracker's training crops.
+            fov = _squareFov(horizontalSizeRad, verticalSizeRad, ALIGNED_SEARCH_FACTOR)
+            fov = min(self._geometry.maxFovRad, max(self._tuning.alignedMinFovRad, fov))
+            for cap in (self._tuning.viewHorizontalFovCapRad, self._tuning.viewVerticalFovCapRad):
+                if cap is not None:
+                    fov = min(fov, cap)
+            # The backend crops its search region around this box.  With an unclamped
+            # FOV that crop is the whole view; when the FOV limit cut the view short
+            # (large targets) the crop extends past the view and is padded, so the
+            # target still fills the usual share of the search region.
+            scale = (1.0 - 1e-9) / tan(fov / 2.0)
+            widthPx = self._geometry.viewWidthPx * tan(horizontalSizeRad / 2.0) * scale
+            heightPx = self._geometry.viewHeightPx * tan(verticalSizeRad / 2.0) * scale
+            return ViewSpec(
+                viewId=SEARCH_VIEW_ID,
+                bfov=BFoV(center=center, horizontalFovRad=fov, verticalFovRad=fov),
+                outputWidthPx=self._geometry.viewWidthPx,
+                outputHeightPx=self._geometry.viewHeightPx,
+                priorBox=BBoxXYWH(
+                    xPx=(self._geometry.viewWidthPx - widthPx) / 2.0,
+                    yPx=(self._geometry.viewHeightPx - heightPx) / 2.0,
+                    widthPx=widthPx,
+                    heightPx=heightPx,
+                ),
+            )
         horizontalFov = clampFov(SEARCH_FOV_SCALE * horizontalSizeRad, self._geometry)
         verticalFov = clampFov(SEARCH_FOV_SCALE * verticalSizeRad, self._geometry)
         if self._tuning.viewHorizontalFovCapRad is not None:
@@ -43,6 +74,19 @@ class ViewPlanner:
             bfov=BFoV(center=center, horizontalFovRad=horizontalFov, verticalFovRad=verticalFov),
             outputWidthPx=self._geometry.viewWidthPx,
             outputHeightPx=self._geometry.viewHeightPx,
+        )
+
+    def templateBfov(self, target: BFoV) -> BFoV:
+        """Return the view the frame-0 template is cropped from."""
+        scale = self._tuning.templateFovScale
+        if self._tuning.alignedSearch:
+            fov = _squareFov(target.horizontalFovRad, target.verticalFovRad, scale)
+            fov = min(self._geometry.maxFovRad, max(self._tuning.alignedMinFovRad, fov))
+            return BFoV(center=target.center, horizontalFovRad=fov, verticalFovRad=fov)
+        return BFoV(
+            center=target.center,
+            horizontalFovRad=clampFov(scale * target.horizontalFovRad, self._geometry),
+            verticalFovRad=clampFov(scale * target.verticalFovRad, self._geometry),
         )
 
     def contextBfov(
@@ -66,6 +110,13 @@ class ViewPlanner:
             horizontalFovRad=clampFov(horizontalFov, self._geometry),
             verticalFovRad=clampFov(verticalFov, self._geometry),
         )
+
+
+def _squareFov(horizontalSizeRad: float, verticalSizeRad: float, factor: float) -> float:
+    """FOV of a square view ``factor`` times the target's mean size on the image plane."""
+    halfWidth = tan(min(horizontalSizeRad, pi - 1e-6) / 2.0)
+    halfHeight = tan(min(verticalSizeRad, pi - 1e-6) / 2.0)
+    return 2.0 * atan(factor * sqrt(halfWidth * halfHeight))
 
 
 def clampFov(value: float, geometry: GeometryConfig) -> float:

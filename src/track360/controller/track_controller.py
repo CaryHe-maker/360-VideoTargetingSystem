@@ -16,7 +16,7 @@ from track360.controller.state_model import (
     TransitionDecision,
 )
 from track360.controller.template_policy import TemplateDecision, TemplatePolicy
-from track360.controller.view_planner import ViewPlanner, clampFov
+from track360.controller.view_planner import ViewPlanner
 from track360.core.config import (
     AppConfig,
     BackendTuningConfig,
@@ -167,18 +167,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         else:
             assert initialBox is not None
             objectBfov = self._geometry.bboxToBfov(initialBox, frameWidthPx, frameHeightPx)
-        templateScale = self._backendTuning.templateFovScale
-        templateBfov = BFoV(
-            center=objectBfov.center,
-            horizontalFovRad=clampFov(
-                templateScale * objectBfov.horizontalFovRad,
-                self._geometryConfig,
-            ),
-            verticalFovRad=clampFov(
-                templateScale * objectBfov.verticalFovRad,
-                self._geometryConfig,
-            ),
-        )
+        templateBfov = self._planner.templateBfov(objectBfov)
         plan = InitializationPlan(
             sequenceId=frame.sequenceId,
             frameIndex=FrameIndex(0),

@@ -85,7 +85,22 @@ class TrackerBackendImpl(TrackerBackendProtocol):
         )
         inferenceStartedNs = perf_counter_ns()
         deviceViews = tuple(getattr(view, "deviceRgb", None) for view in views)
-        if all(item is not None for item in deviceViews):
+        priorBoxes = tuple(view.spec.priorBox for view in views)
+        if views and all(box is not None for box in priorBoxes):
+            if any(item is not None for item in deviceViews):
+                raise ProtocolError(
+                    "search priors are not supported with CUDA-resampled views"
+                )
+            predictions = self._artrackBackend.inferBatch(
+                tuple(view.rgb for view in views),
+                templateFeatures,
+                tuple(
+                    (view.spec.bfov.horizontalFovRad, view.spec.bfov.verticalFovRad)
+                    for view in views
+                ),
+                priorBoxes=priorBoxes,
+            )
+        elif all(item is not None for item in deviceViews):
             predictions = self._artrackBackend.inferDeviceBatch(
                 tuple(deviceViews),
                 tuple((view.spec.outputWidthPx, view.spec.outputHeightPx) for view in views),

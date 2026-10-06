@@ -33,6 +33,8 @@ backendTuning:
   viewHorizontalFovCapDeg: 90.0
   viewVerticalFovCapDeg: 90.0
   fullViewSearch: false
+  alignedSearch: false
+  alignedMinFovDeg: 2.0
   useMotionScore: false
   templateFovScale: 2.5
   onlineTemplate: true

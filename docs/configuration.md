@@ -31,6 +31,8 @@ ARTrackV2 的原始分数集中在 0.5 附近，不是校准过的概率，所�
 | `acceptAnyCandidate` | `true` | 只要这一帧有框就作为测量接受；为 `false` 时分数低于 `candidateMinScore` 的框不被接受 |
 | `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg` | `90.0` | 搜索视图的视场上限；`null` 表示只受 `geometry.maxFovDeg` 限制 |
 | `fullViewSearch` | `false` | 把整个局部视图缩放后作为搜索区域，跳过 ARTrackV2 自己的 4 倍搜索裁剪 |
+| `alignedSearch` | `false` | 实验开关：让搜索区域和 ARTrackV2 的训练裁剪对齐，见 [Controller](modules/controller.md#对齐的搜索区域实验)。不能和 `fullViewSearch` 同时打开，也不支持 `geometry.resampler: cuda` |
+| `alignedMinFovDeg` | `2.0` | `alignedSearch` 下视图视场的下限，代替 `geometry.minFovDeg` |
 | `useMotionScore` | `false` | 用“外观 + 运动”加权得到 SingleScore；为 `false` 时只用外观分。没有校准产物时运动权重为 0，此开关不影响结果 |
 | `templateFovScale` | `2.5` | 模板视图视场相对目标角尺寸的倍数（≥ 1） |
 | `onlineTemplate` | `true` | 保留第 0 帧 anchor 的同时允许更新 recent / stable 模板 |

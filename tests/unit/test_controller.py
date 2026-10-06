@@ -15,7 +15,7 @@ from track360.controller import (
 )
 from track360.controller.state_model import ScoreGroup, TransitionReason
 from track360.core.config import loadConfig
-from track360.core.errors import ProtocolError
+from track360.core.errors import ConfigError, ProtocolError
 from track360.core.types import (
     BBoxXYWH,
     BFoV,
@@ -222,6 +222,53 @@ class ViewPlannerTest(unittest.TestCase):
         self.assertAlmostEqual(large.bfov.horizontalFovRad, math.radians(90.0))
         self.assertAlmostEqual(large.bfov.verticalFovRad, math.radians(90.0))
         self.assertAlmostEqual(uncapped.bfov.horizontalFovRad, self.config.geometry.maxFovRad)
+
+
+    def testAlignedViewIsSquareAndFourTimesTheMeanTargetSize(self) -> None:
+        planner = self._planner(alignedSearch=True)
+        view = planner.searchView(self.center, math.radians(12.0), math.radians(3.0))
+
+        # On the image plane the target spans tan(6 deg) x tan(1.5 deg) half-extents.
+        meanHalfSize = math.sqrt(math.tan(math.radians(6.0)) * math.tan(math.radians(1.5)))
+        self.assertEqual(view.bfov.horizontalFovRad, view.bfov.verticalFovRad)
+        self.assertAlmostEqual(math.tan(view.bfov.horizontalFovRad / 2.0), 4.0 * meanHalfSize)
+        self.assertEqual(view.bfov.center, self.center)
+        # The prior keeps the target's aspect and makes the backend's 4x crop the view.
+        prior = view.priorBox
+        assert prior is not None
+        self.assertAlmostEqual(4.0 * math.sqrt(prior.widthPx * prior.heightPx), 256.0, places=5)
+        self.assertLessEqual(math.ceil(4.0 * math.sqrt(prior.widthPx * prior.heightPx)), 256)
+        self.assertAlmostEqual(prior.xPx + prior.widthPx / 2.0, 128.0)
+        self.assertGreater(prior.widthPx / prior.heightPx, 3.9)
+        self.assertIsNone(self._planner().searchView(self.center, 0.2, 0.1).priorBox)
+
+    def testAlignedViewFollowsSmallTargetsBelowTheGeometryMinimum(self) -> None:
+        planner = self._planner(alignedSearch=True)
+        small = planner.searchView(self.center, math.radians(2.0), math.radians(2.0))
+        tiny = planner.searchView(self.center, math.radians(0.2), math.radians(0.2))
+        large = planner.searchView(self.center, math.radians(60.0), math.radians(60.0))
+
+        self.assertAlmostEqual(math.degrees(small.bfov.horizontalFovRad), 8.0, places=1)
+        self.assertLess(small.bfov.horizontalFovRad, self.config.geometry.minFovRad)
+        self.assertAlmostEqual(math.degrees(tiny.bfov.horizontalFovRad), 2.0)
+        self.assertAlmostEqual(math.degrees(large.bfov.horizontalFovRad), 90.0)
+        # The FOV limit cut the view short: the backend's 4x crop pads past the view.
+        assert large.priorBox is not None
+        self.assertGreater(4.0 * large.priorBox.widthPx, 256.0)
+
+    def testAlignedTemplateViewIsSquareSoTheTargetKeepsItsAspect(self) -> None:
+        target = BFoV(self.center, math.radians(12.0), math.radians(3.0))
+        legacy = self._planner().templateBfov(target)
+        aligned = self._planner(alignedSearch=True).templateBfov(target)
+
+        self.assertAlmostEqual(legacy.horizontalFovRad, math.radians(30.0))
+        self.assertAlmostEqual(legacy.verticalFovRad, self.config.geometry.minFovRad)
+        self.assertEqual(aligned.horizontalFovRad, aligned.verticalFovRad)
+        self.assertEqual(aligned.center, target.center)
+
+    def testAlignedSearchExcludesFullViewSearch(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "cannot both be enabled"):
+            replace(self.config.backendTuning, alignedSearch=True, fullViewSearch=True)
 
 
 class ControllerTest(unittest.TestCase):

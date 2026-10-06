@@ -30,7 +30,7 @@ from track360.controller import (
     scoreViewCenterMotion,
 )
 from track360.core.config import AppConfig, ModelConfig
-from track360.core.errors import DecodeError, GeometryError
+from track360.core.errors import ConfigError, DecodeError, GeometryError
 from track360.core.protocols import FrameSource as FrameSourceProtocol
 from track360.core.protocols import ResultSink as ResultSinkProtocol
 from track360.core.protocols import SphericalGeometry, TrackerBackend
@@ -157,6 +157,10 @@ def buildRuntime(
 ) -> RuntimeBundle:
     tuning = config.backendTuning
     seedEverything(config.reproducibility)
+    if tuning.alignedSearch and config.geometry.resampler == "cuda":
+        raise ConfigError(
+            "backendTuning.alignedSearch is not implemented for geometry.resampler: cuda"
+        )
     if geometryFactory is not None:
         geometry = geometryFactory(config.geometry.boundarySamplesPerEdge)
     elif config.geometry.resampler == "cuda":

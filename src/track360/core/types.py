@@ -253,6 +253,9 @@ class ViewSpec:
     bfov: BFoV
     outputWidthPx: int
     outputHeightPx: int
+    # Where the target is expected in this view, in view pixels.  When set, the
+    # backend centers its search crop on it instead of deriving one from the template.
+    priorBox: BBoxXYWH | None = None
 
     def __post_init__(self) -> None:
         if self.viewId < 0:
