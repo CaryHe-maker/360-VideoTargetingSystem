@@ -4,6 +4,14 @@
 
 ## [未发布]
 
+### 评测：丢失率、置信区间、硬回归序列
+
+#### 新增
+
+- 丢失率 `evaluation/loss_rate.py`：IoU < 0.1 连续至少 5 帧算丢失，丢失率 = 丢失帧数之和 ÷ 总帧数之和。`tools/benchmark.py eval` 的 BBox 表多一列 `loss_rate`，`scores.json` 里每条序列多了 `frames`、`lostFrames`、`firstLostFrame`。
+- 按序列 bootstrap 的置信区间 `evaluation/bootstrap.py`，以及 `tools/benchmark.py compare`：比较两次运行，给出 S<sub>dual</sub>、P<sub>angle</sub>、丢失率的差和 95% 区间。
+- 硬回归序列 `configs/splits/360vos_tune_hard.txt`（081、107、131、156、160）和 `compare --hard-file`：任何一条的 S<sub>dual</sub> 下降超过 0.02 时命令以退出码 1 结束。
+
 ### 改为单视图跟踪
 
 tune 集上多视图方案的 S<sub>dual</sub> 只有 0.065，单视图是 0.271，延迟还是单视图的 3.5 倍（评测记录 E001）。因此删除多视图，改为和 360VOT 论文的 360 跟踪框架相同的做法：每帧一个透视视图、一次前向、一次提交。

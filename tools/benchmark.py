@@ -2,9 +2,13 @@
 
     python tools/benchmark.py run  --dataset-root <dir> --output-root <dir> --method ours
     python tools/benchmark.py eval --dataset-root <dir> --output-root <dir>
+    python tools/benchmark.py compare --dataset-root <dir> \\
+        --baseline <output-root>:<method> --candidate <output-root>:<method>
 
 ``run`` writes result files in the layout the official toolkit evaluates and resumes
 an interrupted run.  ``eval`` scores every method found under the output root.
+``compare`` gives the difference between two runs with bootstrap confidence intervals
+and, with ``--hard-file``, fails when a hard-regression sequence got worse.
 
 The tune set lives in the 360VOS training archives, which carry no labels of their
 own; pass ``--label-root`` (see ``tools/prepare_tune_set.py``) and
@@ -23,6 +27,13 @@ from track360.core.config import loadConfig
 from track360.core.errors import Track360Error
 from track360.datasets.tune_split import readSequenceFile
 from track360.datasets.vots_info import loadVotsInfo
+from track360.evaluation.comparison import (
+    HARD_REGRESSION_TOLERANCE,
+    Comparison,
+    SequenceChange,
+    compareScores,
+    hardRegressions,
+)
 from track360.evaluation.vot360_metrics import Vot360Scores
 from track360.runtime.benchmark import METHODS, evaluateResults, runBenchmark
 
@@ -74,6 +85,22 @@ def buildParser() -> argparse.ArgumentParser:
         action="store_true",
         help="score result files shorter than their sequence (smoke runs only)",
     )
+
+    compare = commands.add_parser(
+        "compare", help="difference between two runs with bootstrap confidence intervals"
+    )
+    _addCommon(compare, outputRoot=False)
+    compare.add_argument("--baseline", required=True, help="<output-root>:<method>")
+    compare.add_argument("--candidate", required=True, help="<output-root>:<method>")
+    compare.add_argument(
+        "--hard-file",
+        type=Path,
+        default=None,
+        help="hard-regression sequences; exit 1 when one drops by more than "
+        f"{HARD_REGRESSION_TOLERANCE} S_dual",
+    )
+    compare.add_argument("--samples", type=int, default=10_000, help="bootstrap resamples")
+    compare.add_argument("--json", type=Path, default=None, help="also write the result as JSON")
     return parser
 
 
@@ -95,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
                 shard=_parseShard(args.shard),
             )
             return 1 if summary.failures else 0
+        if args.command == "compare":
+            return _compare(args, sequences)
 
         def score(only: list[str] | None) -> dict[str, dict[str, Vot360Scores]]:
             return evaluateResults(
@@ -134,7 +163,7 @@ def formatScores(scores: dict[str, dict[str, Vot360Scores]]) -> str:
     """Render the two tables the official toolkit prints, best success first."""
     lines: list[str] = []
     layouts = (
-        ("bbox", "BBox", ("S_dual", "P_dual", "norm_P_dual", "P_angle")),
+        ("bbox", "BBox", ("S_dual", "P_dual", "norm_P_dual", "P_angle", "loss_rate")),
         ("bfov", "BFoV", ("S_sphere", "P_angle")),
     )
     for kind, title, columns in layouts:
@@ -173,11 +202,129 @@ def formatAttributeScores(byAttribute: dict[str, dict[str, dict[str, Vot360Score
     return "\n".join(lines)
 
 
-def _addCommon(parser: argparse.ArgumentParser) -> None:
+def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
+    hard = None if args.hard_file is None else readSequenceFile(args.hard_file)
+    scores = []
+    for reference in (args.baseline, args.candidate):
+        root, method = _parseRun(reference)
+        scores.append(
+            evaluateResults(
+                datasetRoot=args.dataset_root,
+                outputRoot=root,
+                labelRoot=args.label_root,
+                methods=[method],
+                only=sequences,
+            )[method]["bbox"]
+        )
+    comparison = compareScores(scores[0], scores[1], samples=args.samples)
+    failed = () if hard is None else hardRegressions(comparison, hard)
+    print(formatComparison(comparison, args.baseline, args.candidate))
+    if hard is not None:
+        print()
+        print(formatHardRegressions(comparison, hard, failed))
+    if args.json is not None:
+        args.json.parent.mkdir(parents=True, exist_ok=True)
+        args.json.write_text(
+            json.dumps(_comparisonPayload(comparison, args, failed), indent=2) + "\n",
+            encoding="utf-8",
+        )
+    return 1 if failed else 0
+
+
+def formatComparison(comparison: Comparison, baseline: str, candidate: str) -> str:
+    """Scores of both runs and their difference, each with a 95% bootstrap interval."""
+    lines = [
+        f"baseline:  {baseline}",
+        f"candidate: {candidate}",
+        f"sequences: {len(comparison.sequences)} (those both runs have results for)",
+        "",
+        f"  {'metric':<10}{'baseline':>24}{'candidate':>24}{'difference':>26}",
+    ]
+    for metric in comparison.metrics:
+        verdict = "" if metric.difference.excludesZero else "  (interval includes 0)"
+        lines.append(
+            f"  {metric.name:<10}"
+            f"{_interval(metric.baseline):>24}"
+            f"{_interval(metric.candidate):>24}"
+            f"{_interval(metric.difference, signed=True):>26}{verdict}"
+        )
+    up = sum(change.difference > HARD_REGRESSION_TOLERANCE for change in comparison.changes)
+    down = sum(change.difference < -HARD_REGRESSION_TOLERANCE for change in comparison.changes)
+    lines += ["", f"S_dual per sequence: {up} up, {down} down (by more than 0.02)"]
+    lines += [_changeLine(change) for change in comparison.changes[:5]]
+    if len(comparison.changes) > 10:
+        lines.append("    ...")
+    lines += [_changeLine(change) for change in comparison.changes[5:][-5:]]
+    return "\n".join(lines)
+
+
+def formatHardRegressions(
+    comparison: Comparison, hard: list[str], failed: tuple[SequenceChange, ...]
+) -> str:
+    byName = {change.sequence: change for change in comparison.changes}
+    failedNames = {change.sequence for change in failed}
+    lines = [f"hard-regression sequences (fail: S_dual drops by over {HARD_REGRESSION_TOLERANCE})"]
+    for name in hard:
+        status = "FAIL" if name in failedNames else "ok"
+        lines.append(f"{_changeLine(byName[name])}  {status}")
+    lines.append("result: " + (f"FAILED ({len(failed)} of {len(hard)})" if failed else "passed"))
+    return "\n".join(lines)
+
+
+def _interval(interval, *, signed: bool = False) -> str:
+    sign = "+" if signed else ""
+    return f"{interval.value:{sign}.3f} [{interval.low:{sign}.3f}, {interval.high:{sign}.3f}]"
+
+
+def _changeLine(change: SequenceChange) -> str:
+    return (
+        f"    {change.sequence:<8}{change.baseline:.3f} -> {change.candidate:.3f}"
+        f"  ({change.difference:+.3f})"
+    )
+
+
+def _comparisonPayload(
+    comparison: Comparison, args: argparse.Namespace, failed: tuple[SequenceChange, ...]
+) -> dict[str, object]:
+    return {
+        "baseline": args.baseline,
+        "candidate": args.candidate,
+        "sequences": list(comparison.sequences),
+        "bootstrapSamples": args.samples,
+        "metrics": {
+            metric.name: {
+                part: {"value": item.value, "low": item.low, "high": item.high}
+                for part, item in (
+                    ("baseline", metric.baseline),
+                    ("candidate", metric.candidate),
+                    ("difference", metric.difference),
+                )
+            }
+            for metric in comparison.metrics
+        },
+        "perSequence": {
+            change.sequence: {"baseline": change.baseline, "candidate": change.candidate}
+            for change in comparison.changes
+        },
+        "hardRegressionFailures": [change.sequence for change in failed],
+    }
+
+
+def _parseRun(reference: str) -> tuple[str, str]:
+    root, separator, method = reference.rpartition(":")
+    if not separator or not root or not method:
+        raise ValueError(f"expected <output-root>:<method>, got '{reference}'")
+    return root, method
+
+
+def _addCommon(parser: argparse.ArgumentParser, *, outputRoot: bool = True) -> None:
     parser.add_argument(
         "--dataset-root", required=True, help="directory of sequence folders or zips"
     )
-    parser.add_argument("--output-root", required=True, help="where bbox/, bfov/, reports/ live")
+    if outputRoot:
+        parser.add_argument(
+            "--output-root", required=True, help="where bbox/, bfov/, reports/ live"
+        )
     parser.add_argument(
         "--label-root", default=None, help="labels for sequences shipped without label.json"
     )
@@ -236,6 +383,9 @@ def _scorePayload(scores: Vot360Scores) -> dict[str, object]:
                 "precision": item.precision,
                 "normPrecision": item.normPrecision,
                 "anglePrecision": item.anglePrecision,
+                "frames": item.frames,
+                "lostFrames": item.lostFrames,
+                "firstLostFrame": item.firstLostFrame,
             }
             for name, item in scores.perSequence.items()
         },

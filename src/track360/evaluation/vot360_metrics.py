@@ -8,6 +8,9 @@ toolkit's ``show_result`` prints:
   normalized P_dual and P_angle (centers within 3 degrees);
 * ``bfov`` / ``rbfov`` results give S_sphere (spherical IoU AUC) and P_angle.
 
+``bbox`` results also get this project's loss rate (``evaluation/loss_rate.py``), which
+is not a toolkit metric.
+
 Toolkit behavior worth knowing when reading a score:
 
 * frames where the target is absent stay in the denominator, so they always count
@@ -27,6 +30,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from track360.core.errors import DecodeError, ProtocolError
+from track360.evaluation.loss_rate import sequenceLoss
 from track360.io.vot360_results import readResultFile
 from track360.third_party.vot360_toolkit import ope_benchmark as toolkit
 
@@ -43,6 +47,9 @@ class Vot360SequenceScore:
     anglePrecision: float
     precision: float | None = None
     normPrecision: float | None = None
+    frames: int = 0
+    lostFrames: int | None = None
+    firstLostFrame: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +66,7 @@ class Vot360Scores:
     perSequence: dict[str, Vot360SequenceScore]
     successCurve: NDArray[np.float64]
     anglePrecisionCurve: NDArray[np.float64]
+    lossRate: float | None = None
 
     @property
     def successName(self) -> str:
@@ -73,6 +81,7 @@ class Vot360Scores:
             "P_dual": self.precision,
             "norm_P_dual": self.normPrecision,
             "P_angle": self.anglePrecision,
+            "loss_rate": self.lossRate,
         }
 
 
@@ -131,6 +140,14 @@ def evaluateVot360(
         precision = toolkit.eval_precision(gt, tracker, wrapped)[tracker]
         normPrecision = toolkit.eval_norm_precision(gt, tracker, wrapped)[tracker]
 
+    losses = (
+        {}
+        if spherical
+        else {
+            name: sequenceLoss(groundTruth[name][0], groundTruth[name][1], rows, frameWidthPx)
+            for name, rows in results.items()
+        }
+    )
     angleIndex = int(round(ANGLE_THRESHOLD_DEG * 10))
     perSequence = {
         name: Vot360SequenceScore(
@@ -140,6 +157,9 @@ def evaluateVot360(
                 None if precision is None else float(precision[name][PRECISION_THRESHOLD_PX])
             ),
             normPrecision=None if normPrecision is None else float(np.mean(normPrecision[name])),
+            frames=len(results[name]),
+            lostFrames=losses[name].lostFrames if name in losses else None,
+            firstLostFrame=losses[name].firstLostFrame if name in losses else None,
         )
         for name in results
     }
@@ -162,6 +182,12 @@ def evaluateVot360(
         perSequence=perSequence,
         successCurve=successCurve,
         anglePrecisionCurve=angleCurve,
+        lossRate=(
+            None
+            if spherical
+            else sum(item.lostFrames for item in losses.values())
+            / max(1, sum(item.frames for item in losses.values()))
+        ),
     )
 
 

@@ -1,0 +1,11 @@
+# Hard-regression sequences: a subset of the tune set every change runs first.
+# A change that lowers S_dual on any of them by more than 0.02 stops there
+# (tools/benchmark.py compare --hard-file).
+# Chosen from evaluation record E002: sequences the single-view tracker follows
+# today and that a search-region change broke, plus the best-tracked sequence.
+# <id>  # frames, target, why
+081  # 432, kart, E002: 0.389 -> 0.076
+107  # 367, people/bike, E002: 0.238 -> 0.080
+131  # 314, people/moto, E002: 0.376 -> 0.163
+156  # 981, skiing, best-tracked sequence of the baseline (0.754)
+160  # 400, skydiver, E002: 0.495 -> 0.094

@@ -79,8 +79,9 @@ python scripts/eval_360VOT.py -d <dataset_dir> -b <results>/bbox -f <results>/bf
 2. **一致性**：同一份结果文件分别跑官方脚本和本项目的评测代码，结果必须一致。已验证：24 条序列、两组人为加噪的结果、BBox 和 BFoV 两种表示，官方脚本打印的 12 个数字与本项目全部相同（官方只打印三位小数）。
 3. **不在测试集上调参**：所有参数和开关在 tune 集上确定，测试集只跑最终配置。tune 集是 360VOS 训练集中排除了与测试集重叠的序列后选出的 25 条，见 [Datasets](modules/datasets.md#360vos-训练集与-tune-集)。
 4. **效率**：固定 GPU（RTX 4060 Laptop），注明驱动和 CUDA 版本，报告 FPS、P50 / P95 延迟、每帧前向次数和峰值显存。批量运行工具记录的是端到端的墙钟时间（两帧结果提交之间的间隔，含解码）；分阶段的 CUDA 计时在 Phase 5 做。
-5. **分层分析**：按 360VOT 的挑战属性（快速运动、跨缝、极点区域、小目标、遮挡等）分别报告。
-6. **可复现**：结果目录中保存 git commit、配置哈希、硬件和依赖版本。
+5. **丢失率和置信区间**：每条记录都报告丢失率（IoU < 0.1 连续至少 5 帧）；两个方法的差要给出按序列 bootstrap 的 95% 区间，区间包含 0 的差不作为结论。定义见 [Evaluation](modules/evaluation.md#丢失率360vot)。
+6. **分层分析**：按 360VOT 的挑战属性（快速运动、跨缝、极点区域、小目标、遮挡等）分别报告。
+7. **可复现**：结果目录中保存 git commit、配置哈希、硬件和依赖版本。
 
 ## 复现命令
 
@@ -110,6 +111,28 @@ outputs/360vot/bbox/<方法>/0001.txt      x1,y1,w,h
 outputs/360vot/bfov/<方法>/0001.txt      clon,clat,fov_h,fov_v,rotation
 outputs/360vot/reports/<方法>/run.json   方法、生效的配置、配置哈希、git commit、环境
 outputs/360vot/reports/<方法>/0001.json  帧数、FPS、P50 / P95 延迟、无效帧数
+```
+
+### 比较两次运行
+
+`compare` 比较两次运行的 BBox 结果，输出 S<sub>dual</sub>、P<sub>angle</sub>、丢失率各自的值、差值和 95% 置信区间，以及变化最大的序列。两次运行各用 `<输出目录>:<方法>` 指定，可以在不同的输出目录里：
+
+```bash
+python tools/benchmark.py compare --dataset-root <train> --label-root <labels/train> \
+    --baseline outputs/tune:ours --candidate outputs/tune_exp/E00x:ours
+```
+
+加 `--hard-file` 时还会逐条检查硬回归序列，有任何一条的 S<sub>dual</sub> 下降超过 0.02，命令以退出码 1 结束。一个改动的标准流程是先只跑硬回归序列，通过了再跑整个 tune 集：
+
+```bash
+# 1. 只跑 5 条硬回归序列（约 3 分钟）
+python tools/benchmark.py run --dataset-root <train> --label-root <labels/train> \
+    --sequence-file configs/splits/360vos_tune_hard.txt \
+    --output-root outputs/tune_exp/E00x --method ours --config <新配置>
+python tools/benchmark.py compare --dataset-root <train> --label-root <labels/train> \
+    --baseline outputs/tune:ours --candidate outputs/tune_exp/E00x:ours \
+    --hard-file configs/splits/360vos_tune_hard.txt
+# 2. 通过后跑整个 tune 集（断点续跑会跳过已完成的 5 条），再比较一次
 ```
 
 ### 在 tune 集上运行
