@@ -28,13 +28,12 @@ Core 定义所有模块共享的值对象、协议、配置和异常，本身不
 | `LocalBoxProjection` | 局部框四条边一次回投得到的 BFoV、ERP 框、边界点和包络膨胀比 |
 | `ProjectedObservation` | 回投结果 + 外观概率、运动分、`singleScore` 和投影质量诊断 |
 
-不同 `LocalView` 的相机中心不同，局部像素坐标之间没有可比性，所以候选之间的比较必须在 `ProjectedObservation`（球面 / ERP 坐标）上进行。
+每一帧的 `LocalView` 相机中心都不同，局部像素坐标不能跨帧比较，所以控制器只使用 `ProjectedObservation`（球面 / ERP 坐标）。
 
 ## 控制与结果类型
 
-- `SearchPlan`：绑定帧身份、状态 revision、事务 ID、轮次、视图列表、模板命令和运动预测；
-- `MoreViewsRequired` / `FrameCommitted`：控制器消费一轮观测后的两种结果，分别表示“进入下一轮”和“本帧已提交”；
-- `TrackResult`：对外结果，包含 ERP 框、BFoV、置信度、状态（`TRACKING` / `UNCERTAIN` / `LOST`）、`valid` 和结果来源。`valid=False` 时仍可能带有运动预测框，但这个框不会写入可靠的测量历史。
+- `SearchPlan`：绑定帧身份、状态 revision、这一帧的搜索视图、模板命令和运动预测；
+- `TrackResult`：对外结果，包含 ERP 框、BFoV、置信度、状态（`TRACKING` / `UNCERTAIN`；`LOST` 保留在类型里，目前不会出现）、`valid` 和结果来源。`valid=False` 时仍可能带有运动预测框，但这个框不会写入可靠的测量历史。
 
 ## 错误类型
 
@@ -46,7 +45,7 @@ Core 定义所有模块共享的值对象、协议、配置和异常，本身不
 | `DecodeError` | 视频 / 图像解码失败 |
 | `ModelError` | 权重加载或推理失败 |
 | `GeometryError` | 投影结果非有限值或越界 |
-| `ProtocolError` | 帧事务、revision 或数据形状不满足协议 |
+| `ProtocolError` | 逐帧协议、revision 或数据形状不满足约定 |
 | `OutputError` | 结果写入失败或帧数不一致 |
 
 ## 修改原则

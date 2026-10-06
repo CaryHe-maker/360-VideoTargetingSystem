@@ -4,10 +4,10 @@ Runtime 是组合根和执行器，本身不实现状态判定或模型算法。
 
 | 文件 | 职责 |
 |---|---|
-| `runtime/driver.py` | `buildRuntime()` 装配组件；`runTracking()` 逐帧多轮循环；`_PrefetchReader` 后台预取 |
+| `runtime/driver.py` | `buildRuntime()` 装配组件；`runTracking()` 逐帧循环；`_PrefetchReader` 后台预取 |
 | `runtime/track_video.py` | `track360 track`：视频 / 图像序列入口 |
 | `runtime/track_airsim360.py` | `track360 airsim360`：AirSim360 入口，负责生命周期和计时产物 |
-| `runtime/benchmark.py` | 360VOT 批量运行：按方法逐序列跟踪、断点续跑、写结果和运行报告；`tools/benchmark.py` 是它的命令行入口 |
+| `runtime/benchmark.py` | 360VOT 批量运行：按方法（`ours` / `b0`）逐序列跟踪、断点续跑、写结果和运行报告；`tools/benchmark.py` 是它的命令行入口 |
 | `cli.py` | 统一命令行，分发到上面两个入口和 `list-instances` |
 
 ## 组件装配
@@ -30,14 +30,12 @@ Runtime 是组合根和执行器，本身不实现状态判定或模型算法。
 第 0 帧：buildInitialization → 裁剪模板视图 → backend.initialize → commitInitialization → 写结果
 之后每帧：
   frame = 预取队列.read()
-  plan  = controller.beginFrame(frame)
-  循环：
-    views        = geometry.cropViews(frame, plan.views)
-    observations = backend.infer(views, plan.templateCommand)
-    projected    = 回投 + 外观校准 + 视图运动先验 + SingleScore
-    outcome      = controller.consume(plan, projected)
-    MoreViewsRequired → plan = outcome.plan，继续
-    FrameCommitted    → 写结果，结束本帧
+  plan        = controller.beginFrame(frame)
+  view        = geometry.cropViews(frame, [plan.view])[0]
+  observation = backend.infer((view,), plan.templateCommand)[0]
+  projected   = 回投 + 外观校准 + 视图运动先验 + SingleScore（回投失败时为 None）
+  result      = controller.consume(plan, projected)
+  写结果
 ```
 
 - `_PrefetchReader` 在后台线程中解码，队列保持输入顺序；解码线程出错时，异常会在主线程读到对应位置时重新抛出；

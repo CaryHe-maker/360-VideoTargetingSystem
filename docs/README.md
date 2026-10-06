@@ -3,7 +3,7 @@
 | 文档 | 内容 |
 |---|---|
 | [快速上手](getting-started.md) | 安装、模型权重、命令行用法、输出格式 |
-| [系统架构](architecture.md) | 数据流、包结构、帧事务协议、依赖规则 |
+| [系统架构](architecture.md) | 数据流、包结构、逐帧协议、依赖规则 |
 | [配置说明](configuration.md) | `configs/default.yaml` 各配置段的含义和约束 |
 | [Benchmark 数据集](benchmark.md) | 测试集选型、评测指标、对照基线 |
 | [V2 计划](V2Plan.md) | 到 V2.0 发布的分阶段路线图与按模块的优化建议 |
@@ -16,7 +16,7 @@
 |---|---|
 | [Core](modules/core.md) | 数据类型、协议、错误类型 |
 | [Geometry](modules/geometry.md) | 球面 / ERP / 透视投影、BFoV、跨缝处理、GPU 重采样 |
-| [Controller](modules/controller.md) | 视图规划、候选融合、运动预测、状态机 |
+| [Controller](modules/controller.md) | 视图规划、测量判定、运动预测、状态机 |
 | [Backends](modules/backends.md) | ARTrackV2 推理运行时与后端接入方式 |
 | [Runtime](modules/runtime.md) | 运行时装配、逐帧循环、预取、计时 |
 | [Datasets](modules/datasets.md) | 360VOT / AirSim360 读取、图像解码、标注的坐标约定 |

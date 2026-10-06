@@ -61,16 +61,16 @@ class ScoreCalibrationArtifactTest(unittest.TestCase):
                 self.artifact,
                 checkpointPath=self.checkpoint,
                 candidateMinScore=0.6,
-                fusionSourceMinConfidence=0.740642,
             )
 
-        with self.assertRaisesRegex(ConfigError, "fusionSourceMinConfidence does not match"):
-            loadScoreCalibration(
-                self.artifact,
-                checkpointPath=self.checkpoint,
-                candidateMinScore=0.597262,
-                fusionSourceMinConfidence=0.75,
-            )
+    def testRejectsArtifactsOfThePreviousFormat(self) -> None:
+        payload = copy.deepcopy(self.payload)
+        payload["format"] = "track360.score-calibration.v1"
+        payload["thresholds"]["fusionSourceMinConfidence"] = 0.740642
+        self._write(payload)
+
+        with self.assertRaises(ConfigError):
+            self._load()
 
     def _write(self, payload: dict[str, object]) -> None:
         self.artifact.write_text(json.dumps(payload), encoding="utf-8")
@@ -80,13 +80,12 @@ class ScoreCalibrationArtifactTest(unittest.TestCase):
             self.artifact,
             checkpointPath=self.checkpoint,
             candidateMinScore=0.597262,
-            fusionSourceMinConfidence=0.740642,
         )
 
 
 def _artifactPayload(checkpoint: Path) -> dict[str, object]:
     return {
-        "format": "track360.score-calibration.v1",
+        "format": "track360.score-calibration.v2",
         "checkpointSha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
         "manifestSha256": "1" * 64,
         "split": "calibration",
@@ -98,10 +97,7 @@ def _artifactPayload(checkpoint: Path) -> dict[str, object]:
             "intercept": 0.6623364310412592,
         },
         "singleScore": {"appearanceWeight": 0.5, "motionWeight": 0.5},
-        "thresholds": {
-            "candidateMinScore": 0.597262,
-            "fusionSourceMinConfidence": 0.740642,
-        },
+        "thresholds": {"candidateMinScore": 0.597262},
         "fit": {
             "sampleCount": 100,
             "positiveCount": 50,

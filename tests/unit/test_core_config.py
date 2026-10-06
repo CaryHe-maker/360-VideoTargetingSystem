@@ -15,16 +15,6 @@ class CoreConfigTest(unittest.TestCase):
         self.assertAlmostEqual(config.geometry.minFovRad, 0.3490658503988659)
         self.assertEqual(config.geometry.boundarySamplesPerEdge, 65)
         self.assertEqual(config.tracking.windowLength, 5)
-        self.assertTrue(config.tracking.sameFrameEscalationEnabled)
-        self.assertEqual(config.tracking.maxAttemptsPerFrame, 2)
-        self.assertEqual(config.tracking.maxViewsPerFrameTotal, 12)
-        self.assertEqual(config.tracking.reacquireCooldownFrames, 2)
-        self.assertAlmostEqual(config.evaluator.supportWeight, 0.25)
-        self.assertEqual(config.evaluator.minReacquireViews, 2)
-        self.assertAlmostEqual(config.evaluator.successRate, 0.90)
-        self.assertAlmostEqual(config.evaluator.overlapThreshold, 0.70)
-        self.assertAlmostEqual(config.evaluator.fusionSourceMinConfidence, 0.740642)
-        self.assertEqual(config.evaluator.fusionBoxMode, "best_source")
         self.assertEqual(config.motion.minSamplesForVelocity, 2)
         self.assertAlmostEqual(config.motion.processNoiseRadPerSec, 0.04)
         self.assertEqual(config.model.precision, "fp32")
@@ -37,10 +27,8 @@ class CoreConfigTest(unittest.TestCase):
         self.assertFalse(config.visualization.enabled)
         self.assertEqual(config.geometry.resampler, "cpu")
         self.assertTrue(config.backendTuning.acceptAnyCandidate)
-        self.assertAlmostEqual(
-            config.backendTuning.singleViewHorizontalFovCapRad, 1.5707963267948966
-        )
-        self.assertIsNone(config.backendTuning.fourViewFovCapRad)
+        self.assertAlmostEqual(config.backendTuning.viewHorizontalFovCapRad, 1.5707963267948966)
+        self.assertAlmostEqual(config.backendTuning.viewVerticalFovCapRad, 1.5707963267948966)
         self.assertEqual(config.reproducibility.seed, 0)
         self.assertTrue(config.reproducibility.deterministic)
         self.assertEqual(
@@ -75,15 +63,14 @@ class CoreConfigTest(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 loadConfig(path)
 
-    def testLoadConfigRejectsBudgetThatCannotFitCubeMap(self) -> None:
-        source = (REPOSITORY_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")
-        source = source.replace("maxViewsPerFrameTotal: 12", "maxViewsPerFrameTotal: 5")
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "invalid.yaml"
-            path.write_text(source, encoding="utf-8")
-            with self.assertRaises(ConfigError):
-                loadConfig(path)
+    def testLoadConfigRejectsRemovedMultiViewSettings(self) -> None:
+        for old, addition in (
+            ("motion:\n", "evaluator:\n  fusionBoxMode: best_source\n"),
+            ("backendTuning:\n", "recovery:\n  maxViewsPerFrame: 12\n"),
+            ("  windowLength: 5\n", "  maxAttemptsPerFrame: 2\n"),
+            ("  fullViewSearch: false\n", "  singleView: true\n"),
+        ):
+            self._assertRejected(old, addition + old)
 
     def testLoadConfigRejectsUnknownVisualizationStage(self) -> None:
         source = (REPOSITORY_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")
@@ -100,13 +87,12 @@ class CoreConfigTest(unittest.TestCase):
 
     def testLoadConfigRejectsRemovedSections(self) -> None:
         removed = "decisionGate:\n  motionScoreWeight: 0.25\n  scaleScoreWeight: 0.15\n"
-        self._assertRejected("evaluator:\n", removed + "evaluator:\n")
+        self._assertRejected("motion:\n", removed + "motion:\n")
 
     def testLoadConfigRejectsInvalidBackendTuning(self) -> None:
         self._assertRejected("  templateFovScale: 2.5", "  templateFovScale: 0.5")
-        self._assertRejected("  fourViewFovCapDeg: null", "  fourViewFovCapDeg: 10.0")
-        self._assertRejected("  fusionOverlap: 0.45", "  fusionOverlap: 1.5")
-        self._assertRejected("  fusionBoxMode: null", "  fusionBoxMode: union")
+        self._assertRejected("  viewHorizontalFovCapDeg: 90.0", "  viewHorizontalFovCapDeg: 200.0")
+        self._assertRejected("  templateMinConfidence: 0.515", "  templateMinConfidence: 1.5")
         self._assertRejected("  holdWeakBox: true", "  holdWeakBox: 1")
         self._assertRejected("  resampler: cpu", "  resampler: gpu")
 

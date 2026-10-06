@@ -1,71 +1,44 @@
-# Controller：视图规划、融合、运动与状态机
+# Controller：视图规划、运动与状态机
 
-Controller 决定“看哪里、相信哪个候选、是否继续查询、下一帧处于什么状态”。
+Controller 决定“看哪里、是否接受这一帧的框、下一帧处于什么状态”。每帧只规划**一个**透视视图，后端在这个视图里给出一个框，控制器据此提交一次结果。
 
 | 文件 | 职责 |
 |---|---|
-| `track_controller.py` | 状态所有权、帧事务、一次性提交 |
-| `state_model.py` | 状态、证据、候选、事务的数据结构 |
-| `recovery_planner.py` | 按状态规划局部视图（四角视图、cubemap） |
-| `state_evaluator.py` | 每轮候选评估、调用 Fusor、判断测量是否可接受 |
-| `fusor.py` | 跨缝的两框融合与最佳候选选择 |
+| `track_controller.py` | 状态所有权、逐帧的“规划 → 提交”协议 |
+| `state_model.py` | 运动预测、单帧观测、状态转移的数据结构 |
+| `view_planner.py` | 规划搜索视图：以预测方向为中心，按目标角尺寸确定视场 |
+| `state_evaluator.py` | 判断这一帧的框是否作为测量被接受 |
 | `motion_estimator.py` | 球面多帧运动预测 |
 | `fused_score.py` | 外观分校准、视图运动先验、SingleScore 合成 |
 | `score_calibration.py` | 可选的、与权重绑定的分数校准产物加载 |
 | `state_machine.py` | 跨帧的纯状态转移 |
-| `template_policy.py` | 模板策略：固定第 0 帧 anchor，可选 recent 模板更新 |
-| `decision_gate.py` | `FrameAggregate`：模板策略使用的单帧聚合结果 |
-
-> 下文描述的是控制器的完整逻辑。默认配置通过 `backendTuning` 调整了其中一部分：接受最佳候选而不用分数门槛过滤（因此**每帧只做一轮搜索**）、不使用运动分、放宽融合门槛、启用 recent 模板，详见 [配置说明](../configuration.md#backendtuning)。两轮搜索只在 `acceptAnyCandidate: false` 时出现。
+| `template_policy.py` | 模板策略：固定第 0 帧 anchor，可选 recent / stable 模板更新 |
 
 ## 视图规划
 
-### 四角视图（VStype1）
+`ViewPlanner.searchView(center, width, height)` 返回一个视图：
 
-`ViewSpecType1(center, width, height)` 返回 4 个视图，顺序固定为左上、右上、左下、右下：
+- 中心是运动模型预测的目标方向；
+- `width` / `height` 是预测的目标角尺寸（运动模型还没有给出尺寸时，用上一次提交的 BFoV）。视图的水平、垂直视场分别是它们的 3 倍，限制在 `geometry.minFovDeg` 到 `geometry.maxFovDeg` 之间，再受 `backendTuning.viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg`（默认 90°）限制；
+- 输出尺寸为 `geometry.viewWidthPx × viewHeightPx`（256×256）。水平和垂直视场各自按目标尺寸确定，所以视图在两个方向上的角分辨率一般不相等。
 
-- `width` / `height` 是上一帧预测的目标角尺寸，每个视图的视场为 `3 × width` 和 `3 × height`，并限制在 30° 到 120° 之间（下限避免小目标视图过窄，上限避免透视相机看到背面）；
-- 各视图中心在局部相机坐标系中偏移最终视场的 1/3，相邻视图的重叠比例保持固定；
-- 中心通过 forward / right / up 基向量计算，靠近极点时仍保持“四角”的语义。
+`TRACKING` 和 `UNCERTAIN` 两种状态使用相同的规划，没有“丢失后全局搜索”的路径。
 
-### 旋转 cubemap（VStype2）
+## 测量是否被接受
 
-cubemap 的 front 面指向预测中心，其余五个面由同一个局部正交基生成，每个面 120°。所以 cubemap 会随预测中心旋转，而不是固定在世界坐标系上。
+运行时把局部框回投到球面并计算 `singleScore`，再交给 `StateEvaluator`：
 
-### 按状态路由
+- 默认 `backendTuning.acceptAnyCandidate: true`：只要这一帧有框，就作为测量接受。ARTrackV2 的分数集中在 0.5 附近，不是校准过的概率，不适合直接做门槛；
+- `acceptAnyCandidate: false`：分数低于 `tracking.candidateMinScore` 的框不被接受；
+- 这一帧没有框（回投失败）时，输出运动预测的范围，`valid=False`。
 
-| 状态 | 第 1 轮 | 第 2 轮 |
-|---|---|---|
-| `TRACKING` | 预测中心周围的动态四角视图（4 张） | 以第 1 轮最佳候选为中心的四角视图（4 张） |
-| `UNCERTAIN` | 同上，但每张固定 120°×120° | 同上 |
-| `LOST`（保留组件） | 6 张 cubemap + 4 张四角视图，单轮完成 | — |
-
-第 1 轮没有候选时，第 2 轮以运动预测中心为中心。单帧视图预算上限为 12 张，不足时抛出 `ProtocolError`，不会生成不完整的布局。
-
-## 候选评估与融合
-
-运行时先把每个局部框回投并计算 `singleScore`，再交给 `StateEvaluator`。`Fusor` 的规则：
-
-1. 每个观测先作为单框候选；
-2. 枚举所有观测对，只有两个来源的分数都不低于 `fusionSourceMinConfidence`，且 `OverlapRate = 交集 / 较小框面积 ≥ 0.70` 时，才生成融合候选；
-3. 融合分数使用几何平均加一致性奖励，并设置上限：
-
-```text
-agreementIoU = ERP 交集 / ERP 并集
-base         = sqrt(a * b)
-bonus        = 0.15 * agreementIoU * (1 - |a - b|) * (1 - base)
-fusionScore  = min(base + bonus, max(a, b) + 0.03, 0.99)
-```
-
-4. 所有单框和融合候选统一排序，只返回一个最佳结果（同分时优先融合候选，再选 viewId 较小者）。
-
-默认的 `fusionBoxMode: best_source` 下，融合候选胜出时，最终框直接取两个来源中分数较高的那个。这样可以避免不同视图的框直接求交 / 求并造成尺度失真。`reference_adaptive` 模式会按上一个可信框的面积在交集框和并集框之间裁剪，作为可选实验保留。
+只有被接受的测量才会更新当前的 bbox / BFoV、运动样本和模板。测量未被接受、且目标面积不小于画面的 10% 时，`holdWeakBox` 让输出保持上一帧的框。
 
 ## 球面运动预测
 
 `SphericalMotionEstimator` 输出下一帧的搜索中心、目标角尺寸和不确定度。
 
-- **样本**：只把可靠测量放入长度为 `windowLength` 的窗口，预测帧和弱候选不进入；
+- **样本**：只把可靠测量放入长度为 `windowLength` 的窗口，预测帧不进入；
 - **角速度**：在最新点建立 east / north 切平面，把历史单位向量投影到二维，每个轴拟合“截距 + 时间 × 速度”，再做三轮 Huber 重加权以压制离群点。速度大小受 `maxAngularSpeedRadPerSec` 限制；残差过大时速度退化为 0。整个过程不直接对 yaw 做差，所以在 ±180° 经线处不会跳变；
 - **尺度**：水平 / 垂直角尺寸在 log 空间分别线性拟合，变化率受 `maxLogScaleRatePerSec` 限制；
 - **不确定度**：由拟合残差、过程噪声和样本数共同决定，输出 2×2 中心协方差和 2×2 log 尺度协方差；
@@ -74,8 +47,8 @@ fusionScore  = min(base + bonus, max(a, b) + 0.03, 0.99)
 ## 打分
 
 - **外观分**：后端分数。提供校准产物时经过与权重绑定的单调 Beta 校准，否则直接使用原始分数；
-- **视图运动先验**：局部视图中心与预测中心的大圆夹角越大，分数越低（0° 为 1.0，每 30° 下降 0.1）。同一视图内的候选共享该分数；
-- **SingleScore**：外观分与运动分各占 50%。
+- **视图运动先验**：视图中心与预测中心的大圆夹角越大，分数越低。视图本身以预测中心为中心，所以这一项在当前规划下恒为最高值；
+- **SingleScore**：`useMotionScore: true` 且有校准产物时是外观分与运动分的加权，否则就是外观分。
 
 ## 状态机
 
@@ -91,10 +64,18 @@ LT ≤ StateScore < UT   → UNCERTAIN
 StateScore < LT        → UNCERTAIN（记录 HARD_MISS）
 ```
 
-当前正常路径只在 `TRACKING` 和 `UNCERTAIN` 之间转移。`LOST` 状态、cubemap 规划和找回逻辑作为组件保留并有测试，但不会被自动触发。重新启用并评估找回路径是 [V2Plan](../V2Plan.md) 中的待办项。
+状态只在 `TRACKING` 和 `UNCERTAIN` 之间转移。`TrackStatus.LOST` 仍是对外类型的一部分，但控制器不会进入这个状态：目标丢失后的重新检测还没有实现，见 [V2Plan](../V2Plan.md)。
 
-状态转移只看 StateScore；是否把当前结果写入测量历史（`acceptMeasurement`）由评估器单独判断。只有被接受的测量才会更新 bbox / BFoV、运动样本和模板。
+状态目前只影响模板更新的节奏（连续稳定帧数），不影响视图规划。
 
 ## 模板策略
 
-模板固定使用第 0 帧初始化时的 anchor。启用 recent 模板（ARTrackV2 后端默认启用）时，只有高分且已确认的观测才能刷新 recent 模板，anchor 始终保留，防止目标漂移后模板被污染。同一帧的两轮推理使用同一个模板快照，第 2 轮强制保持（`KEEP`）。
+模板固定使用第 0 帧初始化时的 anchor。`onlineTemplate: true`（默认）时，分数不低于 `templateMinConfidence` 的观测可以刷新 recent 模板（大约每两帧一次），连续稳定 `stableFramesBeforeUpdate` 帧后刷新 stable 模板；anchor 始终保留，防止目标漂移后模板被完全污染。
+
+## 逐帧协议
+
+1. `beginFrame(frame)` 返回 `SearchPlan`（一个视图 + 模板命令 + 运动预测），并记住这份计划；
+2. 运行时裁剪视图、推理、回投，得到一个 `ProjectedObservation`（或 `None`）；
+3. `consume(plan, observation)` 校验计划就是刚才那一份、观测属于计划中的视图，然后提交并返回 `TrackResult`。
+
+同一份计划不能被消费两次，上一帧的计划也不能用于当前帧，否则抛出 `ProtocolError`。规划或推理出错时运行时调用 `commitFallback()`，保留上一个可信状态并输出一条 `valid=False` 的结果。

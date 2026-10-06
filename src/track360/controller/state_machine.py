@@ -101,15 +101,7 @@ class TrackStateMachine:
             else:
                 nextMode = TrackMode.UNCERTAIN
                 reason = TransitionReason.HARD_MISS
-        reset = mode is TrackMode.LOST and measurementAccepted
-        return TransitionDecision(
-            "COMMIT",
-            nextMode,
-            reason,
-            measurementAccepted,
-            resetMotionHistory=reset,
-            resetRecoveryEpoch=reset,
-        )
+        return TransitionDecision("COMMIT", nextMode, reason, measurementAccepted)
 
     def recordScore(self, stateScore: float) -> None:
         self._scoreGroup.append(stateScore)

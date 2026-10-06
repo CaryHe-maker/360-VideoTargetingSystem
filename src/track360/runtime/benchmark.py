@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -40,8 +40,7 @@ LOGGER = logging.getLogger("track360.benchmark")
 REPORT_DIRECTORY = "reports"
 
 METHODS: dict[str, str] = {
-    "ours": "Track360 with the given configuration",
-    "b2": "one perspective view that follows the previous BFoV (backendTuning.singleView)",
+    "ours": "Track360: one perspective view that follows the predicted BFoV",
     "b0": "ARTrackV2 tracking directly on the ERP frame, no spherical handling",
 }
 
@@ -107,15 +106,6 @@ class _SharedSession:
         return None
 
 
-def methodConfig(config: AppConfig, method: str) -> AppConfig:
-    """Return the configuration a method runs with."""
-    if method not in METHODS:
-        raise ProtocolError(f"unknown method '{method}'; available: {', '.join(METHODS)}")
-    if method == "b2":
-        return replace(config, backendTuning=replace(config.backendTuning, singleView=True))
-    return config
-
-
 def runBenchmark(
     *,
     datasetRoot: str | Path,
@@ -136,13 +126,14 @@ def runBenchmark(
     skipped.  ``labelRoot`` supplies labels for sequences shipped without them, such as
     the tune set.
     """
-    effective = methodConfig(config, method)
+    if method not in METHODS:
+        raise ProtocolError(f"unknown method '{method}'; available: {', '.join(METHODS)}")
     dataset = Vot360Dataset(datasetRoot, labelRoot)
     names = _selectSequences(dataset, sequences, shard)
     output = Path(outputRoot)
     reportRoot = output / REPORT_DIRECTORY / method
     reportRoot.mkdir(parents=True, exist_ok=True)
-    seedEverything(effective.reproducibility)
+    seedEverything(config.reproducibility)
     _writeJson(
         reportRoot / "run.json",
         {
@@ -153,20 +144,20 @@ def runBenchmark(
             "sequences": list(names),
             "maxFrames": maxFrames,
             "shard": list(shard),
-            **collectRunMetadata(effective),
+            **collectRunMetadata(config),
         },
     )
     session = (
-        sessionFactory(effective.model)
+        sessionFactory(config.model)
         if sessionFactory is not None
         else PyTorchARTrackV2Session(
-            effective.model, fullViewSearch=effective.backendTuning.fullViewSearch
+            config.model, fullViewSearch=config.backendTuning.fullViewSearch
         )
     )
     reports: list[SequenceReport] = []
     try:
         for position, name in enumerate(names, start=1):
-            report = _runOne(dataset, output, method, effective, name, session, maxFrames, resume)
+            report = _runOne(dataset, output, method, config, name, session, maxFrames, resume)
             reports.append(report)
             _writeJson(reportRoot / f"{name}.json", asdict(report))
             LOGGER.info(
@@ -414,6 +405,5 @@ __all__ = [
     "BenchmarkSummary",
     "SequenceReport",
     "evaluateResults",
-    "methodConfig",
     "runBenchmark",
 ]

@@ -4,6 +4,30 @@
 
 ## [未发布]
 
+### 改为单视图跟踪
+
+tune 集上多视图方案的 S<sub>dual</sub> 只有 0.065，单视图是 0.271，延迟还是单视图的 3.5 倍（评测记录 E001）。因此删除多视图，改为和 360VOT 论文的 360 跟踪框架相同的做法：每帧一个透视视图、一次前向、一次提交。
+
+#### 移除
+
+- 四角视图（`ViewSpecType1`）、旋转 cubemap 和 `RecoveryPlanner`；同一帧的第二轮搜索（`MoreViewsRequired` / `FrameCommitted`、帧事务、临时运动预测）；跨视图融合（`Fusor`、`FusionBoxMode`、`FrameAggregate`）。
+- 配置段 `evaluator` 和 `recovery`；`tracking` 与 `backendTuning` 中只服务于多视图、两轮搜索和融合的字段；测试配置 `configs/tests/legacy_off.yaml`。完整列表见 [docs/configuration.md](docs/configuration.md#已删除的字段)。
+- `TrackerBackend.inferTasks()` 和 `TaskKey` / `RoutedInferenceTask` / `RoutedLocalObservation`：为跨轮次混合 batch 准备的接口，运行时从未使用。
+- benchmark 方法 `b2`：它现在就是 `ours`。
+
+#### 变更
+
+- `TrackController` 协议改为 `beginFrame(frame) -> SearchPlan` 和 `consume(plan, observation) -> TrackResult`；`SearchPlan.views` 改为单个 `view`。
+- `backendTuning.singleViewHorizontalFovCapDeg` / `singleViewVerticalFovCapDeg` 改名为 `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg`。
+- 分数校准产物的格式升为 `track360.score-calibration.v2`，去掉了 `thresholds.fusionSourceMinConfidence`。
+- `geometry.maxFovDeg` 不再强制为 120。
+- 结果图的标签去掉了 `rounds=<轮数>`。
+
+#### 回归
+
+- 行为与删除前的单视图路径（`backendTuning.singleView: true`，即基线 `b2`）相同：合成序列的金标准摘要与删除前录制的 `single_view_caps` 逐字节一致。tune 集上的对比见评测记录 E003。
+- 默认配置的金标准轨迹重新录制（默认路径从 4 个视图变成 1 个视图，这是预期的行为变化）。
+
 ### Phase 2：360VOT 评测打通与基线（进行中）
 
 #### 新增

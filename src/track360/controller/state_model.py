@@ -1,21 +1,18 @@
-"""Immutable state records and bounded controller transaction data for V2."""
+"""Immutable state records shared by the controller components."""
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from enum import Enum, StrEnum, auto
+from enum import Enum, auto
 
 from track360.core.types import (
     BBoxXYWH,
     BFoV,
     FrameIndex,
     MotionState3D,
-    ProjectedObservation,
-    ResultSource,
     SequenceId,
     SphericalPoint,
-    TrackStatus,
 )
 
 
@@ -25,32 +22,6 @@ class TrackMode(Enum):
     UNCERTAIN = auto()
     LOST = auto()
     TERMINATED = auto()
-
-
-class AttemptKind(Enum):
-    PRIMARY = auto()
-    ESCALATION = auto()
-
-
-class EvidenceLevel(Enum):
-    CONFIRMED = auto()
-    WEAK = auto()
-    REJECTED = auto()
-    REACQUIRED = auto()
-
-
-class MeasurementEvidence(Enum):
-    RELIABLE_FUSED = auto()
-    RELIABLE_SINGLE = auto()
-    WEAK = auto()
-    MISSING = auto()
-
-
-class EvaluationReason(StrEnum):
-    NO_ELIGIBLE_CLUSTER = "no_eligible_cluster"
-    INSUFFICIENT_VIEW_SUPPORT = "insufficient_view_support"
-    BELOW_UNCERTAIN_THRESHOLD = "below_uncertain_threshold"
-    SOURCE_CONFIDENCE_BELOW_THRESHOLD = "source_confidence_below_threshold"
 
 
 class TransitionReason(Enum):
@@ -118,166 +89,31 @@ class MotionPrediction:
 
 
 @dataclass(frozen=True, slots=True)
-class ConfirmedTargetState:
-    frameIndex: FrameIndex
-    bbox: BBoxXYWH
-    bfov: BFoV
-    confidence: float
-
-
-@dataclass(frozen=True, slots=True)
-class StateInstance:
-    stateId: int
-    sequenceId: SequenceId
-    frameIndex: FrameIndex
-    stateRevision: int
-    mode: TrackMode
-    enteredFrom: TrackMode | None
-    entryReason: TransitionReason
-    prediction: MotionPrediction | None
-    searchSeedCenter: SphericalPoint | None
-    recoveryEpochId: int
-    modeAgeFrames: int
-    stableStreak: int
-    weakStreak: int
-    missStreak: int
-
-    @property
-    def publicStatus(self) -> TrackStatus:
-        if self.mode is TrackMode.LOST:
-            return TrackStatus.LOST
-        if self.mode is TrackMode.UNCERTAIN:
-            return TrackStatus.UNCERTAIN
-        return TrackStatus.TRACKING
-
-
-@dataclass(frozen=True, slots=True)
-class EvaluatedCandidate:
-    bfov: BFoV
-    bbox: BBoxXYWH
-    confidence: float
-    sourceViewIds: tuple[int, ...]
-    fused: bool
-    overlapRate: float | None
-    minSourceConfidence: float | None
-    sourceConfidencePassed: bool
-    representativeViewId: int
-    representativeLocalBox: BBoxXYWH | None
-
-
-@dataclass(frozen=True, slots=True)
 class StateObservation:
+    """What one frame's search view yielded, before the state transition."""
+
     sequenceId: SequenceId
     frameIndex: FrameIndex
     stateRevision: int
-    transactionId: int
-    stateId: int
-    attemptIndex: int
     evaluatedMode: TrackMode
-    isFinalAttempt: bool
-    appearanceOnlyScoring: bool
-    successRate: float
-    fusionThreshold: float
-    overlapThreshold: float
-    fusionSourceMinConfidence: float
-    bestCandidate: EvaluatedCandidate | None
     predictedCenter: SphericalPoint
-    searchSeedCenter: SphericalPoint
+    viewId: int | None
+    localBox: BBoxXYWH | None
     measuredBfov: BFoV | None
     measuredBbox: BBoxXYWH | None
-    measuredCenter: SphericalPoint | None
     proposedOutputBfov: BFoV
     proposedOutputBbox: BBoxXYWH
-    proposedResultSource: ResultSource
-    candidateCount: int
-    eligibleCandidateCount: int
-    clusterCount: int
-    sourceViewIds: tuple[int, ...]
-    representativeViewId: int | None
-    representativeLocalBox: BBoxXYWH | None
-    selectedIsFused: bool
-    selectedOverlapRate: float | None
-    selectedMinSourceConfidence: float | None
-    selectedSourceConfidencePassed: bool
-    fusedCandidateCount: int
-    outputEligible: bool
-    supportViewCount: int
     backendScore: float
     motionScore: float
     scaleScore: float
-    supportScore: float
-    agreementScore: float
     stateScore: float
-    evidence: MeasurementEvidence
-    hardGatePassed: bool
-    supported: bool
-    escalationRecommended: bool
-    reacquired: bool
-    rejectionReasons: tuple[EvaluationReason, ...] = ()
-    rawMotionScore: float | None = None
-    motionProbability: float | None = None
-    motionReliability: float = 0.0
-    motionSampleCount: int = 0
-    motionDegradedReasons: tuple[str, ...] = ()
+    measurementAccepted: bool
     uncertainThreshold: float = 0.0
     lostThreshold: float = 0.0
-    measurementAccepted: bool = False
 
     @property
-    def resultSource(self) -> ResultSource:
-        """Compatibility alias for diagnostics written before the V2 field was explicit."""
-        return self.proposedResultSource
-
-
-@dataclass(frozen=True, slots=True)
-class AttemptRecord:
-    kind: AttemptKind
-    attemptIndex: int
-    plan: object
-    observations: tuple[ProjectedObservation, ...]
-    evaluation: StateObservation
-
-
-@dataclass(slots=True)
-class RecoveryMemory:
-    epochId: int = 0
-    startedFrameIndex: FrameIndex | None = None
-    framesSpent: int = 0
-    globalScanPhase: int = 0
-    coveredCells: set[tuple[int, int]] = field(default_factory=set)
-    attemptedPlanKeys: set[tuple[int, int, int, int, int, int]] = field(default_factory=set)
-    bestSeedCenter: SphericalPoint | None = None
-    bestSeedScore: float = 0.0
-    bestSeedFrameIndex: FrameIndex | None = None
-    lastGlobalScanFrameIndex: FrameIndex | None = None
-
-    def reset(self, frameIndex: FrameIndex) -> None:
-        self.epochId += 1
-        self.startedFrameIndex = frameIndex
-        self.framesSpent = 0
-        self.globalScanPhase = 0
-        self.coveredCells.clear()
-        self.attemptedPlanKeys.clear()
-        self.bestSeedCenter = None
-        self.bestSeedScore = 0.0
-        self.bestSeedFrameIndex = None
-        self.lastGlobalScanFrameIndex = None
-
-
-@dataclass(slots=True)
-class FrameTransaction:
-    transactionId: int
-    frame: object
-    state: StateInstance
-    startingMode: TrackMode
-    attemptIndex: int = 0
-    completedAttempts: int = 0
-    remainingViews: int = 0
-    attempts: list[AttemptRecord] = field(default_factory=list)
-    recoveryMemory: RecoveryMemory | None = None
-    refinementCenters: tuple[SphericalPoint, ...] = ()
-    provisionalPrediction: MotionPrediction | None = None
-    provisionalPredictionRevision: int = 0
+    def hasCandidate(self) -> bool:
+        return self.measuredBfov is not None
 
 
 @dataclass(slots=True)
@@ -311,31 +147,14 @@ class TransitionDecision:
     nextMode: TrackMode
     reason: TransitionReason
     acceptMeasurement: bool
-    resetMotionHistory: bool = False
-    resetRecoveryEpoch: bool = False
-
-
-def newMotionHistory(maxlen: int) -> deque[MotionSample]:
-    return deque(maxlen=maxlen)
 
 
 __all__ = [
-    "AttemptKind",
-    "AttemptRecord",
-    "ConfirmedTargetState",
-    "EvaluatedCandidate",
-    "EvidenceLevel",
-    "EvaluationReason",
-    "FrameTransaction",
-    "MeasurementEvidence",
     "MotionPrediction",
     "MotionSample",
-    "RecoveryMemory",
     "ScoreGroup",
-    "StateInstance",
     "StateObservation",
     "TrackMode",
     "TransitionDecision",
     "TransitionReason",
-    "newMotionHistory",
 ]

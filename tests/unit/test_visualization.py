@@ -166,7 +166,7 @@ class VisualizationRecorderTest(unittest.TestCase):
             with patch(
                 "track360.visualization.result.drawBoxRgb", wraps=drawBoxRgb
             ) as draw:
-                path = recorder.record(frame, result, stateScore=0.625, roundCount=2)
+                path = recorder.record(frame, result, stateScore=0.625)
 
             annotated = _readRgbPng(path)
             self.assertTrue(np.any(np.all(annotated[32:, :] == FLUORESCENT_GREEN_RGB, axis=2)))
@@ -174,7 +174,7 @@ class VisualizationRecorderTest(unittest.TestCase):
                 frame.rgb,
                 result.bbox,
                 wrapHorizontal=True,
-                label="state=TRACKING/rounds=2/stateScore=0.6250",
+                label="state=TRACKING/stateScore=0.6250",
             )
 
     def testFinalResultLabelSupportsEveryControllerState(self) -> None:
@@ -185,7 +185,7 @@ class VisualizationRecorderTest(unittest.TestCase):
             annotated = drawBoxRgb(
                 rgb,
                 bbox,
-                label=f"state={statusName}/rounds=3/stateScore=0.6250",
+                label=f"state={statusName}/stateScore=0.6250",
             )
             self.assertTrue(np.any(np.all(annotated == FLUORESCENT_GREEN_RGB, axis=2)))
 

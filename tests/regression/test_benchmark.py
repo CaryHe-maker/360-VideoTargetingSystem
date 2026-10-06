@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 from dataclasses import replace
-from math import degrees
+from math import degrees, pi
 from pathlib import Path
 
 import cv2
@@ -16,7 +16,7 @@ from track360.core.errors import DecodeError, ProtocolError
 from track360.core.types import BBoxXYWH
 from track360.geometry import SphericalGeometryImpl
 from track360.io.vot360_results import readResultFile, resultPaths
-from track360.runtime.benchmark import METHODS, evaluateResults, methodConfig, runBenchmark
+from track360.runtime.benchmark import METHODS, evaluateResults, runBenchmark
 
 ROOT = Path(__file__).resolve().parents[2]
 FRAME_COUNT = 8
@@ -121,27 +121,26 @@ class BenchmarkTest(unittest.TestCase):
             self.assertEqual(session.calls[-1]["op"], "close")
 
     def testMethodsDifferInHowTheySearch(self) -> None:
-        ours, single, direct = self.sessions
-        self.assertEqual({c["views"] for c in ours.calls if c["op"] == "inferBatch"}, {4})
-        self.assertEqual({c["views"] for c in single.calls if c["op"] == "inferBatch"}, {1})
+        ours, direct = self.sessions
+        viewCalls = [c for c in ours.calls if c["op"] == "inferBatch"]
+        self.assertEqual(len(viewCalls), 2 * (FRAME_COUNT - 1))
+        self.assertEqual({c["views"] for c in viewCalls}, {1})
         self.assertFalse([c for c in direct.calls if c["op"] == "inferBatch"])
         erpCalls = [c for c in direct.calls if c["op"] == "inferErp"]
         self.assertEqual(len(erpCalls), 2 * (FRAME_COUNT - 1))
         self.assertTrue(all(call["priors"] for call in erpCalls))
-        self.assertTrue(methodConfig(self.config, "b2").backendTuning.singleView)
-        self.assertEqual(methodConfig(self.config, "ours"), self.config)
 
     def testRunReportsRecordTheEffectiveConfiguration(self) -> None:
         run = json.loads(
-            (self.output / "reports" / "b2" / "run.json").read_text(encoding="utf-8")
+            (self.output / "reports" / "ours" / "run.json").read_text(encoding="utf-8")
         )
         report = json.loads(
-            (self.output / "reports" / "b2" / "0001.json").read_text(encoding="utf-8")
+            (self.output / "reports" / "b0" / "0001.json").read_text(encoding="utf-8")
         )
 
-        self.assertEqual(run["method"], "b2")
+        self.assertEqual(run["method"], "ours")
         self.assertEqual(run["sequences"], ["0001", "0002"])
-        self.assertTrue(run["config"]["backendTuning"]["singleView"])
+        self.assertEqual(run["config"]["backendTuning"]["viewHorizontalFovCapRad"], pi / 2.0)
         self.assertIn("configHash", run)
         self.assertEqual(report["status"], "done")
         self.assertEqual(report["frames"], FRAME_COUNT)

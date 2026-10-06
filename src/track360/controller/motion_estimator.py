@@ -227,41 +227,6 @@ class SphericalMotionEstimator(MotionEstimatorProtocol):
         self._timestampNs = int(timestampNs)
         return self.predictDetailed(timestampNs, 0)
 
-    def predictWithProvisionalMeasurement(
-        self,
-        *,
-        frameIndex: int,
-        timestampNs: int,
-        point: SphericalPoint,
-        confidence: float,
-        horizontalSizeRad: float,
-        verticalSizeRad: float,
-    ) -> MotionPrediction:
-        """Predict from an R1 measurement without committing it to motion history."""
-        _requireTimestamp(timestampNs)
-        self._requireInitialized()
-        savedSamples = tuple(self._samples)
-        savedTimestamp = self._timestampNs
-        savedPrediction = self._lastPrediction
-        try:
-            self._appendSample(
-                MotionSample(
-                    frameIndex=frameIndex,
-                    timestampNs=timestampNs,
-                    center=point,
-                    horizontalSizeRad=max(0.0, horizontalSizeRad),
-                    verticalSizeRad=max(0.0, verticalSizeRad),
-                    confidence=confidence,
-                )
-            )
-            self._timestampNs = int(timestampNs)
-            return self.predictDetailed(timestampNs, 0)
-        finally:
-            self._samples.clear()
-            self._samples.extend(savedSamples)
-            self._timestampNs = savedTimestamp
-            self._lastPrediction = savedPrediction
-
     def _appendSample(self, sample: MotionSample) -> None:
         self._samples.append(sample)
 

@@ -14,15 +14,6 @@ geometry:
   minFovDeg: 20.0
   maxFovDeg: 120.0
   resampler: cpu
-evaluator:
-  supportWeight: 0.25
-  agreementWeight: 0.25
-  minReacquireViews: 2
-  successRate: 0.90
-  firstRoundFusionOverlap: 0.30
-  overlapThreshold: 0.70
-  fusionSourceMinConfidence: 0.740642
-  fusionBoxMode: best_source
 motion:
   minSamplesForVelocity: 2
   maxTangentSpanRad: 1.20
@@ -36,41 +27,17 @@ tracking:
   windowLength: 5
   contextScale: 2.0
   contextMarginRatio: 0.15
-  scaleClusterTolerance: 0.50
   maxPredictionHorizon: 3
-  guardYawStepDeg: 120.0
-  minViewsForCommit: 2
-  sameFrameEscalationEnabled: true
-  maxAttemptsPerFrame: 2
-  maxViewsPerFrameTotal: 12
-  uncertainFovScale: 1.25
-  reacquireCooldownFrames: 2
-recovery:
-  maxViewsPerFrame: 12
-  globalSearchInterval: 5
-  ringRadii: [1.0, 1.75, 2.5]
-  viewsPerRing: [4, 8, 12]
-  cubeMapOverlapRatio: 0.10
-  maxCoveredCells: 256
 backendTuning:
   acceptAnyCandidate: true
-  directMode: false
-  singleRound: false
-  adaptiveViewCount: false
-  singleView: false
-  singleViewHorizontalFovCapDeg: 90.0
-  singleViewVerticalFovCapDeg: 90.0
-  fourViewFovCapDeg: null
+  viewHorizontalFovCapDeg: 90.0
+  viewVerticalFovCapDeg: 90.0
   fullViewSearch: false
   useMotionScore: false
   templateFovScale: 2.5
   onlineTemplate: true
   templateMinConfidence: 0.515
-  allowSingleViewTemplate: true
   holdWeakBox: true
-  fusionSourceMinConfidence: 0.35
-  fusionOverlap: 0.45
-  fusionBoxMode: null
 reproducibility:
   seed: 0
   deterministic: true

@@ -74,8 +74,8 @@ python scripts/eval_360VOT.py -d <dataset_dir> -b <results>/bbox -f <results>/bf
 1. **对照组**：
    - B0：ARTrackV2 直接在 ERP 帧上跟踪（最简单的基线）；
    - B1：引用论文基线（上表）；
-   - B2：ARTrackV2 + 以上一帧 BFoV 为中心的单个透视视图；
-   - Ours：完整系统，并逐个组件做消融（多视图、两轮搜索、融合、运动、状态机）。
+   - Ours：ARTrackV2 + 以预测 BFoV 为中心的单个透视视图，并逐个组件做消融（搜索区域、运动预测、模板更新、状态机）。
+   - 评测记录 E001 / E002 里的 `b2` 就是现在的 `ours`：当时 `ours` 指四角视图 + 融合的多视图方案，该方案已删除（见 [系统架构](architecture.md#历史多视图方案)）。
 2. **一致性**：同一份结果文件分别跑官方脚本和本项目的评测代码，结果必须一致。已验证：24 条序列、两组人为加噪的结果、BBox 和 BFoV 两种表示，官方脚本打印的 12 个数字与本项目全部相同（官方只打印三位小数）。
 3. **不在测试集上调参**：所有参数和开关在 tune 集上确定，测试集只跑最终配置。tune 集是 360VOS 训练集中排除了与测试集重叠的序列后选出的 25 条，见 [Datasets](modules/datasets.md#360vos-训练集与-tune-集)。
 4. **效率**：固定 GPU（RTX 4060 Laptop），注明驱动和 CUDA 版本，报告 FPS、P50 / P95 延迟、每帧前向次数和峰值显存。批量运行工具记录的是端到端的墙钟时间（两帧结果提交之间的间隔，含解码）；分阶段的 CUDA 计时在 Phase 5 做。
@@ -84,11 +84,10 @@ python scripts/eval_360VOT.py -d <dataset_dir> -b <results>/bbox -f <results>/bf
 
 ## 复现命令
 
-数据集根目录下放各序列的 zip 或解压后的目录都可以。三种方法各跑一遍，再统一打分：
+数据集根目录下放各序列的 zip 或解压后的目录都可以。两种方法各跑一遍，再统一打分：
 
 ```bash
 python tools/benchmark.py run  --dataset-root <360VOT-test> --output-root outputs/360vot --method b0
-python tools/benchmark.py run  --dataset-root <360VOT-test> --output-root outputs/360vot --method b2
 python tools/benchmark.py run  --dataset-root <360VOT-test> --output-root outputs/360vot --method ours
 python tools/benchmark.py eval --dataset-root <360VOT-test> --output-root outputs/360vot --json outputs/360vot/scores.json
 ```
@@ -96,8 +95,7 @@ python tools/benchmark.py eval --dataset-root <360VOT-test> --output-root output
 | 方法 | 含义 |
 |---|---|
 | `b0` | ARTrackV2 直接在原始分辨率的 ERP 帧上跟踪：搜索区域跟随上一帧的框，不处理跨缝和形变 |
-| `b2` | 单个透视视图跟随上一帧的 BFoV（`backendTuning.singleView: true`），其余与 `ours` 相同 |
-| `ours` | `--config` 指定的配置，默认 `configs/default.yaml` |
+| `ours` | 单个透视视图跟随预测的 BFoV；用 `--config` 指定的配置，默认 `configs/default.yaml` |
 
 - **断点续跑**：中断后重跑同一条命令，结果文件已完整的序列会跳过；加 `--no-resume` 强制重跑。
 - **拆分到多个进程**：`--shard 0/2` 和 `--shard 1/2` 各跑一半序列。每个进程各加载一份模型（约 1 GB 显存）。
@@ -128,4 +126,4 @@ python tools/benchmark.py eval --dataset-root <train> --label-root <labels/train
 
 在测试集上按属性分层时用 `--info <360vots-info.csv>`（`--attribute-set` 默认就是 `360vot`）。
 
-在 RTX 4060 Laptop 上用两条序列各 25 帧试跑的速度（只用来估算总耗时，不是正式的效率数据）：`ours` 约 5 FPS，`b2` 和 `b0` 约 12–18 FPS。按 11.3 万帧估算，`ours` 跑完整个测试集约需 6 小时。
+在 RTX 4060 Laptop 上用两条序列各 25 帧试跑的速度（只用来估算总耗时，不是正式的效率数据）：`ours` 和 `b0` 约 12–18 FPS。按 11.3 万帧估算，`ours` 跑完整个测试集约需 2 小时。
