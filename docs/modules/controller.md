@@ -16,24 +16,28 @@ Controller 决定“看哪里、是否接受这一帧的框、下一帧处于什
 
 ## 视图规划
 
-`ViewPlanner.searchView(center, width, height)` 返回一个视图：
+每帧的视图就是 ARTrackV2 训练时见到的那种搜索区域（`backendTuning.alignedSearch: true`，默认）。`ViewPlanner.searchView(center, width, height)` 返回的视图：
 
 - 中心是运动模型预测的目标方向；
-- `width` / `height` 是预测的目标角尺寸（运动模型还没有给出尺寸时，用上一次提交的 BFoV）。视图的水平、垂直视场分别是它们的 3 倍，限制在 `geometry.minFovDeg` 到 `geometry.maxFovDeg` 之间，再受 `backendTuning.viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg`（默认 90°）限制；
-- 输出尺寸为 `geometry.viewWidthPx × viewHeightPx`（256×256）。水平和垂直视场各自按目标尺寸确定，所以视图在两个方向上的角分辨率一般不相等。
+- 是正方形，两个方向的角分辨率相同，目标保持原来的长宽比；
+- 边长是目标平均尺寸 `sqrt(宽 × 高)` 的 4 倍（ARTrackV2 训练时的搜索倍数），在成像平面上计算。`width` / `height` 是预测的目标角尺寸，运动模型还没有给出尺寸时用上一次提交的 BFoV；
+- 视场下限是 `alignedMinFovDeg`（2°），上限是 `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg`（默认 90°）和 `geometry.maxFovDeg`；
+- 带一个 `priorBox`：目标在视图里预计的位置和大小。后端以它为中心裁 4 倍的搜索区域。视场没有被上限截住时，这个裁剪正好是整个视图；目标很大（约 28° 以上）、视场被截住时，裁剪范围超出视图，超出部分补黑边，目标在搜索区域里仍然占 1/4 左右；
+- 输出尺寸为 `geometry.viewWidthPx × viewHeightPx`（256×256）。
 
-`TRACKING` 和 `UNCERTAIN` 两种状态使用相同的规划，没有“丢失后全局搜索”的路径。
+模板视图（`ViewPlanner.templateBfov()`）同样是正方形，边长是目标平均尺寸的 `templateFovScale` 倍。
 
-### 对齐的搜索区域（实验）
+`TRACKING` 和 `UNCERTAIN` 两种状态使用相同的规划，没有“丢失后全局搜索”的路径。这种取法不支持 `geometry.resampler: cuda`，同时配置会直接报错。
 
-默认规划和 ARTrackV2 的训练裁剪有三处不一致：视图两个方向的视场各自取目标的 3 倍，目标被拉成接近正方形；视场下限 20° 对小目标太宽；后端还要在视图里按目标的 4 倍再裁一次。`backendTuning.alignedSearch: true` 改成和训练时一样的做法：
+### 旧的取法
 
-- 视图是正方形，两个方向的角分辨率相同，目标保持原来的长宽比；
-- 视图边长是目标平均尺寸 `sqrt(宽 × 高)` 的 4 倍（ARTrackV2 训练时的搜索倍数，也是后端裁剪的倍数），在成像平面上计算；下限是 `alignedMinFovDeg`（2°），上限仍是视场上限（默认 90°）；
-- 视图带一个 `priorBox`（目标在视图里预计的位置和大小），后端以它为中心裁 4 倍的搜索区域。视场没有被上限截住时，这个裁剪正好是整个视图；目标很大、视场被截住时，裁剪范围超出视图，超出部分补黑边，目标在搜索区域里仍然占 1/4 左右；
-- 模板视图同样改成正方形，边长是目标平均尺寸的 `templateFovScale` 倍。
+`alignedSearch: false` 保留了 2026-10-07 之前的默认行为，只用于对照：
 
-这个开关还在实验中，结果见 [评测记录](../evaluation-log.md)。
+- 视图的水平、垂直视场分别是目标宽、高的 3 倍，限制在 `geometry.minFovDeg`（20°）到上限之间。两个方向各自确定，所以目标会被拉成接近正方形；
+- 后端在视图里再按目标的 4 倍裁一次搜索区域（`fullViewSearch: true` 时不裁，整个视图就是搜索区域）；
+- 模板视图的两个方向各取目标的 `templateFovScale` 倍。
+
+换成现在的取法后，66 条可用训练序列上的 S<sub>dual</sub> 从 0.278 升到 0.473（[评测记录](../evaluation-log.md) E005、E007）。
 
 ## 测量是否被接受
 

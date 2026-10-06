@@ -8,6 +8,10 @@ tracker with one ``<sequence>.txt`` per sequence and one line per frame::
 
 Box coordinates are pixel indices, half a pixel below this project's pixel-edge
 coordinates.
+
+Next to them, outside the toolkit's layout, goes the confidence of every frame::
+
+    <root>/score/<tracker>/0001.txt    confidence in [0, 1]
 """
 
 from __future__ import annotations
@@ -27,6 +31,8 @@ from track360.core.types import BBoxXYWH, BFoV, TrackResult
 RESULT_PRECISION = 4
 BBOX_DIRECTORY = "bbox"
 BFOV_DIRECTORY = "bfov"
+SCORE_DIRECTORY = "score"
+SCORE_PRECISION = 6
 
 
 def formatBboxLine(bbox: BBoxXYWH, frameWidthPx: int) -> str:
@@ -62,6 +68,16 @@ def resultPaths(root: str | Path, tracker: str, sequence: str) -> tuple[Path, Pa
     return base / BBOX_DIRECTORY / tracker / name, base / BFOV_DIRECTORY / tracker / name
 
 
+def scorePath(root: str | Path, tracker: str, sequence: str) -> Path:
+    """Return the per-frame confidence file of one sequence."""
+    return Path(root) / SCORE_DIRECTORY / tracker / f"{sequence}.txt"
+
+
+def readScoreFile(path: str | Path) -> NDArray[np.float64]:
+    """Read a per-frame confidence file as a flat array."""
+    return readResultFile(path).reshape(-1)
+
+
 def writeSequenceResults(
     root: str | Path,
     tracker: str,
@@ -75,6 +91,10 @@ def writeSequenceResults(
     bboxPath, bfovPath = resultPaths(root, tracker, sequence)
     _writeLines(bboxPath, [formatBboxLine(item.bbox, frameWidthPx) for item in results])
     _writeLines(bfovPath, [formatBfovLine(item.bfov) for item in results])
+    _writeLines(
+        scorePath(root, tracker, sequence),
+        [f"{item.confidence:.{SCORE_PRECISION}f}" for item in results],
+    )
     return bboxPath, bfovPath
 
 
@@ -148,10 +168,13 @@ __all__ = [
     "BBOX_DIRECTORY",
     "BFOV_DIRECTORY",
     "RESULT_PRECISION",
+    "SCORE_DIRECTORY",
     "ResultCollector",
     "formatBboxLine",
     "formatBfovLine",
     "readResultFile",
+    "readScoreFile",
     "resultPaths",
+    "scorePath",
     "writeSequenceResults",
 ]

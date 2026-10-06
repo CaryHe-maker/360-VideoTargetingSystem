@@ -30,7 +30,7 @@ VARIANT_OVERRIDES: dict[str, dict[str, object]] = {
         "viewVerticalFovCapRad": 50.0 * pi / 180.0,
     },
     "template_off": {"onlineTemplate": False},
-    "aligned": {"alignedSearch": True},
+    "legacy_search": {"alignedSearch": False},
 }
 
 

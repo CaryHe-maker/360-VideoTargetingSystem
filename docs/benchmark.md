@@ -109,6 +109,7 @@ python tools/benchmark.py eval --dataset-root <360VOT-test> --output-root output
 ```text
 outputs/360vot/bbox/<方法>/0001.txt      x1,y1,w,h
 outputs/360vot/bfov/<方法>/0001.txt      clon,clat,fov_h,fov_v,rotation
+outputs/360vot/score/<方法>/0001.txt     每帧的置信度（不属于官方布局，官方脚本不读它）
 outputs/360vot/reports/<方法>/run.json   方法、生效的配置、配置哈希、git commit、环境
 outputs/360vot/reports/<方法>/0001.json  帧数、FPS、P50 / P95 延迟、无效帧数
 ```
@@ -133,6 +134,15 @@ python tools/benchmark.py compare --dataset-root <train> --label-root <labels/tr
     --baseline outputs/tune:ours --candidate outputs/tune_exp/E00x:ours \
     --hard-file configs/splits/360vos_tune_hard.txt
 # 2. 通过后跑整个 tune 集（断点续跑会跳过已完成的 5 条），再比较一次
+```
+
+### 分数与 IoU 的关系
+
+`tools/score_analysis.py` 把一次运行的逐帧置信度和逐帧 IoU 对照，回答“运行时能不能用分数判断跟丢”：相关系数、区分丢失帧的 AUROC、各类帧的分数分位数、各阈值下抓到多少丢失帧和误报多少正常帧、丢失开始前后分数的变化。
+
+```bash
+python tools/score_analysis.py --dataset-root <train> --label-root <labels/train> \
+    --sequence-file configs/splits/360vos_tune.txt --output-root outputs/tune --method ours
 ```
 
 ### 在 tune 集上运行

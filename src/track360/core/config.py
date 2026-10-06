@@ -123,7 +123,7 @@ class BackendTuningConfig:
     viewHorizontalFovCapRad: float | None = pi / 2.0
     viewVerticalFovCapRad: float | None = pi / 2.0
     fullViewSearch: bool = False
-    alignedSearch: bool = False
+    alignedSearch: bool = True
     alignedMinFovRad: float = pi / 90.0
     useMotionScore: bool = False
     templateFovScale: float = 2.5

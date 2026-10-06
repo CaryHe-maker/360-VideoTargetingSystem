@@ -200,7 +200,9 @@ class ViewPlannerTest(unittest.TestCase):
         )
 
     def testViewIsCenteredAndThreeTimesTheTargetOnEachAxis(self) -> None:
-        view = self._planner().searchView(self.center, math.radians(20.0), math.radians(15.0))
+        view = self._planner(alignedSearch=False).searchView(
+            self.center, math.radians(20.0), math.radians(15.0)
+        )
 
         self.assertEqual(view.bfov.center, self.center)
         self.assertAlmostEqual(view.bfov.horizontalFovRad, math.radians(60.0))
@@ -211,10 +213,11 @@ class ViewPlannerTest(unittest.TestCase):
         )
 
     def testViewFovIsClampedToGeometryLimitsAndCaps(self) -> None:
-        small = self._planner().searchView(self.center, math.radians(2.0), math.radians(3.0))
-        large = self._planner().searchView(self.center, math.radians(50.0), math.radians(50.0))
+        legacy = self._planner(alignedSearch=False)
+        small = legacy.searchView(self.center, math.radians(2.0), math.radians(3.0))
+        large = legacy.searchView(self.center, math.radians(50.0), math.radians(50.0))
         uncapped = self._planner(
-            viewHorizontalFovCapRad=None, viewVerticalFovCapRad=None
+            alignedSearch=False, viewHorizontalFovCapRad=None, viewVerticalFovCapRad=None
         ).searchView(self.center, math.radians(50.0), math.radians(50.0))
 
         self.assertAlmostEqual(small.bfov.horizontalFovRad, self.config.geometry.minFovRad)
@@ -240,7 +243,8 @@ class ViewPlannerTest(unittest.TestCase):
         self.assertLessEqual(math.ceil(4.0 * math.sqrt(prior.widthPx * prior.heightPx)), 256)
         self.assertAlmostEqual(prior.xPx + prior.widthPx / 2.0, 128.0)
         self.assertGreater(prior.widthPx / prior.heightPx, 3.9)
-        self.assertIsNone(self._planner().searchView(self.center, 0.2, 0.1).priorBox)
+        legacy = self._planner(alignedSearch=False)
+        self.assertIsNone(legacy.searchView(self.center, 0.2, 0.1).priorBox)
 
     def testAlignedViewFollowsSmallTargetsBelowTheGeometryMinimum(self) -> None:
         planner = self._planner(alignedSearch=True)
@@ -258,7 +262,7 @@ class ViewPlannerTest(unittest.TestCase):
 
     def testAlignedTemplateViewIsSquareSoTheTargetKeepsItsAspect(self) -> None:
         target = BFoV(self.center, math.radians(12.0), math.radians(3.0))
-        legacy = self._planner().templateBfov(target)
+        legacy = self._planner(alignedSearch=False).templateBfov(target)
         aligned = self._planner(alignedSearch=True).templateBfov(target)
 
         self.assertAlmostEqual(legacy.horizontalFovRad, math.radians(30.0))
@@ -301,10 +305,17 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(plan.templateCommand.kind, TemplateCommandKind.KEEP)
         self.assertAlmostEqual(plan.view.bfov.center.yawRad, initial.bfov.center.yawRad)
         self.assertAlmostEqual(plan.view.bfov.center.pitchRad, initial.bfov.center.pitchRad)
+        # The default view is square: four times the mean target size, 90 degrees at most.
+        meanHalfSize = math.sqrt(
+            math.tan(initial.bfov.horizontalFovRad / 2.0)
+            * math.tan(initial.bfov.verticalFovRad / 2.0)
+        )
+        self.assertEqual(plan.view.bfov.horizontalFovRad, plan.view.bfov.verticalFovRad)
         self.assertAlmostEqual(
             plan.view.bfov.horizontalFovRad,
-            min(3.0 * initial.bfov.horizontalFovRad, math.radians(90.0)),
+            min(2.0 * math.atan(4.0 * meanHalfSize), math.radians(90.0)),
         )
+        self.assertIsNotNone(plan.view.priorBox)
 
         result = controller.consume(plan, _observation(0.95))
         self.assertTrue(result.valid)

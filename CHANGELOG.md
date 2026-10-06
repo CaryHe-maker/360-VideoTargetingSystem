@@ -4,6 +4,19 @@
 
 ## [未发布]
 
+### 对齐搜索区域成为默认
+
+#### 变更
+
+- `backendTuning.alignedSearch` 的默认值改为 `true`。66 条可用训练序列上 S<sub>dual</sub> 0.278 → 0.473（95% 区间 [+0.134, +0.255]），其中没有参与设计的 41 条 hold-out 序列上 0.283 → 0.504（评测记录 E005、E007）。硬回归序列 081 仍不通过，作为已知问题保留。
+- 默认配置的金标准轨迹重新录制；旧取法保留为 `legacy_search` 变体，摘要与改默认值之前的 `default` 相同。
+
+#### 新增
+
+- 每条序列的逐帧置信度写入 `score/<方法>/<序列>.txt`。
+- `tools/score_analysis.py` 和 `evaluation/score_analysis.py`：逐帧置信度与 IoU 的关系。
+- hold-out 集 `configs/splits/360vos_holdout.txt`。
+
 ### 实验：对齐搜索区域
 
 #### 新增

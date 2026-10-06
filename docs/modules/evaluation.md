@@ -10,6 +10,7 @@ Evaluation 读取预测结果和真值，计算平面、循环 ERP、球面和�
 | `evaluation/loss_rate.py` | 360VOT BBox 结果上的丢失率 |
 | `evaluation/bootstrap.py` | 按序列重采样的置信区间 |
 | `evaluation/comparison.py` | 两次运行的配对比较、硬回归序列检查 |
+| `evaluation/score_analysis.py` | 逐帧置信度与 IoU 的关系：相关系数、AUROC、分位数、阈值表、丢失前后的分数 |
 | `evaluation/profiler.py` | 命名代码段耗时统计 |
 | `tools/benchmark.py` | 360VOT：批量运行各方法并打分，用法见 [Benchmark 数据集](../benchmark.md#复现命令) |
 | `tools/run_airsim360_dataset.py` | AirSim360 单序列：运行跟踪、生成伪真值、输出逐帧 IoU 和汇总 |

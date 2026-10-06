@@ -34,12 +34,17 @@ class InitBfovTest(unittest.TestCase):
 
         scale = self.config.backendTuning.templateFovScale
         self.assertEqual(plan.templateView.bfov.center, target.center)
-        self.assertAlmostEqual(plan.templateView.bfov.horizontalFovRad, scale * 0.4)
-        self.assertAlmostEqual(plan.templateView.bfov.verticalFovRad, scale * 0.3)
-        # The template view is `scale` times the target, so the target fills 1/scale of it
-        # along each tangent axis.
-        expectedWidth = 256.0 * math.tan(0.2) / math.tan(scale * 0.2)
-        self.assertAlmostEqual(plan.templateBox.widthPx, expectedWidth, places=6)
+        # The template view is square, `scale` times the target's mean size on the image
+        # plane, so the target keeps its aspect and its mean size fills 1/scale of the view.
+        halfView = math.tan(plan.templateView.bfov.horizontalFovRad / 2.0)
+        self.assertEqual(
+            plan.templateView.bfov.horizontalFovRad, plan.templateView.bfov.verticalFovRad
+        )
+        self.assertAlmostEqual(halfView, scale * math.sqrt(math.tan(0.2) * math.tan(0.15)))
+        self.assertAlmostEqual(plan.templateBox.widthPx, 256.0 * math.tan(0.2) / halfView, places=6)
+        self.assertAlmostEqual(
+            math.sqrt(plan.templateBox.widthPx * plan.templateBox.heightPx), 256.0 / scale
+        )
         self.assertEqual(result.bfov, target)
         self.assertEqual(result.bbox, self.geometry.bfovToBbox(target, 960, 480))
 

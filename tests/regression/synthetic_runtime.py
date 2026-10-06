@@ -66,9 +66,22 @@ class FakeARTrackSession:
         imageFovs: Sequence[tuple[float, float]] | None = None,
         priorBoxes: Sequence[BBoxXYWH] | None = None,
     ) -> tuple[ARTrackPrediction, ...]:
-        """Whole-image search, used when tracking directly on ERP frames."""
-        del imageFovs
-        self.calls.append({"op": "inferErp", "views": len(rgbs), "priors": priorBoxes is not None})
+        """Search around a prior box: ERP frames, or views planned with a prior."""
+        if imageFovs is not None:
+            # A perspective view with a search prior (aligned search).
+            self.calls.append(
+                {
+                    "op": "inferBatch",
+                    "views": len(rgbs),
+                    "templates": len(templateFeatures),
+                    "fovs": [[float(fov[0]), float(fov[1])] for fov in imageFovs],
+                    "priors": priorBoxes is not None,
+                }
+            )
+        else:
+            self.calls.append(
+                {"op": "inferErp", "views": len(rgbs), "priors": priorBoxes is not None}
+            )
         return tuple(_locate(rgb, len(templateFeatures)) for rgb in rgbs)
 
     def close(self) -> None:
