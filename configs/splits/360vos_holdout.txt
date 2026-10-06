@@ -1,0 +1,45 @@
+# Held-out set: the leak-free 360VOS training sequences that are not in the tune set.
+# No tuning decision may look at these; they only confirm that a change found on the
+# tune set carries over to sequences it was not designed on.
+# Pool: training sequences left after 360vos_train_excluded.csv, minus 360vos_tune.txt.
+001
+005
+007
+008
+010
+011
+015
+018
+022
+024
+025
+027
+028
+030
+031
+047
+051
+055
+059
+061
+062
+063
+069
+070
+078
+080
+093
+095
+097
+098
+100
+101
+102
+110
+111
+112
+119
+140
+151
+159
+163

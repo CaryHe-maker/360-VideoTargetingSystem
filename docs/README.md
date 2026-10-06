@@ -7,6 +7,7 @@
 | [配置说明](configuration.md) | `configs/default.yaml` 各配置段的含义和约束 |
 | [Benchmark 数据集](benchmark.md) | 测试集选型、评测指标、对照基线 |
 | [V2 计划](V2Plan.md) | 到 V2.0 发布的分阶段路线图与按模块的优化建议 |
+| [优化方向与可行性](optimization-options.md) | 当前可选的优化方向：依据、实现方式、工作量和风险 |
 | [评测记录](evaluation-log.md) | 每一轮评测结果与 benchmark 参考数据的长期记录 |
 | [历史实验结论](experiments.md) | V1（比赛阶段）的 A/B 实验结果与经验 |
 
