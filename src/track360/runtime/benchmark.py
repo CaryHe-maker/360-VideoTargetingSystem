@@ -57,6 +57,8 @@ class SequenceReport:
     fps: float = 0.0
     p50LatencyMs: float = 0.0
     p95LatencyMs: float = 0.0
+    # Images sent through the network, over all frames of the sequence.
+    forwards: int = 0
     invalidFrames: int = 0
     error: str | None = None
 
@@ -71,6 +73,23 @@ class BenchmarkSummary:
         return tuple(report for report in self.reports if report.status == "failed")
 
 
+@dataclass(frozen=True, slots=True)
+class Efficiency:
+    """Cost of one method over a set of sequences, read from its run reports.
+
+    Latencies are wall-clock intervals between committed results, decoding included,
+    on a machine whose load is not controlled: a reference, not a measurement.
+    The forward count does not depend on the machine.
+    """
+
+    sequences: int
+    frames: int
+    fps: float
+    p50LatencyMs: float  # median over sequences of each sequence's P50
+    p95LatencyMs: float  # median over sequences of each sequence's P95
+    forwardsPerFrame: float | None  # None: the reports predate forward counting
+
+
 @dataclass(slots=True)
 class _TimedCollector(ResultCollector):
     """Collect results and the wall-clock time each one was committed."""
@@ -80,6 +99,39 @@ class _TimedCollector(ResultCollector):
     def write(self, result: TrackResult) -> None:
         ResultCollector.write(self, result)
         self.writeTimes.append(perf_counter())
+
+
+class _CountingSession:
+    """Count the images a session runs through the network."""
+
+    def __init__(self, session: ARTrackSession) -> None:
+        self._session = session
+        self.forwards = 0
+
+    @property
+    def supportsOnlineTemplates(self) -> bool:
+        return bool(self._session.supportsOnlineTemplates)
+
+    def encodeTemplate(self, rgb: Any, bbox: BBoxXYWH) -> Any:
+        return self._session.encodeTemplate(rgb, bbox)
+
+    def infer(self, rgb: Any, templateFeatures: Sequence[object]) -> Any:
+        self.forwards += 1
+        return self._session.infer(rgb, templateFeatures)
+
+    def __getattr__(self, name: str) -> Any:
+        value = getattr(self._session, name)
+        if name not in {"inferBatch", "inferBatchWithFovs"}:
+            return value
+
+        def counted(rgbs: Sequence[Any], *args: Any, **kwargs: Any) -> Any:
+            self.forwards += len(rgbs)
+            return value(rgbs, *args, **kwargs)
+
+        return counted
+
+    def close(self) -> None:
+        self._session.close()
 
 
 class _SharedSession:
@@ -148,7 +200,7 @@ def runBenchmark(
             **collectRunMetadata(config),
         },
     )
-    session = (
+    session = _CountingSession(
         sessionFactory(config.model)
         if sessionFactory is not None
         else createArtrackSession(config)
@@ -158,9 +210,12 @@ def runBenchmark(
         for position, name in enumerate(names, start=1):
             report = _runOne(dataset, output, method, config, name, session, maxFrames, resume)
             reports.append(report)
-            _writeJson(reportRoot / f"{name}.json", asdict(report))
+            # A skipped sequence keeps the report of the run that tracked it.
+            if report.status != "skipped" or not (reportRoot / f"{name}.json").is_file():
+                _writeJson(reportRoot / f"{name}.json", asdict(report))
             LOGGER.info(
-                "[%d/%d] %s %s: frames=%d fps=%.2f p50=%.0fms p95=%.0fms invalid=%d%s",
+                "[%d/%d] %s %s: frames=%d fps=%.2f p50=%.0fms p95=%.0fms forwards=%d"
+                " invalid=%d%s",
                 position,
                 len(names),
                 method,
@@ -169,6 +224,7 @@ def runBenchmark(
                 report.fps,
                 report.p50LatencyMs,
                 report.p95LatencyMs,
+                report.forwards,
                 report.invalidFrames,
                 f" {report.status}: {report.error}" if report.error else f" {report.status}",
             )
@@ -238,6 +294,38 @@ def evaluateResults(
     return scores
 
 
+def loadEfficiency(
+    outputRoot: str | Path, method: str, only: Sequence[str] | None = None
+) -> Efficiency | None:
+    """Summarize the run reports of ``method``; ``None`` when it has none."""
+    root = Path(outputRoot) / REPORT_DIRECTORY / method
+    if not root.is_dir():
+        return None
+    reports = []
+    for path in sorted(root.glob("*.json")):
+        if only is not None and path.stem not in only:
+            continue
+        report = json.loads(path.read_text(encoding="utf-8"))
+        if report.get("status") == "done" and report.get("seconds", 0.0) > 0.0:
+            reports.append(report)
+    if not reports:
+        return None
+    frames = sum(int(report["frames"]) for report in reports)
+    counted = all("forwards" in report for report in reports)
+    # The first frame of a sequence initializes the tracker without a forward pass.
+    tracked = max(1, frames - len(reports))
+    return Efficiency(
+        sequences=len(reports),
+        frames=frames,
+        fps=frames / sum(float(report["seconds"]) for report in reports),
+        p50LatencyMs=float(np.median([report["p50LatencyMs"] for report in reports])),
+        p95LatencyMs=float(np.median([report["p95LatencyMs"] for report in reports])),
+        forwardsPerFrame=(
+            sum(int(report["forwards"]) for report in reports) / tracked if counted else None
+        ),
+    )
+
+
 def _selectSequences(
     dataset: Vot360Dataset, sequences: Sequence[str] | None, shard: tuple[int, int]
 ) -> tuple[str, ...]:
@@ -257,7 +345,7 @@ def _runOne(
     method: str,
     config: AppConfig,
     name: str,
-    session: ARTrackSession,
+    session: _CountingSession,
     maxFrames: int | None,
     resume: bool,
 ) -> SequenceReport:
@@ -268,6 +356,7 @@ def _runOne(
         if resume and _isComplete(outputRoot, method, name, frameCount):
             return SequenceReport(sequence=name, status="skipped", frames=frameCount)
         collector = _TimedCollector()
+        session.forwards = 0
         started = perf_counter()
         if method == "b0":
             _trackErpDirect(source, session, config, collector)
@@ -286,6 +375,7 @@ def _runOne(
             fps=frameCount / seconds if seconds > 0.0 else 0.0,
             p50LatencyMs=float(np.percentile(latencies, 50)) if latencies.size else 0.0,
             p95LatencyMs=float(np.percentile(latencies, 95)) if latencies.size else 0.0,
+            forwards=session.forwards,
             invalidFrames=sum(1 for result in collector.results if not result.valid),
         )
     except Exception as error:
@@ -409,7 +499,9 @@ def _writeJson(path: Path, payload: dict[str, Any]) -> None:
 __all__ = [
     "METHODS",
     "BenchmarkSummary",
+    "Efficiency",
     "SequenceReport",
     "evaluateResults",
+    "loadEfficiency",
     "runBenchmark",
 ]

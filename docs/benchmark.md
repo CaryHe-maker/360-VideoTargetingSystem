@@ -111,7 +111,7 @@ outputs/360vot/bbox/<方法>/0001.txt      x1,y1,w,h
 outputs/360vot/bfov/<方法>/0001.txt      clon,clat,fov_h,fov_v,rotation
 outputs/360vot/score/<方法>/0001.txt     每帧的置信度（不属于官方布局，官方脚本不读它）
 outputs/360vot/reports/<方法>/run.json   方法、生效的配置、配置哈希、git commit、环境
-outputs/360vot/reports/<方法>/0001.json  帧数、FPS、P50 / P95 延迟、无效帧数
+outputs/360vot/reports/<方法>/0001.json  帧数、FPS、P50 / P95 延迟、前向次数、无效帧数
 ```
 
 ### 比较两次运行

@@ -35,7 +35,13 @@ from track360.evaluation.comparison import (
     hardRegressions,
 )
 from track360.evaluation.vot360_metrics import Vot360Scores
-from track360.runtime.benchmark import METHODS, evaluateResults, runBenchmark
+from track360.runtime.benchmark import (
+    METHODS,
+    Efficiency,
+    evaluateResults,
+    loadEfficiency,
+    runBenchmark,
+)
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
 ATTRIBUTE_SETS = ("360vot", "360vos-train")
@@ -137,7 +143,17 @@ def main(argv: list[str] | None = None) -> int:
 
         scores = score(sequences)
         print(formatScores(scores))
-        payload: dict[str, object] = {"overall": _payload(scores)}
+        efficiency = {
+            method: loadEfficiency(args.output_root, method, sequences) for method in scores
+        }
+        print()
+        print(formatEfficiency(efficiency))
+        payload: dict[str, object] = {
+            "overall": _payload(scores),
+            "efficiency": {
+                method: _efficiencyPayload(item) for method, item in efficiency.items()
+            },
+        }
         if args.info is not None:
             byAttribute = {}
             for name, members in _attributeSequences(args.info, args.attribute_set).items():
@@ -183,6 +199,42 @@ def formatScores(scores: dict[str, dict[str, Vot360Scores]]) -> str:
     return "\n".join(lines).rstrip()
 
 
+def formatEfficiency(efficiency: dict[str, Efficiency | None]) -> str:
+    """Cost of each run.  Timings are a reference: the machine load is not controlled."""
+    lines = ["efficiency (timings are a reference only: machine load is not controlled)"]
+    lines.append(
+        f"  {'run':<16}{'forwards/frame':>16}{'P50 ms':>10}{'P95 ms':>10}"
+        f"{'FPS':>8}{'sequences':>11}"
+    )
+    for name, item in efficiency.items():
+        if item is None:
+            lines.append(f"  {name:<16}{'no run reports':>16}")
+            continue
+        forwards = (
+            f"{'-':>16}"
+            if item.forwardsPerFrame is None
+            else f"{item.forwardsPerFrame:>16.2f}"
+        )
+        lines.append(
+            f"  {name:<16}{forwards}{item.p50LatencyMs:>10.0f}{item.p95LatencyMs:>10.0f}"
+            f"{item.fps:>8.1f}{item.sequences:>11}"
+        )
+    return "\n".join(lines)
+
+
+def _efficiencyPayload(item: Efficiency | None) -> dict[str, object] | None:
+    if item is None:
+        return None
+    return {
+        "sequences": item.sequences,
+        "frames": item.frames,
+        "fps": item.fps,
+        "p50LatencyMs": item.p50LatencyMs,
+        "p95LatencyMs": item.p95LatencyMs,
+        "forwardsPerFrame": item.forwardsPerFrame,
+    }
+
+
 def formatAttributeScores(byAttribute: dict[str, dict[str, dict[str, Vot360Scores]]]) -> str:
     """One row per attribute: S_dual / P_angle of each method on the BBox results."""
     methods = sorted({method for scores in byAttribute.values() for method in scores})
@@ -205,8 +257,10 @@ def formatAttributeScores(byAttribute: dict[str, dict[str, dict[str, Vot360Score
 def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
     hard = None if args.hard_file is None else readSequenceFile(args.hard_file)
     scores = []
-    for reference in (args.baseline, args.candidate):
+    efficiency: dict[str, Efficiency | None] = {}
+    for label, reference in (("baseline", args.baseline), ("candidate", args.candidate)):
         root, method = _parseRun(reference)
+        efficiency[label] = loadEfficiency(root, method, sequences)
         scores.append(
             evaluateResults(
                 datasetRoot=args.dataset_root,
@@ -219,13 +273,24 @@ def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
     comparison = compareScores(scores[0], scores[1], samples=args.samples)
     failed = () if hard is None else hardRegressions(comparison, hard)
     print(formatComparison(comparison, args.baseline, args.candidate))
+    print()
+    print(formatEfficiency(efficiency))
     if hard is not None:
         print()
         print(formatHardRegressions(comparison, hard, failed))
     if args.json is not None:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(
-            json.dumps(_comparisonPayload(comparison, args, failed), indent=2) + "\n",
+            json.dumps(
+                {
+                    **_comparisonPayload(comparison, args, failed),
+                    "efficiency": {
+                        label: _efficiencyPayload(item) for label, item in efficiency.items()
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
             encoding="utf-8",
         )
     return 1 if failed else 0
