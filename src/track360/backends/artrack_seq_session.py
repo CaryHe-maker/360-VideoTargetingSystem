@@ -238,6 +238,14 @@ class PyTorchARTrackV2SeqSession:
             # Strict: a sequence-level model that silently drops or lacks parameters
             # would run, but not as the model that was trained.
             model.load_state_dict(state, strict=True)
+            # The coordinate embedding is declared with ``max_norm``: PyTorch rescales a
+            # row in place the first time it is looked up, and the same table is the
+            # output projection.  The checkpoint still holds rows above the limit (bins
+            # far outside the crop), so predictions would depend on which coordinates
+            # the process has seen before.  Looking every row up once settles the table.
+            embedding = model.backbone.word_embeddings
+            with self._torch.no_grad():
+                embedding(self._torch.arange(embedding.num_embeddings))
             return model.to(self._device).eval(), cfg.MODEL
         except ModelError:
             raise
