@@ -5,7 +5,6 @@ Evaluation 读取预测结果和真值，计算平面、循环 ERP、球面和�
 | 文件 | 职责 |
 |---|---|
 | `evaluation/otb_metrics.py` | 平面 / 循环 IoU、成功曲线、AUC、跟踪丢失率 |
-| `evaluation/spherical_metrics.py` | 球面中心误差、BFoV 球面 IoU |
 | `evaluation/vot360_metrics.py` | 360VOT benchmark 分数，调用官方 toolkit 的指标代码 |
 | `evaluation/loss_rate.py` | 360VOT BBox 结果上的丢失率 |
 | `evaluation/bootstrap.py` | 按序列重采样的置信区间 |
@@ -38,14 +37,6 @@ trackingLossRate = lostFrameCount / 参与评估的可见帧数
 ```
 
 `1e-12` 只用来吸收浮点误差，不会把“IoU 很小”误判为丢失。
-
-### 球面中心误差
-
-把两个 BFoV 中心转为单位向量，点积裁剪到 [-1, 1] 后取 arccos，得到大圆角距离。在 yaw 跨越 ±180° 时不会出现假的大误差。
-
-### 球面 BFoV IoU
-
-`bfovSphericalIoU()` 在 yaw / pitch 网格上采样，判断每个点是否落在两个 BFoV 内。每个样本按 `cos(pitch)` 加权，补偿 ERP 在两极的过采样；加权交集除以加权并集。采样密度是函数参数，对比实验时必须固定。
 
 ## 评测规则
 
@@ -101,7 +92,7 @@ scores.perSequence      # 每条序列的分数
 
 跟踪结果是确定性的（同一份代码和配置重跑，结果文件逐字节一致），所以 0.02 的门槛不会被运行间的噪声触发。
 
-本文“指标定义”一节的指标（循环 IoU、AirSim360 的跟踪丢失率、`bfovSphericalIoU` 等）是项目自己的诊断指标，用于开发中分析问题，不用于对外报告。选型理由和评测协议见 [Benchmark 数据集](../benchmark.md)。
+本文“指标定义”一节的指标（循环 IoU、AirSim360 的跟踪丢失率等）是项目自己的诊断指标，用于开发中分析问题，不用于对外报告。选型理由和评测协议见 [Benchmark 数据集](../benchmark.md)。
 
 ## 回归检查
 

@@ -11,9 +11,8 @@ from track360.controller import (
     TrackControllerImpl,
     TrackStateMachine,
     ViewPlanner,
-    scoreMotionConsistency,
 )
-from track360.controller.state_model import ScoreGroup, TransitionReason
+from track360.controller.state_model import ScoreGroup, TrackMode, TransitionReason
 from track360.controller.view_planner import localBoxOfBfov
 from track360.core.config import loadConfig
 from track360.core.errors import ConfigError, ProtocolError
@@ -133,46 +132,46 @@ class MotionEstimatorTest(unittest.TestCase):
         )
 
         prediction = estimator.predictDetailed(1_000_000_000)
-        motionScore = scoreMotionConsistency(
-            BFoV(makeSphericalPoint(0.0, 0.0), 0.40, 0.30),
-            prediction.motionState,
-        )
 
         self.assertEqual(prediction.sampleCount, 1)
         self.assertIn("insufficient_motion_samples", prediction.degradedReasons)
         self.assertGreater(prediction.reliability, 0.0)
         self.assertLess(prediction.reliability, prediction.confidence)
-        self.assertGreater(motionScore.effectiveProbability, 0.5)
 
 
 class StateMachineTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = loadConfig(ROOT / "configs" / "default.yaml")
 
+    def _step(self, state: TrackStateMachine, mode: TrackMode, score: float):
+        decision = state.transition(mode, score, measurementAccepted=score > 0.0)
+        state.recordScore(score)
+        return decision
+
     def testUsesScoreGroupThresholds(self) -> None:
         state = TrackStateMachine(self.config.tracking)
         state.initialize()
-        first = state.update(0.5, True, True)
-        second = state.update(0.5, True, True)
-        uncertain = state.update(0.4, True, True)
-        recovered = state.update(0.9, True, True)
+        first = self._step(state, TrackMode.TRACKING, 0.5)
+        second = self._step(state, first.nextMode, 0.5)
+        uncertain = self._step(state, second.nextMode, 0.4)
+        recovered = self._step(state, uncertain.nextMode, 0.9)
 
-        self.assertEqual(first.status, TrackStatus.TRACKING)
-        self.assertEqual(second.status, TrackStatus.TRACKING)
-        self.assertEqual(uncertain.status, TrackStatus.UNCERTAIN)
-        self.assertTrue(recovered.accepted)
-        self.assertEqual(recovered.status, TrackStatus.TRACKING)
+        self.assertEqual(first.nextMode, TrackMode.TRACKING)
+        self.assertEqual(second.nextMode, TrackMode.TRACKING)
+        self.assertEqual(uncertain.nextMode, TrackMode.UNCERTAIN)
+        self.assertTrue(recovered.acceptMeasurement)
+        self.assertEqual(recovered.nextMode, TrackMode.TRACKING)
 
     def testKeepsHardMissInUncertain(self) -> None:
         state = TrackStateMachine(self.config.tracking)
         state.initialize()
-        state.update(0.8, True, True)
-        state.update(0.8, True, True)
-        state.update(0.8, True, True)
+        for _ in range(3):
+            self._step(state, TrackMode.TRACKING, 0.8)
 
-        hardMiss = state.update(0.0, False, False)
+        hardMiss = self._step(state, TrackMode.TRACKING, 0.0)
 
-        self.assertEqual(hardMiss.status, TrackStatus.UNCERTAIN)
+        self.assertFalse(hardMiss.acceptMeasurement)
+        self.assertEqual(hardMiss.nextMode, TrackMode.UNCERTAIN)
         self.assertEqual(hardMiss.reason, TransitionReason.HARD_MISS)
 
     def testScoreGroupUsesWarmupAndRollingOrderStatistics(self) -> None:

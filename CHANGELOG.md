@@ -4,6 +4,18 @@
 
 ## [未发布]
 
+### 清理没有调用方的代码
+
+#### 移除
+
+- `scoreMotionConsistency()`、`calibrateMotionScore()`：基于协方差的运动一致性打分，没有调用方。
+- `TrackStateMachine.update()`、`StateUpdate` 以及 `uncertainFrames` / `recoveryFrames` 计数：为旧调用方保留的适配层。状态机只剩 `transition()` 和 `recordScore()`。
+- `TrackMode.TERMINATED` 和没有任何地方产生的 `TransitionReason`（`PATIENCE_EXHAUSTED`、`RECOVERY_PROGRESS`、`REACQUIRED`、`RECOVERY_EXHAUSTED`、`END_OF_STREAM`、`EXTERNAL_RESET`）。
+- `evaluation/spherical_metrics.py`（`SphericalMetrics`、`bfovSphericalIoU()`）：评测使用官方工具包的球面指标。
+- 序列级会话的 `inferBatchWithFovs()`。
+
+输出不变：金标准轨迹的摘要没有变化。
+
 ### 按序列级模型运行 ARTrackV2
 
 #### 变更

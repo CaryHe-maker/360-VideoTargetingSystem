@@ -147,14 +147,6 @@ class PyTorchARTrackV2SeqSession:
         }
         return tuple(predictions)
 
-    def inferBatchWithFovs(
-        self,
-        rgbs: Sequence[NDArray[np.uint8]],
-        templateFeatures: Sequence[object],
-        imageFovs: Sequence[tuple[float, float]],
-    ) -> tuple[ARTrackPrediction, ...]:
-        return self.inferBatch(rgbs, templateFeatures, imageFovs=imageFovs)
-
     def close(self) -> None:
         if self._closed:
             return

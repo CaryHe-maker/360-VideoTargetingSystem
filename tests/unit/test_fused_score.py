@@ -14,7 +14,6 @@ from track360.controller import (
     calibrateBackendFusedScore,
     calibrateLocalAppearanceProbabilities,
     composeSingleScore,
-    scoreMotionConsistency,
     scoreViewCenterMotion,
 )
 from track360.core.errors import GeometryError
@@ -72,39 +71,6 @@ class FusedScoreRemappingTest(unittest.TestCase):
         )
         self.assertEqual(remapped.bbox, original.bbox)
         self.assertEqual(remapped.appearanceScore, original.appearanceScore)
-
-    def testMotionScoreUsesPredictionCovarianceAndReliability(self) -> None:
-        prediction = MotionState3D(
-            position=(0.0, 0.0, 1.0),
-            velocity=(0.0, 0.0, 0.0),
-            confidence=0.9,
-            horizontalSizeRad=0.4,
-            verticalSizeRad=0.3,
-            angularUncertaintyRad=0.03,
-            scaleUncertainty=0.1,
-            reliability=1.0,
-            centerCovarianceRad2=((0.0009, 0.0), (0.0, 0.0009)),
-            scaleCovarianceLog2=((0.01, 0.0), (0.0, 0.01)),
-        )
-        aligned = scoreMotionConsistency(
-            BFoV(makeSphericalPoint(0.0, 0.0), 0.4, 0.3), prediction
-        )
-        displaced = scoreMotionConsistency(
-            BFoV(makeSphericalPoint(0.35, 0.0), 0.4, 0.3), prediction
-        )
-
-        self.assertGreater(aligned.rawScore, displaced.rawScore)
-        self.assertGreater(aligned.effectiveProbability, displaced.effectiveProbability)
-
-        unreliable = scoreMotionConsistency(
-            BFoV(makeSphericalPoint(0.35, 0.0), 0.4, 0.3),
-            MotionState3D(
-                position=prediction.position,
-                velocity=prediction.velocity,
-                confidence=0.9,
-            ),
-        )
-        self.assertAlmostEqual(unreliable.effectiveProbability, 0.5)
 
     def testSingleScoreUsesArtifactWeights(self) -> None:
         self.assertAlmostEqual(composeSingleScore(0.8, 0.2, TEST_CALIBRATION), 0.68)

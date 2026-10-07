@@ -21,7 +21,6 @@ class TrackMode(Enum):
     TRACKING = auto()
     UNCERTAIN = auto()
     LOST = auto()
-    TERMINATED = auto()
 
 
 class TransitionReason(Enum):
@@ -29,12 +28,6 @@ class TransitionReason(Enum):
     RELIABLE_MEASUREMENT = auto()
     WEAK_MEASUREMENT = auto()
     HARD_MISS = auto()
-    PATIENCE_EXHAUSTED = auto()
-    RECOVERY_PROGRESS = auto()
-    REACQUIRED = auto()
-    RECOVERY_EXHAUSTED = auto()
-    END_OF_STREAM = auto()
-    EXTERNAL_RESET = auto()
 
 
 @dataclass(frozen=True, slots=True)
