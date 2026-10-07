@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum, StrEnum, auto
+from enum import Enum, auto
 from math import isfinite, sqrt
 from typing import NewType
 
@@ -253,6 +253,9 @@ class ViewSpec:
     bfov: BFoV
     outputWidthPx: int
     outputHeightPx: int
+    # Where the target is expected in this view, in view pixels.  When set, the
+    # backend centers its search crop on it instead of deriving one from the template.
+    priorBox: BBoxXYWH | None = None
 
     def __post_init__(self) -> None:
         if self.viewId < 0:
@@ -288,46 +291,6 @@ class LocalView:
                     f"{(3, self.spec.outputHeightPx, self.spec.outputWidthPx)}, "
                     f"actual={tuple(shape)}"
                 )
-
-
-class InferenceRole(StrEnum):
-    ROUND1_DIRECTION = "round1_direction"
-    ROUND2_SHAPE = "round2_shape"
-
-
-@dataclass(frozen=True, slots=True)
-class TaskKey:
-    """Immutable identity used to route outputs from mixed-frame inference batches."""
-
-    sequenceId: SequenceId
-    frameIndex: FrameIndex
-    attemptIndex: int
-    viewId: int
-    generation: int
-    role: InferenceRole
-
-    def __post_init__(self) -> None:
-        if not str(self.sequenceId):
-            raise ProtocolError("task sequenceId must be non-empty")
-        if not isinstance(self.role, InferenceRole):
-            raise ProtocolError("task role must be an InferenceRole")
-        if min(
-            int(self.frameIndex),
-            self.attemptIndex,
-            self.viewId,
-            self.generation,
-        ) < 0:
-            raise ProtocolError("task identity components must be non-negative")
-
-
-@dataclass(frozen=True, slots=True)
-class RoutedInferenceTask:
-    key: TaskKey
-    view: LocalView
-
-    def __post_init__(self) -> None:
-        if self.key.viewId != self.view.spec.viewId:
-            raise ProtocolError("task key viewId must match its LocalView")
 
 
 @dataclass(frozen=True, slots=True)
@@ -371,16 +334,6 @@ class LocalObservation:
         ):
             if value is not None:
                 _requireProbability(name, value)
-
-
-@dataclass(frozen=True, slots=True)
-class RoutedLocalObservation:
-    key: TaskKey
-    observation: LocalObservation
-
-    def __post_init__(self) -> None:
-        if self.key.viewId != self.observation.viewId:
-            raise ProtocolError("task key viewId must match its LocalObservation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,35 +391,20 @@ class TemplateCommand:
 
 @dataclass(frozen=True, slots=True)
 class SearchPlan:
+    """The one perspective view to search in a frame and the template command to apply."""
+
     sequenceId: SequenceId
     frameIndex: FrameIndex
     stateRevision: int
-    views: tuple[ViewSpec, ...]
+    view: ViewSpec
     templateCommand: TemplateCommand
     predictedMotion: MotionState3D | None
-    transactionId: int = 0
-    attemptIndex: int = 0
-    recoveryEpochId: int = 0
-    viewRoles: tuple[str, ...] = ()
-    appearanceOnlyScoring: bool = False
 
     def __post_init__(self) -> None:
         if not str(self.sequenceId) or int(self.frameIndex) < 0 or self.stateRevision < 0:
             raise ProtocolError("search plan identity and revision must be valid")
-        viewIds = tuple(view.viewId for view in self.views)
-        if len(viewIds) != len(set(viewIds)):
-            raise ProtocolError("search plan viewIds must be unique")
         if self.templateCommand.frameIndex != self.frameIndex:
             raise ProtocolError("template command and search plan frameIndex must match")
-        # Backend template commands advance once per inference attempt, while controller state
-        # revisions advance once per committed frame.  They are equal on the first attempt of a
-        # simple frame but intentionally diverge after same-frame escalation.
-        if self.transactionId < 0 or self.attemptIndex < 0 or self.recoveryEpochId < 0:
-            raise ProtocolError("search plan transaction identity must be non-negative")
-        if self.viewRoles and len(self.viewRoles) != len(self.views):
-            raise ProtocolError("search plan viewRoles must align with views")
-        if not isinstance(self.appearanceOnlyScoring, bool):
-            raise ProtocolError("appearanceOnlyScoring must be boolean")
 
 
 @dataclass(frozen=True, slots=True)

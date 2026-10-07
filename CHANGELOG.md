@@ -4,6 +4,84 @@
 
 ## [未发布]
 
+### 对齐搜索区域成为默认
+
+#### 变更
+
+- `backendTuning.alignedSearch` 的默认值改为 `true`。66 条可用训练序列上 S<sub>dual</sub> 0.278 → 0.473（95% 区间 [+0.134, +0.255]），其中没有参与设计的 41 条 hold-out 序列上 0.283 → 0.504（评测记录 E005、E007）。硬回归序列 081 仍不通过，作为已知问题保留。
+- 默认配置的金标准轨迹重新录制；旧取法保留为 `legacy_search` 变体，摘要与改默认值之前的 `default` 相同。
+
+#### 新增
+
+- 每条序列的逐帧置信度写入 `score/<方法>/<序列>.txt`。
+- `tools/score_analysis.py` 和 `evaluation/score_analysis.py`：逐帧置信度与 IoU 的关系。
+- hold-out 集 `configs/splits/360vos_holdout.txt`。
+
+### 实验：对齐搜索区域
+
+#### 新增
+
+- `backendTuning.alignedSearch`（默认关闭）和 `alignedMinFovDeg`：搜索视图和模板视图改成正方形、边长为目标平均尺寸的 4 倍（模板为 `templateFovScale` 倍），视场下限 2°；视图带上预测的目标框（`ViewSpec.priorBox`），后端以它为中心裁搜索区域，视场被上限截住时超出部分补黑边。
+- tune 集上 S<sub>dual</sub> 0.271 → 0.421（95% 区间 [+0.056, +0.248]），但硬回归序列 081 不通过，默认值没有改（评测记录 E005）。
+
+### 评测：丢失率、置信区间、硬回归序列
+
+#### 新增
+
+- 丢失率 `evaluation/loss_rate.py`：IoU < 0.1 连续至少 5 帧算丢失，丢失率 = 丢失帧数之和 ÷ 总帧数之和。`tools/benchmark.py eval` 的 BBox 表多一列 `loss_rate`，`scores.json` 里每条序列多了 `frames`、`lostFrames`、`firstLostFrame`。
+- 按序列 bootstrap 的置信区间 `evaluation/bootstrap.py`，以及 `tools/benchmark.py compare`：比较两次运行，给出 S<sub>dual</sub>、P<sub>angle</sub>、丢失率的差和 95% 区间。
+- 硬回归序列 `configs/splits/360vos_tune_hard.txt`（081、107、131、156、160）和 `compare --hard-file`：任何一条的 S<sub>dual</sub> 下降超过 0.02 时命令以退出码 1 结束。
+
+### 改为单视图跟踪
+
+tune 集上多视图方案的 S<sub>dual</sub> 只有 0.065，单视图是 0.271，延迟还是单视图的 3.5 倍（评测记录 E001）。因此删除多视图，改为和 360VOT 论文的 360 跟踪框架相同的做法：每帧一个透视视图、一次前向、一次提交。
+
+#### 移除
+
+- 四角视图（`ViewSpecType1`）、旋转 cubemap 和 `RecoveryPlanner`；同一帧的第二轮搜索（`MoreViewsRequired` / `FrameCommitted`、帧事务、临时运动预测）；跨视图融合（`Fusor`、`FusionBoxMode`、`FrameAggregate`）。
+- 配置段 `evaluator` 和 `recovery`；`tracking` 与 `backendTuning` 中只服务于多视图、两轮搜索和融合的字段；测试配置 `configs/tests/legacy_off.yaml`。完整列表见 [docs/configuration.md](docs/configuration.md#已删除的字段)。
+- `TrackerBackend.inferTasks()` 和 `TaskKey` / `RoutedInferenceTask` / `RoutedLocalObservation`：为跨轮次混合 batch 准备的接口，运行时从未使用。
+- benchmark 方法 `b2`：它现在就是 `ours`。
+
+#### 变更
+
+- `TrackController` 协议改为 `beginFrame(frame) -> SearchPlan` 和 `consume(plan, observation) -> TrackResult`；`SearchPlan.views` 改为单个 `view`。
+- `backendTuning.singleViewHorizontalFovCapDeg` / `singleViewVerticalFovCapDeg` 改名为 `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg`。
+- 分数校准产物的格式升为 `track360.score-calibration.v2`，去掉了 `thresholds.fusionSourceMinConfidence`。
+- `geometry.maxFovDeg` 不再强制为 120。
+- 结果图的标签去掉了 `rounds=<轮数>`。
+
+#### 回归
+
+- 行为与删除前的单视图路径（`backendTuning.singleView: true`，即基线 `b2`）相同：合成序列的金标准摘要与删除前录制的 `single_view_caps` 逐字节一致。tune 集上的对比见评测记录 E003。
+- 默认配置的金标准轨迹重新录制（默认路径从 4 个视图变成 1 个视图，这是预期的行为变化）。
+
+### Phase 2：360VOT 评测打通与基线（进行中）
+
+#### 新增
+
+- 360VOT 数据加载器 `datasets/vot360.py`：序列发现、帧读取、四种真值标注（BBox / rBBox / BFoV / rBFoV）。可以直接读发布时的 zip，不需要解压；`groundTruth()` 返回与官方 toolkit 相同的数组布局，`annotation()` 返回本项目的类型。注册为数据格式 `360vot`。
+- 图像序列支持 JPG。
+- BFoV 初始化：`track360 track --init-bfov clon,clat,fov_h,fov_v`，控制器和 `runTracking()` 接受 `initialBfov`。
+- 360VOT 官方格式的结果写入器 `io/vot360_results.py`：每条序列同时输出 BBox 和 BFoV 两种结果文件。
+- 360VOT 评测 `evaluation/vot360_metrics.py`：直接调用官方 toolkit 的指标代码（放在 `third_party/vot360_toolkit/`）。与官方脚本交叉验证：24 条序列、两组结果、两种表示，官方打印的 12 个数字与本项目全部相同。
+- 批量运行工具 `tools/benchmark.py`：`run` 按方法批量跟踪（断点续跑、分片、失败隔离、记录 FPS 和延迟），`eval` 统一打分。
+- 基线方法 `b0`（ARTrackV2 直接在 ERP 上跟踪）和 `b2`（单个透视视图）。
+- 序列信息表解析 `datasets/vots_info.py` 和按挑战属性分层打分（`tools/benchmark.py eval --info`）。
+- 360VOS 训练序列的读取，以及从分割掩码拟合 360VOT 格式标注的 `datasets/mask_labels.py`。
+- tune 集：`configs/splits/360vos_tune.txt`（25 条，14,923 帧）和排除列表 `configs/splits/360vos_train_excluded.csv`，由 `tools/prepare_tune_set.py` 生成。
+
+#### 确认的事实
+
+- **360VOS 的 170 条训练序列里有 97 条就是 360VOT 的测试序列**，另有 5 条与测试序列剪自同一个源视频。这 102 条都不能用于调参。
+- 官方 toolkit 只对 BBox 结果计算 S<sub>dual</sub>；BFoV 结果给出的是 S<sub>sphere</sub>。V2Plan 的精度目标相应改为按 BBox 结果计算。
+- 官方 S<sub>dual</sub> 只把真值向左平移一个图像宽度。结果写入器把跨缝框写成负的 `x1`，这是唯一能同时匹配两种跨缝标注写法的位置。
+- 官方 S<sub>sphere</sub> 把纬度当作极角传入球面 IoU，几何有疑问，暂不用它下结论。详见 [docs/benchmark.md](docs/benchmark.md#官方指标实现的几个特点)。
+
+#### 变更
+
+- RGB 帧改用 OpenCV 解码。原来自己实现的 PNG 解码器解一帧 3840×1920 的图要约 10 秒，现在约 0.15 秒，解码结果逐像素相同。原解码器只保留给 AirSim360 分割掩码这类标签图使用。
+
 ### Phase 1：配置收敛与工程底座
 
 #### 变更

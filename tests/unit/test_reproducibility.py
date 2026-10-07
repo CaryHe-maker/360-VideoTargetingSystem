@@ -37,11 +37,6 @@ class ReproducibilityTest(unittest.TestCase):
 
         self.assertNotEqual(configHash(changed), configHash(self.config))
 
-    def testLegacyOffConfigHasADifferentHash(self) -> None:
-        legacy = loadConfig(ROOT / "configs" / "tests" / "legacy_off.yaml")
-
-        self.assertNotEqual(configHash(legacy), configHash(self.config))
-
     def testRunMetadataIsWrittenNextToTheResult(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = replace(

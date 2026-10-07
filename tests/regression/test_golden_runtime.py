@@ -1,9 +1,8 @@
 """Golden regression for the production runtime path on synthetic sequences.
 
-The golden traces were recorded before the ``TRACK360_ARTRACK_*`` environment
-switches moved into ``backendTuning``; every variant below reproduces one of the
-recorded environment combinations through configuration alone.  Update a golden
-file only for an intended behavior change, and say so in the commit.
+Every variant below is the default configuration with a few ``backendTuning`` values
+replaced.  Update a golden file only for an intended behavior change, and say so in
+the commit.
 """
 
 import hashlib
@@ -23,27 +22,15 @@ GOLDEN = Path(__file__).resolve().parent / "golden"
 FLOAT_TOLERANCE = 1e-6
 
 VARIANT_OVERRIDES: dict[str, dict[str, object]] = {
-    "adaptive": {"adaptiveViewCount": True},
     "gated": {"acceptAnyCandidate": False},
-    "gated_single_round": {"acceptAnyCandidate": False, "singleRound": True},
     "gated_no_hold": {"acceptAnyCandidate": False, "holdWeakBox": False},
     "motion_on": {"useMotionScore": True},
-    "single_view_caps": {
-        "singleView": True,
-        "singleViewHorizontalFovCapRad": 70.0 * pi / 180.0,
-        "singleViewVerticalFovCapRad": 50.0 * pi / 180.0,
+    "view_caps": {
+        "viewHorizontalFovCapRad": 70.0 * pi / 180.0,
+        "viewVerticalFovCapRad": 50.0 * pi / 180.0,
     },
-    "direct": {"directMode": True},
-    "mixed": {
-        "fourViewFovCapRad": 60.0 * pi / 180.0,
-        "fusionBoxMode": "reference_adaptive",
-        "holdWeakBox": False,
-        "allowSingleViewTemplate": False,
-        "templateMinConfidence": 0.45,
-        "templateFovScale": 3.0,
-        "fusionSourceMinConfidence": 0.5,
-        "fusionOverlap": 0.6,
-    },
+    "template_off": {"onlineTemplate": False},
+    "legacy_search": {"alignedSearch": False},
 }
 
 
@@ -60,7 +47,6 @@ class GoldenRuntimeTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.defaultConfig = loadConfig(ROOT / "configs" / "default.yaml")
-        cls.legacyConfig = loadConfig(ROOT / "configs" / "tests" / "legacy_off.yaml")
         cls.digests = json.loads((GOLDEN / "digests.json").read_text(encoding="utf-8"))
         cls.defaultTrace = _trace(cls.defaultConfig)
 
@@ -70,16 +56,12 @@ class GoldenRuntimeTest(unittest.TestCase):
     def testDefaultConfigMatchesGolden(self) -> None:
         self._assertMatchesGolden(self.defaultTrace, "default")
 
-    def testLegacyOffConfigMatchesGolden(self) -> None:
-        self._assertMatchesGolden(_trace(self.legacyConfig), "legacy_off")
-
     @pytest.mark.slow
     def testTuningVariantsMatchRecordedDigests(self) -> None:
         # Digests are exact, so they only apply where this platform reproduces the
         # recorded default trace bit for bit.
         if _digest(self.defaultTrace) != self.digests["default"]:
             self.skipTest("platform is not bit-compatible with the recorded golden traces")
-        self.assertEqual(_digest(_trace(self.legacyConfig)), self.digests["legacy_off"])
         for name, overrides in VARIANT_OVERRIDES.items():
             with self.subTest(variant=name):
                 config = replace(

@@ -30,10 +30,10 @@ from track360.core.types import (
     ViewSpec,
 )
 from track360.geometry import makeSphericalPoint
-from track360.runtime.driver import _projectObservation, _projectValidObservations
+from track360.runtime.driver import _projectObservation, _projectValidObservation
 
 TEST_CALIBRATION = ScoreCalibration(
-    format="track360.score-calibration.v1",
+    format="track360.score-calibration.v2",
     checkpointSha256="1" * 64,
     manifestSha256="2" * 64,
     split="calibration",
@@ -42,7 +42,6 @@ TEST_CALIBRATION = ScoreCalibration(
     appearanceWeight=0.8,
     motionWeight=0.2,
     candidateMinScore=0.35,
-    fusionSourceMinConfidence=0.65,
 )
 
 
@@ -208,17 +207,17 @@ class FusedScoreRemappingTest(unittest.TestCase):
         stderr = StringIO()
 
         with redirect_stderr(stderr):
-            projected = _projectValidObservations(
+            projected = _projectValidObservation(
                 frame=frame,
-                views=(view,),
-                observations=(observation,),
+                view=view,
+                observation=observation,
                 predictedMotion=None,
                 geometry=geometry,
                 scoreCalibration=TEST_CALIBRATION,
                 useMotionScore=True,
             )
 
-        self.assertEqual(projected, ())
+        self.assertIsNone(projected)
         self.assertIn("sequence=projection-skip, frame=18, view=7", stderr.getvalue())
 
 

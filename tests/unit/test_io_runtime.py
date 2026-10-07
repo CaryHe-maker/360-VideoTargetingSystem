@@ -46,6 +46,27 @@ class IoRuntimeTest(unittest.TestCase):
                 np.array([0, 0, 0], dtype=np.uint8),
             )
 
+    def testVideoFrameSourceReadsJpegSequence(self) -> None:
+        import cv2
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(2):
+                bgr = np.zeros((8, 16, 3), dtype=np.uint8)
+                bgr[..., 2] = 200  # red channel in BGR order
+                self.assertTrue(cv2.imwrite(str(root / f"{index:06d}.jpg"), bgr))
+
+            source = VideoFrameSource()
+            source.open(str(root))
+            first = source.read()
+            source.close()
+
+            self.assertEqual(source.frameCount, 0)
+            assert first is not None
+            self.assertEqual(first.rgb.shape, (8, 16, 3))
+            self.assertGreater(int(first.rgb[0, 0, 0]), 190)
+            self.assertLess(int(first.rgb[0, 0, 2]), 10)
+
     def testResultSinkWritesAtomicTextFile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "result.txt"

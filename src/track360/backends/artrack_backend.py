@@ -14,9 +14,6 @@ from track360.core.types import (
     BBoxXYWH,
     LocalObservation,
     LocalView,
-    RoutedInferenceTask,
-    RoutedLocalObservation,
-    TaskKey,
     TemplateCommand,
 )
 
@@ -64,47 +61,6 @@ class TrackerBackendImpl(TrackerBackendProtocol):
         self._rememberViews(views, int(command.frameIndex))
         return observations
 
-    def inferTasks(
-        self,
-        tasks: Sequence[RoutedInferenceTask],
-        command: TemplateCommand,
-    ) -> Sequence[RoutedLocalObservation]:
-        """Infer one mixed batch and bind every output to its immutable task identity."""
-        taskKeys = tuple(task.key for task in tasks)
-        if not tasks:
-            return ()
-        if len(taskKeys) != len(set(taskKeys)):
-            raise ProtocolError("routed inference tasks must have unique TaskKeys")
-        if any(task.key.sequenceId != taskKeys[0].sequenceId for task in tasks[1:]):
-            raise ProtocolError("one routed batch cannot cross sequence boundaries")
-        commandFrame = int(command.frameIndex)
-        taskFrames = {int(task.key.frameIndex) for task in tasks}
-        if any(frame not in {commandFrame, commandFrame + 1} for frame in taskFrames):
-            raise ProtocolError("routed tasks may only contain the command frame and its successor")
-        views = tuple(task.view for task in tasks)
-        _validateViewSequence(views)
-        observations = self._inferViews(views, command)
-        formalViews = tuple(task.view for task in tasks if int(task.key.frameIndex) == commandFrame)
-        self._rememberViews(formalViews, commandFrame)
-        return tuple(
-            RoutedLocalObservation(task.key, observation)
-            for task, observation in zip(tasks, observations, strict=True)
-        )
-
-    @staticmethod
-    def routeTasks(
-        outputs: Sequence[RoutedLocalObservation],
-        expectedKeys: Sequence[TaskKey],
-    ) -> tuple[RoutedLocalObservation, ...]:
-        """Restore deterministic TaskKey order and reject duplicates or missing slots."""
-        expected = tuple(expectedKeys)
-        if len(expected) != len(set(expected)):
-            raise ProtocolError("expected routed inference keys must be unique")
-        byKey = {item.key: item for item in outputs}
-        if len(byKey) != len(outputs) or set(byKey) != set(expected):
-            raise ProtocolError("routed inference output keys do not match requested TaskKeys")
-        return tuple(byKey[key] for key in expected)
-
     def _inferViews(
         self,
         views: Sequence[LocalView],
@@ -129,7 +85,22 @@ class TrackerBackendImpl(TrackerBackendProtocol):
         )
         inferenceStartedNs = perf_counter_ns()
         deviceViews = tuple(getattr(view, "deviceRgb", None) for view in views)
-        if all(item is not None for item in deviceViews):
+        priorBoxes = tuple(view.spec.priorBox for view in views)
+        if views and all(box is not None for box in priorBoxes):
+            if any(item is not None for item in deviceViews):
+                raise ProtocolError(
+                    "search priors are not supported with CUDA-resampled views"
+                )
+            predictions = self._artrackBackend.inferBatch(
+                tuple(view.rgb for view in views),
+                templateFeatures,
+                tuple(
+                    (view.spec.bfov.horizontalFovRad, view.spec.bfov.verticalFovRad)
+                    for view in views
+                ),
+                priorBoxes=priorBoxes,
+            )
+        elif all(item is not None for item in deviceViews):
             predictions = self._artrackBackend.inferDeviceBatch(
                 tuple(deviceViews),
                 tuple((view.spec.outputWidthPx, view.spec.outputHeightPx) for view in views),

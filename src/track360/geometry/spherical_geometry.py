@@ -168,6 +168,11 @@ class SphericalGeometryImpl(SphericalGeometryProtocol):
         return bbox
 
 
+def fitBfovToVectors(vectors: NDArray[np.float64]) -> BFoV:
+    """Fit the tightest unrotated BFoV around a set of unit directions."""
+    return _fitBfovFromVectors(np.asarray(vectors, dtype=np.float64))
+
+
 def _fitBfovFromVectors(vectors: NDArray[np.float64]) -> BFoV:
     if vectors.ndim != 2 or vectors.shape[1] != 3 or not np.isfinite(vectors).all():
         raise GeometryError("boundary samples must be a finite array with final dimension 3")
@@ -387,4 +392,4 @@ def _requireViewSpec(spec: ViewSpec) -> None:
         raise GeometryError("view dimensions must be positive")
 
 
-__all__ = ["SphericalGeometryImpl"]
+__all__ = ["SphericalGeometryImpl", "fitBfovToVectors"]

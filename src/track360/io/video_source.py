@@ -13,9 +13,9 @@ import numpy as np
 from track360.core.errors import DecodeError, ProtocolError
 from track360.core.protocols import FrameSource as FrameSourceProtocol
 from track360.core.types import FrameIndex, FramePacket, SequenceId
-from track360.io.image_reader import readRgbImage
+from track360.io.image_reader import RGB_IMAGE_EXTENSIONS, readRgbImage
 
-SUPPORTED_IMAGE_EXTENSIONS = frozenset({".png"})
+SUPPORTED_IMAGE_EXTENSIONS = RGB_IMAGE_EXTENSIONS
 SUPPORTED_VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".mkv", ".avi", ".webm"})
 
 

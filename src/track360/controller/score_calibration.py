@@ -11,7 +11,7 @@ from typing import Any
 
 from track360.core.errors import ConfigError
 
-CALIBRATION_FORMAT = "track360.score-calibration.v1"
+CALIBRATION_FORMAT = "track360.score-calibration.v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +38,6 @@ class ScoreCalibration:
     appearanceWeight: float
     motionWeight: float
     candidateMinScore: float
-    fusionSourceMinConfidence: float
 
     def __post_init__(self) -> None:
         if self.format != CALIBRATION_FORMAT:
@@ -47,7 +46,6 @@ class ScoreCalibration:
             ("appearanceWeight", self.appearanceWeight),
             ("motionWeight", self.motionWeight),
             ("candidateMinScore", self.candidateMinScore),
-            ("fusionSourceMinConfidence", self.fusionSourceMinConfidence),
         ):
             if not isfinite(value) or not 0.0 <= value <= 1.0:
                 raise ConfigError(f"score calibration {name} must be in [0, 1]")
@@ -75,7 +73,6 @@ UNCALIBRATED_STAGE3_SCORE_CALIBRATION = ScoreCalibration(
     appearanceWeight=1.0,
     motionWeight=0.0,
     candidateMinScore=0.50,
-    fusionSourceMinConfidence=0.50,
 )
 
 
@@ -84,7 +81,6 @@ def loadScoreCalibration(
     *,
     checkpointPath: str | Path,
     candidateMinScore: float,
-    fusionSourceMinConfidence: float,
     requireCheckpointHashMatch: bool = True,
 ) -> ScoreCalibration:
     artifactPath = Path(path).expanduser().resolve()
@@ -117,11 +113,7 @@ def loadScoreCalibration(
     singleScore = _mapping("singleScore", root["singleScore"])
     _keys("singleScore", singleScore, {"appearanceWeight", "motionWeight"})
     thresholds = _mapping("thresholds", root["thresholds"])
-    _keys(
-        "thresholds",
-        thresholds,
-        {"candidateMinScore", "fusionSourceMinConfidence"},
-    )
+    _keys("thresholds", thresholds, {"candidateMinScore"})
     fit = _mapping("fit", root["fit"])
     _keys(
         "fit",
@@ -159,10 +151,6 @@ def loadScoreCalibration(
         candidateMinScore=_finiteNumber(
             "thresholds.candidateMinScore", thresholds["candidateMinScore"]
         ),
-        fusionSourceMinConfidence=_finiteNumber(
-            "thresholds.fusionSourceMinConfidence",
-            thresholds["fusionSourceMinConfidence"],
-        ),
     )
     if requireCheckpointHashMatch:
         actualHash = sha256File(checkpointPath)
@@ -173,10 +161,6 @@ def loadScoreCalibration(
             )
     if abs(result.candidateMinScore - candidateMinScore) > 1e-9:
         raise ConfigError("tracking.candidateMinScore does not match calibration artifact")
-    if abs(result.fusionSourceMinConfidence - fusionSourceMinConfidence) > 1e-9:
-        raise ConfigError(
-            "evaluator.fusionSourceMinConfidence does not match calibration artifact"
-        )
     return result
 
 

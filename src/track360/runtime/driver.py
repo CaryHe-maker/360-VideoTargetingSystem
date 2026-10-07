@@ -30,12 +30,13 @@ from track360.controller import (
     scoreViewCenterMotion,
 )
 from track360.core.config import AppConfig, ModelConfig
-from track360.core.errors import DecodeError, GeometryError
+from track360.core.errors import ConfigError, DecodeError, GeometryError
 from track360.core.protocols import FrameSource as FrameSourceProtocol
-from track360.core.protocols import MoreViewsRequired, SphericalGeometry, TrackerBackend
 from track360.core.protocols import ResultSink as ResultSinkProtocol
+from track360.core.protocols import SphericalGeometry, TrackerBackend
 from track360.core.types import (
     BBoxXYWH,
+    BFoV,
     FramePacket,
     LocalObservation,
     LocalView,
@@ -156,6 +157,10 @@ def buildRuntime(
 ) -> RuntimeBundle:
     tuning = config.backendTuning
     seedEverything(config.reproducibility)
+    if tuning.alignedSearch and config.geometry.resampler == "cuda":
+        raise ConfigError(
+            "backendTuning.alignedSearch is not implemented for geometry.resampler: cuda"
+        )
     if geometryFactory is not None:
         geometry = geometryFactory(config.geometry.boundarySamplesPerEdge)
     elif config.geometry.resampler == "cuda":
@@ -185,7 +190,6 @@ def buildRuntime(
             config.scoring.calibrationArtifact,
             checkpointPath=config.model.weights,
             candidateMinScore=config.tracking.candidateMinScore,
-            fusionSourceMinConfidence=config.evaluator.fusionSourceMinConfidence,
             requireCheckpointHashMatch=config.scoring.requireCheckpointHashMatch,
         )
     elif (
@@ -209,7 +213,8 @@ def buildRuntime(
 def runTracking(
     *,
     source: FrameSourceProtocol,
-    initialBox: BBoxXYWH,
+    initialBox: BBoxXYWH | None = None,
+    initialBfov: BFoV | None = None,
     geometry: SphericalGeometry,
     controller: TrackControllerImpl,
     backend: TrackerBackend,
@@ -221,7 +226,11 @@ def runTracking(
     scoreCalibration: ScoreCalibration,
     useMotionScore: bool,
 ) -> int:
-    """Run the sequential tracking pipeline and publish one result per frame."""
+    """Run the sequential tracking pipeline and publish one result per frame.
+
+    The frame-0 target is given as exactly one of ``initialBox`` (ERP pixels) or
+    ``initialBfov``.
+    """
     try:
         initializationStartedNs = _profileNow(profiler)
         _startProcessing(processingTimer)
@@ -230,7 +239,9 @@ def runTracking(
             frame0 = _requireFrame(source.read())
             _startProfileFrame(profiler, int(frame0.frameIndex), decodeStartedNs)
             with _profile(profiler, "controller"):
-                initPlan = controller.buildInitialization(frame0, initialBox)
+                initPlan = controller.buildInitialization(
+                    frame0, initialBox, initialBfov=initialBfov
+                )
             with _profile(profiler, "crop"):
                 templateView = geometry.cropViews(frame0, [initPlan.templateView])[0]
             _recordGeometryProfile(profiler, geometry)
@@ -241,7 +252,7 @@ def runTracking(
         _finishProfileFrame(profiler, initializationStartedNs, batchSizes=[1], forwardCount=0)
         sink.write(initialResult)
         if resultRecorder is not None:
-            resultRecorder.record(frame0, initialResult, stateScore=None, roundCount=0)
+            resultRecorder.record(frame0, initialResult, stateScore=None)
         resultCount = 1
         if recorder is not None:
             recorder.recordLocalRgb(frame0, [templateView])
@@ -281,85 +292,66 @@ def runTracking(
                             )
                             sink.write(result)
                             if resultRecorder is not None:
-                                resultRecorder.record(frame, result, stateScore=None, roundCount=0)
+                                resultRecorder.record(frame, result, stateScore=None)
                             releaseFrame = getattr(geometry, "releaseFrame", None)
                             if callable(releaseFrame):
                                 releaseFrame()
                             resultCount += 1
                             continue
-                        batchSizes: list[int] = []
-                        visualizationBatches: list[
-                            tuple[
-                                tuple[LocalView, ...],
-                                tuple[LocalObservation, ...],
-                                tuple[ProjectedObservation, ...],
-                            ]
-                        ] = []
-                        while True:
-                            try:
-                                with _profile(profiler, "crop"):
-                                    views = tuple(geometry.cropViews(frame, plan.views))
-                                _recordGeometryProfile(profiler, geometry)
-                                batchSizes.append(len(views))
-                                with _profile(profiler, "backend"):
-                                    rawObservations = tuple(
-                                        backend.infer(views, plan.templateCommand)
-                                    )
-                                if recorder is not None and hasattr(
-                                    recorder, "setActiveTemplateFrame"
-                                ):
-                                    recorder.setActiveTemplateFrame(  # type: ignore[attr-defined]
-                                        int(frame.frameIndex),
-                                        getattr(backend, "activeTemplateFrameIndex", 0),
-                                    )
-                                _recordBackendProfile(profiler, backend)
-                                with _profile(profiler, "calibration"):
-                                    observations = calibrateLocalAppearanceProbabilities(
-                                        rawObservations,
-                                        scoreCalibration,
-                                    )
-                                with _profile(profiler, "projection"):
-                                    projected = _projectValidObservations(
-                                        frame=frame,
-                                        views=views,
-                                        observations=observations,
-                                        predictedMotion=plan.predictedMotion,
-                                        geometry=geometry,
-                                        scoreCalibration=scoreCalibration,
-                                        useMotionScore=useMotionScore,
-                                    )
-                                # PostTrainV2.4 keeps recorder inputs host-only at this boundary.
-                                # Recorders only consume the compatibility RGB and view
-                                # metadata.  Never retain CUDA tensors after this round.
-                                if recorder is not None:
-                                    visualizationViews = tuple(
-                                        LocalView(spec=view.spec, rgb=view.rgb, deviceRgb=None)
-                                        for view in views
-                                    )
-                                    visualizationBatches.append(
-                                        (visualizationViews, observations, projected)
-                                    )
-                                with _profile(profiler, "controller"):
-                                    step = controller.consume(plan, projected)
-                            except Exception as error:
-                                # A failed round (including an OOM converted by the
-                                # backend) must not keep its CUDA views alive until the
-                                # next frame.
-                                visualizationBatches.clear()
-                                result = _fallbackFrameResult(
-                                    controller,
-                                    frame,
-                                    error,
-                                    backendRevision=getattr(backend, "templateRevision", None),
+                        forwardCount = 0
+                        visualization: (
+                            tuple[LocalView, LocalObservation, ProjectedObservation | None] | None
+                        ) = None
+                        try:
+                            with _profile(profiler, "crop"):
+                                view = geometry.cropViews(frame, [plan.view])[0]
+                            _recordGeometryProfile(profiler, geometry)
+                            forwardCount = 1
+                            with _profile(profiler, "backend"):
+                                rawObservation = backend.infer((view,), plan.templateCommand)[0]
+                            if recorder is not None and hasattr(recorder, "setActiveTemplateFrame"):
+                                recorder.setActiveTemplateFrame(  # type: ignore[attr-defined]
+                                    int(frame.frameIndex),
+                                    getattr(backend, "activeTemplateFrameIndex", 0),
                                 )
-                                break
-                            if isinstance(step, MoreViewsRequired):
-                                _recordPipelineProfile(profiler, pipelineReader, controller)
-                                plan = step.plan
-                                continue
-                            result = step.result
-                            _recordPipelineProfile(profiler, pipelineReader, controller)
-                            break
+                            _recordBackendProfile(profiler, backend)
+                            with _profile(profiler, "calibration"):
+                                observation = calibrateLocalAppearanceProbabilities(
+                                    (rawObservation,),
+                                    scoreCalibration,
+                                )[0]
+                            with _profile(profiler, "projection"):
+                                projected = _projectValidObservation(
+                                    frame=frame,
+                                    view=view,
+                                    observation=observation,
+                                    predictedMotion=plan.predictedMotion,
+                                    geometry=geometry,
+                                    scoreCalibration=scoreCalibration,
+                                    useMotionScore=useMotionScore,
+                                )
+                            # PostTrainV2.4 keeps recorder inputs host-only at this boundary.
+                            # Recorders only consume the compatibility RGB and view
+                            # metadata.  Never retain CUDA tensors after this frame.
+                            if recorder is not None:
+                                visualization = (
+                                    LocalView(spec=view.spec, rgb=view.rgb, deviceRgb=None),
+                                    observation,
+                                    projected,
+                                )
+                            with _profile(profiler, "controller"):
+                                result = controller.consume(plan, projected)
+                        except Exception as error:
+                            # A failed frame (including an OOM converted by the backend)
+                            # must not keep its CUDA view alive until the next frame.
+                            visualization = None
+                            result = _fallbackFrameResult(
+                                controller,
+                                frame,
+                                error,
+                                backendRevision=getattr(backend, "templateRevision", None),
+                            )
+                        _recordPipelineProfile(profiler, pipelineReader, controller)
                 finally:
                     _stopProcessing(processingTimer)
                 if frame is None:
@@ -369,18 +361,19 @@ def runTracking(
                 _finishProfileFrame(
                     profiler,
                     iterationStartedNs,
-                    batchSizes=batchSizes,
-                    forwardCount=len(batchSizes),
+                    batchSizes=[1] * forwardCount,
+                    forwardCount=forwardCount,
                 )
-                if recorder is not None:
-                    for views, observations, projected in visualizationBatches:
-                        recorder.recordLocalRgb(frame, views)
-                        recorder.recordBackendBoxes(frame, views, observations)
-                        recorder.recordGeometryBoxes(frame, projected)
-                visualizationBatches.clear()
-                # Do not let the last round's CUDA-backed views survive into the
-                # next iteration through Python locals.
-                views = rawObservations = observations = projected = step = None
+                if recorder is not None and visualization is not None:
+                    hostView, observation, projected = visualization
+                    recorder.recordLocalRgb(frame, (hostView,))
+                    recorder.recordBackendBoxes(frame, (hostView,), (observation,))
+                    recorder.recordGeometryBoxes(
+                        frame, () if projected is None else (projected,)
+                    )
+                # Do not let this frame's CUDA-backed view survive into the next
+                # iteration through Python locals.
+                view = observation = projected = visualization = None
                 sink.write(result)
                 if resultRecorder is not None:
                     stateObservation = controller.lastStateObservation
@@ -390,17 +383,10 @@ def runTracking(
                         and stateObservation.frameIndex == frame.frameIndex
                         else None
                     )
-                    roundCount = (
-                        stateObservation.attemptIndex + 1
-                        if stateObservation is not None
-                        and stateObservation.frameIndex == frame.frameIndex
-                        else None
-                    )
                     resultRecorder.record(
                         frame,
                         result,
                         stateScore=stateScore,
-                        roundCount=roundCount,
                     )
                 releaseFrame = getattr(geometry, "releaseFrame", None)
                 if callable(releaseFrame):
@@ -521,38 +507,35 @@ def _projectObservation(
     )
 
 
-def _projectValidObservations(
+def _projectValidObservation(
     *,
     frame: FramePacket,
-    views: tuple[LocalView, ...],
-    observations: tuple[LocalObservation, ...],
+    view: LocalView,
+    observation: LocalObservation,
     predictedMotion: MotionState3D | None,
     geometry: SphericalGeometry,
     scoreCalibration: ScoreCalibration,
     useMotionScore: bool,
-) -> tuple[ProjectedObservation, ...]:
-    projected: list[ProjectedObservation] = []
-    for view, observation in zip(views, observations, strict=True):
-        try:
-            projected.append(
-                _projectObservation(
-                    frame=frame,
-                    view=view,
-                    observation=observation,
-                    predictedMotion=predictedMotion,
-                    geometry=geometry,
-                    scoreCalibration=scoreCalibration,
-                    useMotionScore=useMotionScore,
-                )
-            )
-        except GeometryError as error:
-            print(
-                "[runtime] skipped invalid spherical projection: "
-                f"sequence={frame.sequenceId}, frame={int(frame.frameIndex)}, "
-                f"view={view.spec.viewId}, reason={error}",
-                file=sys.stderr,
-            )
-    return tuple(projected)
+) -> ProjectedObservation | None:
+    """Project the local box onto the sphere; ``None`` when it has no valid projection."""
+    try:
+        return _projectObservation(
+            frame=frame,
+            view=view,
+            observation=observation,
+            predictedMotion=predictedMotion,
+            geometry=geometry,
+            scoreCalibration=scoreCalibration,
+            useMotionScore=useMotionScore,
+        )
+    except GeometryError as error:
+        print(
+            "[runtime] skipped invalid spherical projection: "
+            f"sequence={frame.sequenceId}, frame={int(frame.frameIndex)}, "
+            f"view={view.spec.viewId}, reason={error}",
+            file=sys.stderr,
+        )
+        return None
 
 
 def _scaleScore(

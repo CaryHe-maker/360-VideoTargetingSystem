@@ -5,7 +5,7 @@
 | 文件 | 职责 |
 |---|---|
 | `backends/artrack_model.py` | `PyTorchARTrackV2Session`：加载官方网络、模板 / 搜索裁剪、坐标解码；`ARTrackBackend`：批量输入输出校验 |
-| `backends/artrack_backend.py` | `TrackerBackendImpl`：实现 `core.protocols.TrackerBackend`，把模板 revision、局部框和控制器的视图事务串起来 |
+| `backends/artrack_backend.py` | `TrackerBackendImpl`：实现 `core.protocols.TrackerBackend`，把模板 revision、局部框和控制器的模板命令串起来 |
 | `backends/template_cache.py` | 模板缓存：anchor 模板与 recent 模板、revision 管理 |
 | `backends/observation.py` | 把模型预测转换为 `LocalObservation` |
 | `third_party/artrackv2/` | 上游模型代码的推理子集（ViT 主干、配置） |
@@ -13,7 +13,7 @@
 ## 推理流程
 
 1. **初始化**：在第 0 帧的模板视图上，以目标框为中心裁出 128×128 模板并编码；
-2. **搜索**：对每个局部透视视图，以模板框位置为中心裁出 256×256 的搜索区域；同一帧的所有视图组成**一个 batch**，一次前向；
+2. **搜索**：在这一帧的局部透视视图上，以模板框位置为中心裁出 256×256 的搜索区域，一次前向（`fullViewSearch: true` 时不再裁剪，整个视图就是搜索区域）；
 3. **解码**：网络以 400 个 bin 自回归输出框坐标，按搜索裁剪的缩放系数映射回局部视图像素坐标并裁剪到视图范围内；
 4. **分数**：使用网络 score head 的 sigmoid 输出。这个分数在当前权重上大多集中在 0.5 附近，更适合作为排序信号，而不是校准过的概率；
 5. **回投**：局部框交给 Geometry 回投到球面，后续由 Controller 处理。
@@ -36,8 +36,7 @@
 | 方法 | 说明 |
 |---|---|
 | `initialize(template, templateBox)` | 用第 0 帧的模板视图和框初始化 |
-| `infer(views, command)` | 对一组局部视图推理，返回与视图顺序一致的 `LocalObservation`；`command` 指定模板保持或更新 |
-| `inferTasks(tasks, command)` | 带路由键的批量推理，结果按 `TaskKey` 对齐 |
+| `infer(views, command)` | 对一组局部视图推理，返回与视图顺序一致的 `LocalObservation`；`command` 指定模板保持或更新。运行时每帧只传一个视图 |
 | `close()` | 释放显存和其他资源 |
 
 接入步骤：

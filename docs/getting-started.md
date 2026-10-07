@@ -38,8 +38,9 @@ commands:
 track360 track --input path/to/video.mp4 --init-box 1200,640,180,140 --output outputs/result.txt
 ```
 
-- `--input`：视频文件或图像序列目录（目录模式可加 `--recursive`）。
+- `--input`：视频文件或图像序列目录（PNG / JPG，目录模式可加 `--recursive`）。读视频文件需要系统里装有 ffmpeg。
 - `--init-box`：第 0 帧目标的 ERP 像素框 `x,y,width,height`。
+- `--init-bfov`：第 0 帧目标的球面框 `clon,clat,fov_h,fov_v`（度，360VOT 的约定：向右、向上为正）。与 `--init-box` 二选一。
 - `--output`：结果文本路径。每帧一行 `x,y,width,height`（ERP 像素坐标）；跨缝目标的 `x + width` 可以超过图像宽度。
 
 ### AirSim360 数据

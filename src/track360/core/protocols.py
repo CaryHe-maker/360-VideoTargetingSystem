@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from track360.core.types import (
@@ -17,28 +16,12 @@ from track360.core.types import (
     LocalView,
     MotionState3D,
     ProjectedObservation,
-    RoutedInferenceTask,
-    RoutedLocalObservation,
     SearchPlan,
     SphericalPoint,
     TemplateCommand,
     TrackResult,
     ViewSpec,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class MoreViewsRequired:
-    """A bounded same-frame escalation request from the controller."""
-
-    plan: SearchPlan
-
-
-@dataclass(frozen=True, slots=True)
-class FrameCommitted:
-    """The single final result committed for a frame transaction."""
-
-    result: TrackResult
 
 
 @runtime_checkable
@@ -116,23 +99,19 @@ class TrackerBackend(Protocol):
         command: TemplateCommand,
     ) -> Sequence[LocalObservation]: ...
 
-    def inferTasks(
-        self,
-        tasks: Sequence[RoutedInferenceTask],
-        command: TemplateCommand,
-    ) -> Sequence[RoutedLocalObservation]: ...
-
     def close(self) -> None: ...
 
 
 @runtime_checkable
 class TrackController(Protocol):
-    """Plan searches and atomically commit ordered tracking state."""
+    """Plan one search view per frame and commit ordered tracking state."""
 
     def buildInitialization(
         self,
         frame: FramePacket,
-        initialBox: BBoxXYWH,
+        initialBox: BBoxXYWH | None = None,
+        *,
+        initialBfov: BFoV | None = None,
     ) -> InitializationPlan: ...
 
     def commitInitialization(
@@ -140,19 +119,13 @@ class TrackController(Protocol):
         plan: InitializationPlan,
     ) -> TrackResult: ...
 
-    def plan(self, frame: FramePacket) -> SearchPlan: ...
-
-    def update(
-        self,
-        plan: SearchPlan,
-        observations: Sequence[ProjectedObservation],
-    ) -> TrackResult: ...
+    def beginFrame(self, frame: FramePacket) -> SearchPlan: ...
 
     def consume(
         self,
         plan: SearchPlan,
-        observations: Sequence[ProjectedObservation],
-    ) -> MoreViewsRequired | FrameCommitted: ...
+        observation: ProjectedObservation | None,
+    ) -> TrackResult: ...
 
 
 @runtime_checkable
@@ -210,8 +183,6 @@ __all__ = [
     "AirSim360Record",
     "FrameSource",
     "MotionEstimator",
-    "FrameCommitted",
-    "MoreViewsRequired",
     "PseudoTrackBuilder",
     "ResultSink",
     "SphericalGeometry",

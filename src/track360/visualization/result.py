@@ -22,12 +22,10 @@ class ResultVisualizationRecorder:
         result: TrackResult,
         *,
         stateScore: float | None = None,
-        roundCount: int | None = None,
     ) -> Path:
         outputPath = self.outputRoot / f"frame_{int(frame.frameIndex):06d}.png"
         scoreLabel = "stateScore=N/A" if stateScore is None else f"stateScore={stateScore:.4f}"
-        roundsLabel = "rounds=N/A" if roundCount is None else f"rounds={roundCount}"
-        label = f"state={result.status.name}/{roundsLabel}/{scoreLabel}"
+        label = f"state={result.status.name}/{scoreLabel}"
         return writeRgbPng(
             outputPath,
             drawBoxRgb(
