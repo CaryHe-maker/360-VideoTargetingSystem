@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, replace
 from math import asin, atan2, tan
 from typing import TYPE_CHECKING
@@ -16,7 +17,7 @@ from track360.controller.state_model import (
     TransitionDecision,
 )
 from track360.controller.template_policy import TemplateDecision, TemplatePolicy
-from track360.controller.view_planner import ViewPlanner
+from track360.controller.view_planner import TRAJECTORY_LENGTH, ViewPlanner
 from track360.core.config import (
     AppConfig,
     BackendTuningConfig,
@@ -117,6 +118,8 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._initialBox: BBoxXYWH | None = None
         self._currentBox: BBoxXYWH | None = None
         self._currentBfov: BFoV | None = None
+        # The target's BFoV after each of the last frames, oldest first.
+        self._trajectory: deque[BFoV] = deque(maxlen=TRAJECTORY_LENGTH)
         self._pendingTemplate = TemplateDecision(TemplateCommandKind.KEEP)
         self._pending: _PendingFrame | None = None
         self._initialPlan: InitializationPlan | None = None
@@ -211,6 +214,8 @@ class TrackControllerImpl(TrackControllerProtocol):
                 self._lastFrame.timestampNs,
             )
         self._stateMachine.initialize()
+        self._trajectory.clear()
+        self._trajectory.extend([self._currentBfov] * TRAJECTORY_LENGTH)
         self._initialized = True
         self._initialPlan = None
         self._stateRevision = 0
@@ -259,6 +264,7 @@ class TrackControllerImpl(TrackControllerProtocol):
                 prediction.center,
                 targetBfov.horizontalFovRad,
                 targetBfov.verticalFovRad,
+                tuple(self._trajectory),
             ),
             templateCommand=TemplateCommand(
                 kind=self._pendingTemplate.kind,
@@ -434,6 +440,8 @@ class TrackControllerImpl(TrackControllerProtocol):
             self._stableFrames,
             evaluation,
         )
+        assert self._currentBfov is not None
+        self._trajectory.append(self._currentBfov)
         self._stateRevision = pending.plan.stateRevision
         self._lastFrameIndex = int(pending.frame.frameIndex)
         self._lastFrame = pending.frame

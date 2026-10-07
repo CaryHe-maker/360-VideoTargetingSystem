@@ -29,6 +29,7 @@ tracking:
   contextMarginRatio: 0.15
   maxPredictionHorizon: 3
 backendTuning:
+  sequenceModel: true
   acceptAnyCandidate: true
   viewHorizontalFovCapDeg: 90.0
   viewVerticalFovCapDeg: 90.0

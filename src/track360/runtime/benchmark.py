@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -18,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from track360.backends import ARTrackSession, PyTorchARTrackV2Session
+from track360.backends import ARTrackSession, createArtrackSession
 from track360.core.config import AppConfig, ModelConfig
 from track360.core.errors import DecodeError, ProtocolError
 from track360.core.protocols import SphericalGeometry
@@ -150,9 +151,7 @@ def runBenchmark(
     session = (
         sessionFactory(config.model)
         if sessionFactory is not None
-        else PyTorchARTrackV2Session(
-            config.model, fullViewSearch=config.backendTuning.fullViewSearch
-        )
+        else createArtrackSession(config)
     )
     reports: list[SequenceReport] = []
     try:
@@ -330,7 +329,8 @@ def _trackErpDirect(
     """Baseline B0: the plain tracker loop on full ERP frames.
 
     The search region follows the previous box in image coordinates.  Nothing handles
-    the seam or the distortion, which is the point of the baseline.
+    the seam or the distortion, which is the point of the baseline.  A sequence-level
+    session also gets the previous boxes, as the upstream tracker feeds them.
     """
     geometry = SphericalGeometryImpl(boundarySamplesPerEdge=config.geometry.boundarySamplesPerEdge)
     frame = _requireFrame(source.read())
@@ -338,9 +338,15 @@ def _trackErpDirect(
     state = _largerSideOfSeam(source.sequence.initialBbox(), width)
     template = session.encodeTemplate(frame.rgb, state)
     collector.write(_erpResult(frame, state, 1.0, geometry, ResultSource.INITIAL))
+    historyLength = int(getattr(session, "trajectoryLength", 0))
+    history: deque[BBoxXYWH] = deque([state] * historyLength, maxlen=max(1, historyLength))
     while (frame := source.read()) is not None:
-        prediction = session.inferBatch((frame.rgb,), (template,), priorBoxes=(state,))[0]
+        extra = {"trajectories": (tuple(history),)} if historyLength else {}
+        prediction = session.inferBatch(
+            (frame.rgb,), (template,), priorBoxes=(state,), **extra
+        )[0]
         state = prediction.bbox
+        history.append(state)
         collector.write(
             _erpResult(
                 frame, state, prediction.modelScore, geometry, ResultSource.OBSERVED_CONFIRMED

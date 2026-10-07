@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import perf_counter_ns
 from types import ModuleType
@@ -61,6 +61,8 @@ class ARTrackTemplate:
     # controller changes perspective FOV between frames.
     sourceHorizontalFovRad: float | None = None
     sourceVerticalFovRad: float | None = None
+    # Per-target state a session keeps between frames; copies of a template share it.
+    memory: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
 
 @runtime_checkable
@@ -84,6 +86,11 @@ class ARTrackBackend:
             raise ProtocolError("session must implement the ARTrackSession protocol")
         self._session = session
         self._closed = False
+
+    @property
+    def trajectoryLength(self) -> int:
+        """Previous boxes the session reads with every image; 0 for frame-level models."""
+        return int(getattr(self._session, "trajectoryLength", 0))
 
     @property
     def supportsOnlineTemplates(self) -> bool:
@@ -147,11 +154,14 @@ class ARTrackBackend:
         templateFeatures: Sequence[object],
         imageFovs: Sequence[tuple[float, float]] | None = None,
         priorBoxes: Sequence[BBoxXYWH] | None = None,
+        trajectories: Sequence[Sequence[BBoxXYWH]] | None = None,
     ) -> tuple[ARTrackPrediction, ...]:
         self._requireOpen()
         images = tuple(rgbs)
         if priorBoxes is not None and len(priorBoxes) != len(images):
             raise ProtocolError("ARTrackV2 prior boxes must match the image batch")
+        if trajectories is not None and len(trajectories) != len(images):
+            raise ProtocolError("ARTrackV2 trajectories must match the image batch")
         if imageFovs is not None and len(imageFovs) != len(images):
             raise ProtocolError("ARTrackV2 image FOV metadata must match the image batch")
         for rgb in images:
@@ -162,9 +172,15 @@ class ARTrackBackend:
             raise ProtocolError("ARTrackV2 inference requires at least one template feature")
         try:
             if priorBoxes is not None:
+                # Only sequence-level sessions take trajectories.
+                extra = {} if trajectories is None else {"trajectories": trajectories}
                 predictions = tuple(
                     self._session.inferBatch(
-                        images, templateFeatures, imageFovs=imageFovs, priorBoxes=priorBoxes
+                        images,
+                        templateFeatures,
+                        imageFovs=imageFovs,
+                        priorBoxes=priorBoxes,
+                        **extra,
                     )
                 )
             elif imageFovs and callable(getattr(self._session, "inferBatchWithFovs", None)):

@@ -24,10 +24,11 @@
 
 ## backendTuning
 
-ARTrackV2 的原始分数集中在 0.5 附近，不是校准过的概率，所以 `tracking.candidateMinScore` 这类按概率设定的门槛不能直接使用。`backendTuning` 把针对这个后端的调整集中在一处。
+`backendTuning` 把针对 ARTrackV2 后端的开关和阈值集中在一处。分数的含义取决于 `sequenceModel`：序列级用法下它是模型对“预测框与真值的 IoU”的估计；帧级用法下它集中在 0.5 附近、与 IoU 无关（[评测记录](evaluation-log.md) E008）。`tracking.candidateMinScore` 和 `templateMinConfidence` 的现有取值都是按帧级用法定的，序列级用法下还没有重新确定。
 
 | 字段 | 默认值 | 作用 |
 |---|---|---|
+| `sequenceModel` | `true` | 按序列级模型运行 ARTrackV2：喂入前 7 帧的轨迹，使用模型自己更新的外观特征，见 [Backends](modules/backends.md#这份权重是序列级模型)。`false` 是 2026-10-07 之前的帧级用法，只用于对照 |
 | `acceptAnyCandidate` | `true` | 只要这一帧有框就作为测量接受；为 `false` 时分数低于 `candidateMinScore` 的框不被接受 |
 | `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg` | `90.0` | 搜索视图的视场上限；`null` 表示只受 `geometry.maxFovDeg` 限制。`alignedSearch` 下视图是正方形，取两者中较小的 |
 | `fullViewSearch` | `false` | 只在 `alignedSearch: false` 时有意义：把整个局部视图缩放后作为搜索区域，跳过 ARTrackV2 自己的 4 倍搜索裁剪 |
@@ -35,7 +36,7 @@ ARTrackV2 的原始分数集中在 0.5 附近，不是校准过的概率，所�
 | `alignedMinFovDeg` | `2.0` | `alignedSearch` 下视图视场的下限，代替 `geometry.minFovDeg` |
 | `useMotionScore` | `false` | 用“外观 + 运动”加权得到 SingleScore；为 `false` 时只用外观分。没有校准产物时运动权重为 0，此开关不影响结果 |
 | `templateFovScale` | `2.5` | 模板视图视场相对目标角尺寸的倍数（≥ 1） |
-| `onlineTemplate` | `true` | 保留第 0 帧 anchor 的同时允许更新 recent / stable 模板 |
+| `onlineTemplate` | `true` | 保留第 0 帧 anchor 的同时允许更新 recent / stable 模板。只在 `sequenceModel: false` 时起作用 |
 | `templateMinConfidence` | `0.515` | 允许更新模板的最低分 |
 | `holdWeakBox` | `true` | 测量未被接受且目标面积 ≥ 画面的 10% 时，保持上一帧的框 |
 

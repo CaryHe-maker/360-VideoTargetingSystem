@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import replace
 from math import atan, pi, sqrt, tan
 
 from track360.core.config import BackendTuningConfig, GeometryConfig, TrackingConfig
 from track360.core.types import BBoxXYWH, BFoV, SphericalPoint, ViewSpec
+from track360.geometry.projection_math import cameraBasis
 
 # The search view spans this many times the predicted target extent on each axis.
 SEARCH_FOV_SCALE = 3.0
@@ -15,7 +18,11 @@ ALIGNED_SEARCH_FACTOR = 4.0
 # Targets larger than this are sized as if they were this large when the backend's
 # search crop is laid out.  A perspective view cannot hold such targets anyway.
 PRIOR_MAX_SIZE_RAD = 150.0 * pi / 180.0
+# Directions closer than this to the image plane's horizon project to its far edge.
+_MIN_DEPTH = 0.05
 SEARCH_VIEW_ID = 0
+# Previous target boxes handed to the backend with every view (ARTrackV2 reads seven).
+TRAJECTORY_LENGTH = 7
 
 
 class ViewPlanner:
@@ -36,8 +43,29 @@ class ViewPlanner:
         center: SphericalPoint,
         horizontalSizeRad: float,
         verticalSizeRad: float,
+        history: Sequence[BFoV] = (),
     ) -> ViewSpec:
-        """Return the search view for a target of the given predicted angular size."""
+        """Return the search view for a target of the given predicted angular size.
+
+        ``history`` holds the target's previous BFoVs, oldest first; they are laid
+        out in the view's pixels as the trajectory of sequence-level backends.
+        """
+        view = self._searchView(center, horizontalSizeRad, verticalSizeRad)
+        if not history:
+            return view
+        return replace(
+            view,
+            trajectory=tuple(
+                localBoxOfBfov(view, bfov) for bfov in history[-TRAJECTORY_LENGTH:]
+            ),
+        )
+
+    def _searchView(
+        self,
+        center: SphericalPoint,
+        horizontalSizeRad: float,
+        verticalSizeRad: float,
+    ) -> ViewSpec:
         if self._tuning.alignedSearch:
             # A square view with isotropic pixels whose side is
             # ``ALIGNED_SEARCH_FACTOR`` times the geometric-mean target size, as in
@@ -121,6 +149,42 @@ class ViewPlanner:
         )
 
 
+def localBoxOfBfov(view: ViewSpec, bfov: BFoV) -> BBoxXYWH:
+    """Where a BFoV falls in a perspective view, as a box in the view's pixels.
+
+    The box is centered on the projection of the BFoV center and sized as the BFoV
+    would be at the view center, which is accurate for the small offsets between
+    consecutive frames.  A direction at or behind the image plane's horizon is placed
+    far outside the view on the side it lies; callers clamp it.
+    """
+    forward, right, up = cameraBasis(view.bfov)
+    direction = (bfov.center.x, bfov.center.y, bfov.center.z)
+    depth = float(sum(a * b for a, b in zip(direction, forward, strict=True)))
+    across = float(sum(a * b for a, b in zip(direction, right, strict=True)))
+    upward = float(sum(a * b for a, b in zip(direction, up, strict=True)))
+    if depth < _MIN_DEPTH:
+        # Keep only the side the direction lies on; straight behind counts as to the right.
+        lateral = sqrt(across * across + upward * upward)
+        across, upward = (across / lateral, upward / lateral) if lateral > 1e-9 else (1.0, 0.0)
+        depth = _MIN_DEPTH
+    halfViewX = tan(view.bfov.horizontalFovRad / 2.0)
+    halfViewY = tan(view.bfov.verticalFovRad / 2.0)
+    centerX = view.outputWidthPx / 2.0 * (1.0 + across / depth / halfViewX)
+    centerY = view.outputHeightPx / 2.0 * (1.0 - upward / depth / halfViewY)
+    widthPx = view.outputWidthPx * _halfTangent(
+        min(bfov.horizontalFovRad, PRIOR_MAX_SIZE_RAD)
+    ) / halfViewX
+    heightPx = view.outputHeightPx * _halfTangent(
+        min(bfov.verticalFovRad, PRIOR_MAX_SIZE_RAD)
+    ) / halfViewY
+    return BBoxXYWH(
+        xPx=centerX - widthPx / 2.0,
+        yPx=centerY - heightPx / 2.0,
+        widthPx=widthPx,
+        heightPx=heightPx,
+    )
+
+
 def _squareFov(horizontalSizeRad: float, verticalSizeRad: float, factor: float) -> float:
     """FOV of a square view ``factor`` times the target's mean size on the image plane."""
     halfWidth = _halfTangent(horizontalSizeRad)
@@ -137,4 +201,11 @@ def clampFov(value: float, geometry: GeometryConfig) -> float:
     return min(geometry.maxFovRad, max(geometry.minFovRad, value))
 
 
-__all__ = ["SEARCH_FOV_SCALE", "SEARCH_VIEW_ID", "ViewPlanner", "clampFov"]
+__all__ = [
+    "SEARCH_FOV_SCALE",
+    "SEARCH_VIEW_ID",
+    "TRAJECTORY_LENGTH",
+    "ViewPlanner",
+    "clampFov",
+    "localBoxOfBfov",
+]

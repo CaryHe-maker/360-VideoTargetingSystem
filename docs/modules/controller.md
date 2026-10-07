@@ -23,6 +23,7 @@ Controller 决定“看哪里、是否接受这一帧的框、下一帧处于什
 - 边长是目标平均尺寸 `sqrt(宽 × 高)` 的 4 倍（ARTrackV2 训练时的搜索倍数），在成像平面上计算。`width` / `height` 是预测的目标角尺寸，运动模型还没有给出尺寸时用上一次提交的 BFoV；
 - 视场下限是 `alignedMinFovDeg`（2°），上限是 `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg`（默认 90°）和 `geometry.maxFovDeg`；
 - 带一个 `priorBox`：目标在视图里预计的位置和大小。后端以它为中心裁 4 倍的搜索区域。视场没有被上限截住时，这个裁剪正好是整个视图；目标很大（约 28° 以上）、视场被截住时，裁剪范围超出视图，超出部分补黑边，目标在搜索区域里仍然占 1/4 左右；
+- 带一个 `trajectory`：目标在前 7 帧的框，换算成这一帧视图里的像素坐标，最旧的在前。控制器保存最近 7 帧提交的 BFoV（初始化时是 7 份初始目标），每帧把它们投影到新视图里：中心按透视投影计算，大小按“位于视图中心时”的大小计算。落在视图外甚至视图背面的历史框也照样给出，由后端限制到它的坐标范围。序列级后端把它作为轨迹提示；
 - 输出尺寸为 `geometry.viewWidthPx × viewHeightPx`（256×256）。
 
 模板视图（`ViewPlanner.templateBfov()`）同样是正方形，边长是目标平均尺寸的 `templateFovScale` 倍。
@@ -85,7 +86,9 @@ StateScore < LT        → UNCERTAIN（记录 HARD_MISS）
 
 ## 模板策略
 
-模板固定使用第 0 帧初始化时的 anchor。`onlineTemplate: true`（默认）时，分数不低于 `templateMinConfidence` 的观测可以刷新 recent 模板（大约每两帧一次），连续稳定 `stableFramesBeforeUpdate` 帧后刷新 stable 模板；anchor 始终保留，防止目标漂移后模板被完全污染。
+默认的序列级模型自己每帧更新外观特征，框架不做模板更新，本节只适用于 `sequenceModel: false`。
+
+模板固定使用第 0 帧初始化时的 anchor。`onlineTemplate: true` 时，分数不低于 `templateMinConfidence` 的观测可以刷新 recent 模板（大约每两帧一次），连续稳定 `stableFramesBeforeUpdate` 帧后刷新 stable 模板；anchor 始终保留，防止目标漂移后模板被完全污染。
 
 ## 逐帧协议
 

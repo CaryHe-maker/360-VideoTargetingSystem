@@ -119,6 +119,7 @@ class BackendTuningConfig:
     applies.
     """
 
+    sequenceModel: bool = True
     acceptAnyCandidate: bool = True
     viewHorizontalFovCapRad: float | None = pi / 2.0
     viewVerticalFovCapRad: float | None = pi / 2.0
@@ -133,6 +134,7 @@ class BackendTuningConfig:
 
     def __post_init__(self) -> None:
         for name in (
+            "sequenceModel",
             "acceptAnyCandidate",
             "fullViewSearch",
             "alignedSearch",
@@ -283,6 +285,7 @@ def loadConfig(path: str | Path) -> AppConfig:
         root,
         "backendTuning",
         {
+            "sequenceModel",
             "acceptAnyCandidate",
             "viewHorizontalFovCapDeg",
             "viewVerticalFovCapDeg",
@@ -383,6 +386,9 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
         ),
         backendTuning=BackendTuningConfig(
+            sequenceModel=_requireBool(
+                "backendTuning.sequenceModel", tuningRaw["sequenceModel"]
+            ),
             acceptAnyCandidate=_requireBool(
                 "backendTuning.acceptAnyCandidate", tuningRaw["acceptAnyCandidate"]
             ),

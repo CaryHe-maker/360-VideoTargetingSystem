@@ -31,6 +31,8 @@ VARIANT_OVERRIDES: dict[str, dict[str, object]] = {
     },
     "template_off": {"onlineTemplate": False},
     "legacy_search": {"alignedSearch": False},
+    # The fake backend is frame-level either way; this turns template updates back on.
+    "frame_model": {"sequenceModel": False},
 }
 
 

@@ -14,6 +14,7 @@ from track360.controller import (
     scoreMotionConsistency,
 )
 from track360.controller.state_model import ScoreGroup, TransitionReason
+from track360.controller.view_planner import localBoxOfBfov
 from track360.core.config import loadConfig
 from track360.core.errors import ConfigError, ProtocolError
 from track360.core.types import (
@@ -26,6 +27,7 @@ from track360.core.types import (
     SequenceId,
     TemplateCommandKind,
     TrackStatus,
+    ViewSpec,
 )
 from track360.geometry import SphericalGeometryImpl, makeSphericalPoint
 
@@ -282,6 +284,45 @@ class ViewPlannerTest(unittest.TestCase):
             replace(self.config.backendTuning, alignedSearch=True, fullViewSearch=True)
 
 
+class LocalBoxOfBfovTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.view = ViewSpec(
+            0, BFoV(makeSphericalPoint(0.3, -0.2), math.radians(40.0), math.radians(40.0)), 256, 256
+        )
+
+    def testABfovAtTheViewCenterIsCenteredAndSizedOnTheImagePlane(self) -> None:
+        box = localBoxOfBfov(
+            self.view, BFoV(self.view.bfov.center, math.radians(10.0), math.radians(5.0))
+        )
+
+        self.assertAlmostEqual(box.xPx + box.widthPx / 2.0, 128.0)
+        self.assertAlmostEqual(box.yPx + box.heightPx / 2.0, 128.0)
+        self.assertAlmostEqual(
+            box.widthPx, 256.0 * math.tan(math.radians(5.0)) / math.tan(math.radians(20.0))
+        )
+        self.assertAlmostEqual(
+            box.heightPx, 256.0 * math.tan(math.radians(2.5)) / math.tan(math.radians(20.0))
+        )
+
+    def testOffsetsFollowTheViewAxesAndAgreeWithTheGeometryBackProjection(self) -> None:
+        geometry = SphericalGeometryImpl()
+        local = BBoxXYWH(150.0, 60.0, 40.0, 30.0)
+        box = localBoxOfBfov(self.view, geometry.localBoxToBfov(local, self.view))
+
+        self.assertAlmostEqual(box.xPx + box.widthPx / 2.0, 170.0, delta=1.0)
+        self.assertAlmostEqual(box.yPx + box.heightPx / 2.0, 75.0, delta=1.0)
+        self.assertAlmostEqual(box.widthPx, 40.0, delta=2.0)
+        self.assertAlmostEqual(box.heightPx, 30.0, delta=2.0)
+
+    def testADirectionBehindTheViewLandsFarOutsideWithFiniteCoordinates(self) -> None:
+        behind = makeSphericalPoint(0.3 - math.pi, 0.2)
+        box = localBoxOfBfov(self.view, BFoV(behind, 0.2, 0.2))
+
+        self.assertTrue(all(math.isfinite(v) for v in (box.xPx, box.yPx)))
+        center = (box.xPx + box.widthPx / 2.0, box.yPx + box.heightPx / 2.0)
+        self.assertTrue(abs(center[0] - 128.0) > 256.0 or abs(center[1] - 128.0) > 256.0)
+
+
 class ControllerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = loadConfig(ROOT / "configs" / "default.yaml")
@@ -431,7 +472,12 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(controller.beginFrame(_frame(2)).frameIndex, FrameIndex(2))
 
     def testConfidentObservationSchedulesARecentTemplateUpdate(self) -> None:
-        controller = self._controller()
+        controller = self._controller(
+            replace(
+                self.config,
+                backendTuning=replace(self.config.backendTuning, sequenceModel=False),
+            )
+        )
         controller.consume(controller.beginFrame(_frame(1)), _observation(0.95))
         controller.consume(controller.beginFrame(_frame(2)), _observation(0.95))
 
@@ -441,6 +487,33 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(command.localBox, _observation(0.95).localBox)
         self.assertEqual(command.expectedRevision, 3)
 
+    def testPlansCarryTheLastSevenTargetBoxesInViewPixels(self) -> None:
+        controller = self._controller()
+        first = controller.beginFrame(_frame(1))
+
+        # Before any measurement the history is the initial target, seven times,
+        # and the view is centered on it.
+        self.assertEqual(len(first.view.trajectory), 7)
+        self.assertEqual(len(set(first.view.trajectory)), 1)
+        box = first.view.trajectory[0]
+        self.assertAlmostEqual(box.xPx + box.widthPx / 2.0, 128.0, places=6)
+        self.assertAlmostEqual(box.yPx + box.heightPx / 2.0, 128.0, places=6)
+        assert first.view.priorBox is not None
+        self.assertAlmostEqual(box.widthPx, first.view.priorBox.widthPx, places=5)
+
+        moved = BFoV(makeSphericalPoint(0.2, 0.0), 0.35, 0.25)
+        controller.consume(first, replace(_observation(0.9), bfov=moved))
+        second = controller.beginFrame(_frame(2))
+
+        # The newest entry is the box just committed; the older ones are unchanged
+        # on the sphere, so in the new view they sit to one side of it.
+        self.assertEqual(len(second.view.trajectory), 7)
+        newest, oldest = second.view.trajectory[-1], second.view.trajectory[0]
+        self.assertEqual(len(set(second.view.trajectory[:-1])), 1)
+        self.assertNotAlmostEqual(
+            newest.xPx + newest.widthPx / 2.0, oldest.xPx + oldest.widthPx / 2.0, places=1
+        )
+
 
 class TemplatePolicyTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -448,6 +521,8 @@ class TemplatePolicyTest(unittest.TestCase):
         self.geometry = SphericalGeometryImpl()
 
     def _decide(self, score: float, stableFrames: int, **tuning: object):
+        # Template updates belong to the frame-level model; see the last test.
+        tuning = {"sequenceModel": False, **tuning}
         config = replace(
             self.config, backendTuning=replace(self.config.backendTuning, **tuning)
         )
@@ -469,6 +544,12 @@ class TemplatePolicyTest(unittest.TestCase):
     def testWeakObservationsNeverRefreshATemplate(self) -> None:
         belowThreshold = self.config.backendTuning.templateMinConfidence - 0.01
         self.assertEqual(self._decide(belowThreshold, 2).kind, TemplateCommandKind.KEEP)
+
+    def testSequenceModelTakesNoTemplateUpdates(self) -> None:
+        self.assertTrue(self.config.backendTuning.sequenceModel)
+        self.assertEqual(
+            self._decide(0.99, 2, sequenceModel=True).kind, TemplateCommandKind.KEEP
+        )
 
     def testRecentRefreshesEveryOtherFrameAndStableOncePerPeriod(self) -> None:
         period = self.config.tracking.stableFramesBeforeUpdate

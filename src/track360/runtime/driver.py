@@ -16,8 +16,8 @@ import numpy as np
 from track360.backends import (
     ARTrackBackend,
     ARTrackSession,
-    PyTorchARTrackV2Session,
     TrackerBackendImpl,
+    createArtrackSession,
 )
 from track360.controller import (
     UNCALIBRATED_STAGE3_SCORE_CALIBRATION,
@@ -175,7 +175,7 @@ def buildRuntime(
     rgbSession = (
         artrackSessionFactory(config.model)
         if artrackSessionFactory is not None
-        else PyTorchARTrackV2Session(config.model, fullViewSearch=tuning.fullViewSearch)
+        else createArtrackSession(config)
     )
     backend = TrackerBackendImpl(ARTrackBackend(rgbSession))
     controller = TrackControllerImpl(geometry, config)

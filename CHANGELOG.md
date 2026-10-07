@@ -4,6 +4,21 @@
 
 ## [未发布]
 
+### 按序列级模型运行 ARTrackV2
+
+#### 变更
+
+- 官方的 ARTrackV2-B-256 权重是序列级训练的结果。此前用帧级的模型代码加载，303 组参数里有 106 组被丢掉，推理时不输入轨迹。现在默认按序列级模型运行（`backendTuning.sequenceModel: true`）：权重严格加载，每帧输入前 7 帧的目标框，使用模型自己每帧更新的外观特征。`b0` 基线同样切换。
+- 66 条可用训练序列上 S<sub>dual</sub> 0.483 → 0.485（95% 区间 [−0.046, +0.047]），总分不变，逐条序列有升有降；硬回归序列 131 不通过，作为已知问题保留。分数从与 IoU 无关变成随跟踪质量变化（丢失帧对好帧的 AUROC 0.42–0.46 → 0.72）。见评测记录 E010。
+- 序列级用法下框架不做模板更新，`onlineTemplate` 只在 `sequenceModel: false` 时起作用。
+- 默认配置的金标准轨迹重新录制；帧级用法保留为 `frame_model` 变体，摘要与此前的 `default` 相同。
+
+#### 新增
+
+- `backends/artrack_seq_session.py`：`PyTorchARTrackV2SeqSession` 和 `createArtrackSession()`。
+- `ViewSpec.trajectory`：目标在前 7 帧的框，换算成这一帧视图里的像素坐标，由 `ViewPlanner` 从控制器保存的历史 BFoV 生成（`localBoxOfBfov()`）。
+- `third_party/artrackv2/` 增加上游的序列级模型代码、外观解码器和配置（同一上游版本，见 `NOTICE`）。
+
 ### 对齐搜索区域成为默认
 
 #### 变更

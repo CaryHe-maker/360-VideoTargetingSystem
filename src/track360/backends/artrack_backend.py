@@ -23,6 +23,7 @@ class TrackerBackendImpl(TrackerBackendProtocol):
 
     def __init__(self, artrackBackend: ARTrackBackend) -> None:
         self._artrackBackend = artrackBackend
+        self._usesTrajectory = artrackBackend.trajectoryLength > 0
         self._templates = TemplateCache()
         self._previousViews: dict[int, LocalView] = {}
         self._previousViewsFrameIndex: int | None = None
@@ -99,6 +100,11 @@ class TrackerBackendImpl(TrackerBackendProtocol):
                     for view in views
                 ),
                 priorBoxes=priorBoxes,
+                trajectories=(
+                    tuple(view.spec.trajectory for view in views)
+                    if self._usesTrajectory
+                    else None
+                ),
             )
         elif all(item is not None for item in deviceViews):
             predictions = self._artrackBackend.inferDeviceBatch(

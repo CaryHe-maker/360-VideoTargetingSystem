@@ -256,6 +256,9 @@ class ViewSpec:
     # Where the target is expected in this view, in view pixels.  When set, the
     # backend centers its search crop on it instead of deriving one from the template.
     priorBox: BBoxXYWH | None = None
+    # The target's boxes in the previous frames, in this view's pixels, oldest first.
+    # They may lie outside the view.  Read by sequence-level backends.
+    trajectory: tuple[BBoxXYWH, ...] = ()
 
     def __post_init__(self) -> None:
         if self.viewId < 0:

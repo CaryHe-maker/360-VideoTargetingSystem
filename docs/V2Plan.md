@@ -45,7 +45,7 @@
 | 单视图（`ours`）在 tune 集上不如直接在 ERP 上跟踪（`b0`）：S<sub>dual</sub> 0.271 对 0.310（E001） | 透视视图还没有带来收益，离“比 B0 高 8 个点”的目标差得远 | Phase 4 |
 | 读视频文件依赖系统里的 ffmpeg / ffprobe | 没装 ffmpeg 的机器只能跟踪图像序列 | Phase 6 |
 | 只有 tune 集上的结果，360VOT 测试集还没有跑过 | 无法和论文基线直接对比 | Phase 2 |
-| ARTrackV2 调用时 `seq_input=None`，没有使用模型的轨迹提示（trajectory prompt） | 很可能丢掉了 ARTrackV2 的大部分时序优势 | Phase 4 |
+| ARTrackV2 调用时 `seq_input=None`，没有使用模型的轨迹提示（trajectory prompt） | 很可能丢掉了 ARTrackV2 的大部分时序优势 | Phase 4。**已完成（2026-10-07，评测记录 E010）**：总分没有变化，但分数开始反映跟踪质量 |
 | 目标丢失后没有重新检测（原来的 cubemap 找回路径从未触发，已随多视图一起删除） | 跟丢之后找不回来：`b0` 和 `ours` 的 IoU 到第 200 帧都只剩 0.24–0.31（E001） | Phase 4 |
 | ARTrackV2 的分数集中在 0.5 附近，状态机和模板更新门槛依赖这个分数 | 门控不可靠 | Phase 4 |
 | 函数和变量用 camelCase，YAML 键也是 camelCase | 不符合 PEP 8 | Phase 3 |
@@ -191,7 +191,7 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
 
 ### 3.4 Backends
 
-- **轨迹提示（最高优先级）**：官方 ARTrackV2 推理时会把前几帧的框坐标作为 `seq_input` 输入，当前实现传入 `None`。需要对照官方 tracker 代码确认输入格式，再把上一帧的球面轨迹投影到每个视图的局部坐标系，转换成 400-bin 的坐标 token。
+- **轨迹提示（已完成，评测记录 E010）**：实际做法见 [Backends](modules/backends.md#这份权重是序列级模型)；总分没有变化，下面是当时的计划。官方 ARTrackV2 推理时会把前几帧的框坐标作为 `seq_input` 输入，当前实现传入 `None`。需要对照官方 tracker 代码确认输入格式，再把上一帧的球面轨迹投影到每个视图的局部坐标系，转换成 400-bin 的坐标 token。
 - **FP16 生效**：实现 `model.precision: fp16`，模板特征在初始化时缓存为半精度。
 - **注册表与多后端**：抽象出 `encode_template / infer_batch / decode` 三步，新增 OSTrack-B256；可选一个轻量后端（如 HiT）作为速度档。
 
