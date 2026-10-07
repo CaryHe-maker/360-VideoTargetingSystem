@@ -12,6 +12,9 @@ SEARCH_FOV_SCALE = 3.0
 # With ``alignedSearch`` the view is this many times the mean target size: the search
 # factor the tracker was trained with, which is also the crop the backend takes.
 ALIGNED_SEARCH_FACTOR = 4.0
+# Targets larger than this are sized as if they were this large when the backend's
+# search crop is laid out.  A perspective view cannot hold such targets anyway.
+PRIOR_MAX_SIZE_RAD = 150.0 * pi / 180.0
 SEARCH_VIEW_ID = 0
 
 
@@ -48,9 +51,15 @@ class ViewPlanner:
             # FOV that crop is the whole view; when the FOV limit cut the view short
             # (large targets) the crop extends past the view and is padded, so the
             # target still fills the usual share of the search region.
+            # The tangent extent of a target grows without bound towards 180 degrees;
+            # PRIOR_MAX_SIZE_RAD keeps the padded crop finite.
             scale = (1.0 - 1e-9) / tan(fov / 2.0)
-            widthPx = self._geometry.viewWidthPx * tan(horizontalSizeRad / 2.0) * scale
-            heightPx = self._geometry.viewHeightPx * tan(verticalSizeRad / 2.0) * scale
+            widthPx = self._geometry.viewWidthPx * scale * _halfTangent(
+                min(horizontalSizeRad, PRIOR_MAX_SIZE_RAD)
+            )
+            heightPx = self._geometry.viewHeightPx * scale * _halfTangent(
+                min(verticalSizeRad, PRIOR_MAX_SIZE_RAD)
+            )
             return ViewSpec(
                 viewId=SEARCH_VIEW_ID,
                 bfov=BFoV(center=center, horizontalFovRad=fov, verticalFovRad=fov),
@@ -114,9 +123,14 @@ class ViewPlanner:
 
 def _squareFov(horizontalSizeRad: float, verticalSizeRad: float, factor: float) -> float:
     """FOV of a square view ``factor`` times the target's mean size on the image plane."""
-    halfWidth = tan(min(horizontalSizeRad, pi - 1e-6) / 2.0)
-    halfHeight = tan(min(verticalSizeRad, pi - 1e-6) / 2.0)
+    halfWidth = _halfTangent(horizontalSizeRad)
+    halfHeight = _halfTangent(verticalSizeRad)
     return 2.0 * atan(factor * sqrt(halfWidth * halfHeight))
+
+
+def _halfTangent(sizeRad: float) -> float:
+    """Half extent on the image plane of an angular size, finite up to 180 degrees."""
+    return tan(min(sizeRad, pi - 1e-6) / 2.0)
 
 
 def clampFov(value: float, geometry: GeometryConfig) -> float:

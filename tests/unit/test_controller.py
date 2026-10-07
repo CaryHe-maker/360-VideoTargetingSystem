@@ -259,6 +259,13 @@ class ViewPlannerTest(unittest.TestCase):
         # The FOV limit cut the view short: the backend's 4x crop pads past the view.
         assert large.priorBox is not None
         self.assertGreater(4.0 * large.priorBox.widthPx, 256.0)
+        # Towards 180 degrees the tangent extent diverges; the prior stays finite.
+        huge = planner.searchView(self.center, math.pi, math.pi)
+        bound = planner.searchView(self.center, math.radians(150.0), math.radians(150.0))
+        assert huge.priorBox is not None and bound.priorBox is not None
+        self.assertAlmostEqual(math.degrees(huge.bfov.horizontalFovRad), 90.0)
+        self.assertEqual(huge.priorBox, bound.priorBox)
+        self.assertLess(huge.priorBox.widthPx, 1000.0)
 
     def testAlignedTemplateViewIsSquareSoTheTargetKeepsItsAspect(self) -> None:
         target = BFoV(self.center, math.radians(12.0), math.radians(3.0))
