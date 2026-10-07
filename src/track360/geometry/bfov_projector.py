@@ -11,14 +11,14 @@ from numpy.typing import NDArray
 from track360.core.errors import GeometryError
 from track360.core.types import FramePacket, LocalView, ViewSpec
 from track360.geometry.projection_math import (
-    localPixelsToUnitVectors,
     unitVectorsToErpPixels,
+    viewPixelsToUnitVectors,
 )
 
 
 @dataclass(frozen=True, slots=True)
 class BfovProjector:
-    """Project ERP frames into local perspective views."""
+    """Project ERP frames into local views."""
 
     boundarySamplesPerEdge: int = 65
 
@@ -30,13 +30,7 @@ class BfovProjector:
         _requireFrame(frame)
         _requireViewSpec(spec)
         localX, localY = _localPixelGrid(spec.outputWidthPx, spec.outputHeightPx)
-        vectors = localPixelsToUnitVectors(
-            localX,
-            localY,
-            spec.bfov,
-            spec.outputWidthPx,
-            spec.outputHeightPx,
-        )
+        vectors = viewPixelsToUnitVectors(localX, localY, spec)
         sampleX, sampleY = unitVectorsToErpPixels(
             vectors,
             frame.rgb.shape[1],

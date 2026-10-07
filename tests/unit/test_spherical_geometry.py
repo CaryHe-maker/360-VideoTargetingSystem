@@ -10,6 +10,7 @@ from track360.core.types import (
     FrameIndex,
     FramePacket,
     SequenceId,
+    ViewProjection,
     ViewSpec,
 )
 from track360.geometry import (
@@ -31,6 +32,74 @@ from track360.geometry.spherical_geometry import _fitBfovFromVectors
 class GeometryTest(unittest.TestCase):
     def setUp(self) -> None:
         self.geometry = SphericalGeometryImpl(boundarySamplesPerEdge=33)
+
+    def testSphericalViewOfTheWholeSphereIsTheErpFrameItself(self) -> None:
+        rng = np.random.default_rng(0)
+        frame = FramePacket(
+            SequenceId("s"), FrameIndex(0), 0, rng.integers(0, 256, (32, 64, 3), dtype=np.uint8)
+        )
+        spec = ViewSpec(
+            0,
+            BFoV(makeSphericalPoint(0.0, 0.0), 2.0 * math.pi - 1e-9, math.pi - 1e-9),
+            64,
+            32,
+            projection=ViewProjection.SPHERICAL,
+        )
+
+        view = self.geometry.cropViews(frame, [spec])[0]
+
+        np.testing.assert_array_equal(view.rgb, frame.rgb)
+
+    def testSphericalViewTurnedHalfwayShiftsTheFrameByHalfItsWidth(self) -> None:
+        rng = np.random.default_rng(1)
+        frame = FramePacket(
+            SequenceId("s"), FrameIndex(0), 0, rng.integers(0, 256, (32, 64, 3), dtype=np.uint8)
+        )
+        spec = ViewSpec(
+            0,
+            BFoV(makeSphericalPoint(math.pi / 2.0, 0.0), math.pi, math.pi / 2.0),
+            32,
+            16,
+            projection=ViewProjection.SPHERICAL,
+        )
+
+        view = self.geometry.cropViews(frame, [spec])[0]
+
+        # Yaw +90 degrees is three quarters across the frame; the view spans half of it.
+        np.testing.assert_array_equal(view.rgb, frame.rgb[8:24, 32:64])
+
+    def testBoxOfASphericalViewContainingAPoleSpansTheWholeFrameWidth(self) -> None:
+        spec = ViewSpec(
+            0,
+            BFoV(makeSphericalPoint(0.4, math.radians(60.0)), math.pi, math.pi / 2.0),
+            128,
+            64,
+            projection=ViewProjection.SPHERICAL,
+        )
+        # 90 x 80 degrees around a point 30 degrees from the north pole.
+        box = BBoxXYWH(32.0, 4.0, 64.0, 56.0)
+
+        projection = self.geometry.projectLocalBoxBoundary(box, spec, 360, 180)
+
+        self.assertAlmostEqual(math.degrees(projection.bfov.horizontalFovRad), 90.0)
+        self.assertAlmostEqual(math.degrees(projection.bfov.verticalFovRad), 78.75)
+        self.assertAlmostEqual(projection.bfov.center.yawRad, 0.4)
+        self.assertGreater(projection.bbox.widthPx, 340.0)
+        self.assertLess(projection.bbox.yPx, 2.0)
+        self.assertEqual(projection.indirectBbox, projection.bbox)
+        # A small box away from the pole keeps a tight envelope.
+        low = ViewSpec(
+            0,
+            BFoV(makeSphericalPoint(0.4, 0.0), math.pi, math.pi / 2.0),
+            128,
+            64,
+            projection=ViewProjection.SPHERICAL,
+        )
+        small = self.geometry.projectLocalBoxBoundary(
+            BBoxXYWH(56.0, 24.0, 16.0, 16.0), low, 360, 180
+        )
+        self.assertAlmostEqual(small.bbox.widthPx, 22.5, delta=0.5)
+        self.assertAlmostEqual(small.bbox.heightPx, 22.5, delta=0.5)
 
     def testProjectionMathHandlesCornersAndWrap(self) -> None:
         self.assertAlmostEqual(wrapYaw(3.0 * math.pi), -math.pi)

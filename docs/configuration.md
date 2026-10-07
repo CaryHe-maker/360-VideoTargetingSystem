@@ -30,10 +30,12 @@
 |---|---|---|
 | `sequenceModel` | `true` | 按序列级模型运行 ARTrackV2：喂入前 7 帧的轨迹，使用模型自己更新的外观特征，见 [Backends](modules/backends.md#这份权重是序列级模型)。`false` 是 2026-10-07 之前的帧级用法，只用于对照 |
 | `acceptAnyCandidate` | `true` | 只要这一帧有框就作为测量接受；为 `false` 时分数低于 `candidateMinScore` 的框不被接受 |
-| `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg` | `90.0` | 搜索视图的视场上限；`null` 表示只受 `geometry.maxFovDeg` 限制。`alignedSearch` 下视图是正方形，取两者中较小的 |
+| `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg` | `90.0` | 透视搜索视图的视场上限；`null` 表示只受 `geometry.maxFovDeg` 限制。`alignedSearch` 下视图是正方形，取两者中较小的 |
 | `fullViewSearch` | `false` | 只在 `alignedSearch: false` 时有意义：把整个局部视图缩放后作为搜索区域，跳过 ARTrackV2 自己的 4 倍搜索裁剪 |
 | `alignedSearch` | `true` | 搜索区域和 ARTrackV2 的训练裁剪对齐：正方形视图、边长为目标平均尺寸的 4 倍，见 [Controller](modules/controller.md#视图规划)。`false` 是旧的取法，只用于对照。不能和 `fullViewSearch` 同时打开，也不支持 `geometry.resampler: cuda` |
 | `alignedMinFovDeg` | `2.0` | `alignedSearch` 下视图视场的下限，代替 `geometry.minFovDeg` |
+| `sphericalSearch` | `true` | 大目标的视图改用球面采样（以目标为中心的局部 ERP），见 [Controller](modules/controller.md#大目标球面视图)。需要 `alignedSearch: true`。`false` 时透视视场封顶在上面的上限，超出部分补黑边 |
+| `sphericalSearchFovDeg` | `120.0` | 搜索区域（目标平均角尺寸的 4 倍）达到这个角度时切换到球面视图。360VOT 论文用 90°；本项目在 tune 集上 90° 和 120° 没有可分辨的差别，取 120° 只是为了少偏离透视路径（[评测记录](evaluation-log.md) E011） |
 | `useMotionScore` | `false` | 用“外观 + 运动”加权得到 SingleScore；为 `false` 时只用外观分。没有校准产物时运动权重为 0，此开关不影响结果 |
 | `templateFovScale` | `2.5` | 模板视图视场相对目标角尺寸的倍数（≥ 1） |
 | `onlineTemplate` | `true` | 保留第 0 帧 anchor 的同时允许更新 recent / stable 模板。只在 `sequenceModel: false` 时起作用 |

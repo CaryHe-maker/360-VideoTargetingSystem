@@ -126,6 +126,8 @@ class BackendTuningConfig:
     fullViewSearch: bool = False
     alignedSearch: bool = True
     alignedMinFovRad: float = pi / 90.0
+    sphericalSearch: bool = True
+    sphericalSearchFovRad: float = 2.0 * pi / 3.0
     useMotionScore: bool = False
     templateFovScale: float = 2.5
     onlineTemplate: bool = True
@@ -138,6 +140,7 @@ class BackendTuningConfig:
             "acceptAnyCandidate",
             "fullViewSearch",
             "alignedSearch",
+            "sphericalSearch",
             "useMotionScore",
             "onlineTemplate",
             "holdWeakBox",
@@ -152,6 +155,8 @@ class BackendTuningConfig:
             raise ConfigError(
                 "backendTuning.alignedSearch and fullViewSearch cannot both be enabled"
             )
+        if not 0.0 < self.sphericalSearchFovRad < 2.0 * pi:
+            raise ConfigError("backendTuning.sphericalSearchFovDeg must be in (0, 360)")
         if not 0.0 < self.alignedMinFovRad < pi:
             raise ConfigError("backendTuning.alignedMinFovDeg must be in (0, 180)")
         if not isfinite(self.templateFovScale) or self.templateFovScale < 1.0:
@@ -292,6 +297,8 @@ def loadConfig(path: str | Path) -> AppConfig:
             "fullViewSearch",
             "alignedSearch",
             "alignedMinFovDeg",
+            "sphericalSearch",
+            "sphericalSearchFovDeg",
             "useMotionScore",
             "templateFovScale",
             "onlineTemplate",
@@ -405,6 +412,15 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
             alignedSearch=_requireBool(
                 "backendTuning.alignedSearch", tuningRaw["alignedSearch"]
+            ),
+            sphericalSearch=_requireBool(
+                "backendTuning.sphericalSearch", tuningRaw["sphericalSearch"]
+            ),
+            sphericalSearchFovRad=_degreesToRadians(
+                "backendTuning.sphericalSearchFovDeg",
+                _requireFloat(
+                    "backendTuning.sphericalSearchFovDeg", tuningRaw["sphericalSearchFovDeg"]
+                ),
             ),
             alignedMinFovRad=_degreesToRadians(
                 "backendTuning.alignedMinFovDeg",

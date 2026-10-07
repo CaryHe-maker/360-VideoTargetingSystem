@@ -26,6 +26,7 @@ from track360.core.types import (
     SequenceId,
     TemplateCommandKind,
     TrackStatus,
+    ViewProjection,
     ViewSpec,
 )
 from track360.geometry import SphericalGeometryImpl, makeSphericalPoint
@@ -248,7 +249,7 @@ class ViewPlannerTest(unittest.TestCase):
         self.assertIsNone(legacy.searchView(self.center, 0.2, 0.1).priorBox)
 
     def testAlignedViewFollowsSmallTargetsBelowTheGeometryMinimum(self) -> None:
-        planner = self._planner(alignedSearch=True)
+        planner = self._planner(alignedSearch=True, sphericalSearch=False)
         small = planner.searchView(self.center, math.radians(2.0), math.radians(2.0))
         tiny = planner.searchView(self.center, math.radians(0.2), math.radians(0.2))
         large = planner.searchView(self.center, math.radians(60.0), math.radians(60.0))
@@ -267,6 +268,79 @@ class ViewPlannerTest(unittest.TestCase):
         self.assertAlmostEqual(math.degrees(huge.bfov.horizontalFovRad), 90.0)
         self.assertEqual(huge.priorBox, bound.priorBox)
         self.assertLess(huge.priorBox.widthPx, 1000.0)
+
+    def testSearchRegionsPastTheSwitchPointAreSampledSpherically(self) -> None:
+        planner = self._planner()
+        # The switch point is a search region of 120 degrees: a 30 degree target.
+        below = planner.searchView(self.center, math.radians(29.0), math.radians(29.0))
+        view = planner.searchView(self.center, math.radians(35.0), math.radians(35.0))
+
+        self.assertIs(below.projection, ViewProjection.PERSPECTIVE)
+        self.assertIs(view.projection, ViewProjection.SPHERICAL)
+        # Four times the target on each axis, linear in angle: no FOV limit applies.
+        self.assertAlmostEqual(math.degrees(view.bfov.horizontalFovRad), 140.0)
+        self.assertAlmostEqual(math.degrees(view.bfov.verticalFovRad), 140.0)
+        self.assertEqual((view.outputWidthPx, view.outputHeightPx), (256, 256))
+        assert view.priorBox is not None
+        self.assertAlmostEqual(view.priorBox.widthPx, 64.0)
+        self.assertAlmostEqual(view.priorBox.xPx + view.priorBox.widthPx / 2.0, 128.0)
+        self.assertIs(
+            self._planner(sphericalSearch=False)
+            .searchView(self.center, math.radians(35.0), math.radians(35.0))
+            .projection,
+            ViewProjection.PERSPECTIVE,
+        )
+
+    def testSphericalViewIsCutAtTheWholeSphereWithIsotropicPixels(self) -> None:
+        planner = self._planner()
+        # A 60 x 60 degree target asks for 240 degrees: the latitude span stops at 180.
+        tall = planner.searchView(self.center, math.radians(60.0), math.radians(60.0))
+        whole = planner.searchView(self.center, math.radians(179.0), math.radians(179.0))
+
+        self.assertAlmostEqual(math.degrees(tall.bfov.horizontalFovRad), 240.0)
+        self.assertEqual(tall.outputWidthPx, 256)
+        self.assertLess(tall.outputHeightPx, 256)
+        self.assertLessEqual(tall.bfov.verticalFovRad, math.pi)
+        for view in (tall, whole):
+            self.assertAlmostEqual(
+                view.outputWidthPx / view.bfov.horizontalFovRad,
+                view.outputHeightPx / view.bfov.verticalFovRad,
+            )
+            prior = view.priorBox
+            assert prior is not None
+            # The backend's 4x crop around the prior is the 256 px search image.
+            self.assertAlmostEqual(4.0 * math.sqrt(prior.widthPx * prior.heightPx), 256.0)
+            self.assertLessEqual(prior.widthPx, view.outputWidthPx)
+            self.assertLessEqual(prior.heightPx, view.outputHeightPx)
+        # The whole sphere at this scale is about 128 x 64 px.
+        self.assertLess(whole.bfov.horizontalFovRad, 2.0 * math.pi)
+        self.assertAlmostEqual(whole.outputWidthPx / whole.outputHeightPx, 2.0, delta=0.05)
+
+    def testSphericalViewIsWidenedForElongatedTargets(self) -> None:
+        view = self._planner().searchView(
+            self.center, math.radians(170.0), math.radians(8.0)
+        )
+
+        # Four times the mean size is 147.5 degrees, less than the target is wide.
+        self.assertAlmostEqual(math.degrees(view.bfov.horizontalFovRad), 212.5, delta=1.0)
+        self.assertGreater(view.outputWidthPx, 256)
+        assert view.priorBox is not None
+        self.assertLess(view.priorBox.widthPx, view.outputWidthPx)
+
+    def testLargeTemplatesAreSampledSphericallyToo(self) -> None:
+        target = BFoV(self.center, math.radians(100.0), math.radians(60.0))
+        view = self._planner().templateView(target)
+        small = self._planner().templateView(BFoV(self.center, 0.2, 0.1))
+
+        self.assertIs(view.projection, ViewProjection.SPHERICAL)
+        self.assertIs(small.projection, ViewProjection.PERSPECTIVE)
+        box = view.priorBox
+        assert box is not None
+        self.assertAlmostEqual(box.widthPx / box.heightPx, 100.0 / 60.0)
+        # The view is templateFovScale times the mean target size across 256 px.
+        self.assertAlmostEqual(2.5 * math.sqrt(box.widthPx * box.heightPx), 256.0)
+        self.assertGreaterEqual(box.xPx, 0.0)
+        self.assertLessEqual(box.yPx + box.heightPx, view.outputHeightPx)
 
     def testAlignedTemplateViewIsSquareSoTheTargetKeepsItsAspect(self) -> None:
         target = BFoV(self.center, math.radians(12.0), math.radians(3.0))
@@ -313,6 +387,36 @@ class LocalBoxOfBfovTest(unittest.TestCase):
         self.assertAlmostEqual(box.widthPx, 40.0, delta=2.0)
         self.assertAlmostEqual(box.heightPx, 30.0, delta=2.0)
 
+    def testInASphericalViewTheBoxIsLinearInAngleAndInvertsTheGeometry(self) -> None:
+        view = ViewSpec(
+            0,
+            BFoV(makeSphericalPoint(0.3, -0.2), math.radians(240.0), math.radians(120.0)),
+            256,
+            128,
+            projection=ViewProjection.SPHERICAL,
+        )
+        geometry = SphericalGeometryImpl()
+        local = BBoxXYWH(150.0, 30.0, 60.0, 40.0)
+
+        bfov = geometry.localBoxToBfov(local, view)
+        box = localBoxOfBfov(view, bfov)
+
+        # 256 px across 240 degrees: 60 px is 56.25 degrees of longitude, which at the
+        # box's latitude of 13.125 degrees is that much narrower on the sphere.
+        self.assertAlmostEqual(
+            math.degrees(bfov.horizontalFovRad), 56.25 * math.cos(math.radians(13.125))
+        )
+        self.assertAlmostEqual(math.degrees(bfov.verticalFovRad), 37.5)
+        for actual, expected in zip(
+            (box.xPx, box.yPx, box.widthPx, box.heightPx),
+            (local.xPx, local.yPx, local.widthPx, local.heightPx),
+            strict=True,
+        ):
+            self.assertAlmostEqual(actual, expected, places=6)
+        # A direction behind the view center still has a finite place in the view.
+        behind = localBoxOfBfov(view, BFoV(makeSphericalPoint(0.3 - 3.0, 0.2), 0.2, 0.2))
+        self.assertLess(behind.xPx + behind.widthPx / 2.0, 0.0)
+
     def testADirectionBehindTheViewLandsFarOutsideWithFiniteCoordinates(self) -> None:
         behind = makeSphericalPoint(0.3 - math.pi, 0.2)
         box = localBoxOfBfov(self.view, BFoV(behind, 0.2, 0.2))
@@ -357,11 +461,11 @@ class ControllerTest(unittest.TestCase):
             math.tan(initial.bfov.horizontalFovRad / 2.0)
             * math.tan(initial.bfov.verticalFovRad / 2.0)
         )
-        self.assertEqual(plan.view.bfov.horizontalFovRad, plan.view.bfov.verticalFovRad)
-        self.assertAlmostEqual(
-            plan.view.bfov.horizontalFovRad,
-            min(2.0 * math.atan(4.0 * meanHalfSize), math.radians(90.0)),
-        )
+        # A target this large needs a search region past the 120 degree switch point.
+        self.assertGreater(2.0 * math.atan(4.0 * meanHalfSize), math.radians(120.0))
+        self.assertIs(plan.view.projection, ViewProjection.SPHERICAL)
+        self.assertIs(initPlan.templateView.projection, ViewProjection.SPHERICAL)
+        self.assertIsNone(initPlan.templateView.priorBox)
         self.assertIsNotNone(plan.view.priorBox)
 
         result = controller.consume(plan, _observation(0.95))
@@ -495,8 +599,12 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(len(first.view.trajectory), 7)
         self.assertEqual(len(set(first.view.trajectory)), 1)
         box = first.view.trajectory[0]
-        self.assertAlmostEqual(box.xPx + box.widthPx / 2.0, 128.0, places=6)
-        self.assertAlmostEqual(box.yPx + box.heightPx / 2.0, 128.0, places=6)
+        self.assertAlmostEqual(
+            box.xPx + box.widthPx / 2.0, first.view.outputWidthPx / 2.0, places=6
+        )
+        self.assertAlmostEqual(
+            box.yPx + box.heightPx / 2.0, first.view.outputHeightPx / 2.0, places=6
+        )
         assert first.view.priorBox is not None
         self.assertAlmostEqual(box.widthPx, first.view.priorBox.widthPx, places=5)
 

@@ -13,7 +13,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from track360.core.errors import GeometryError
-from track360.core.types import BFoV, SphericalPoint
+from track360.core.types import BFoV, SphericalPoint, ViewProjection, ViewSpec
 
 
 #to solve the condition when the target crossing the bound in Yaw
@@ -179,6 +179,67 @@ def localPixelsToUnitVectors(
     )
     norms = np.linalg.norm(vectors, axis=-1, keepdims=True)
     return vectors / norms
+
+
+def viewAxes(center: SphericalPoint, rollRad: float = 0.0) -> tuple[NDArray[np.float64], ...]:
+    """Forward, right and up unit axes of a view looking at ``center``."""
+    return cameraBasis(BFoV(center, 1.0, 1.0, rollRad))
+
+
+def sphericalPixelsToUnitVectors(
+    xPx: NDArray[np.float64],
+    yPx: NDArray[np.float64],
+    bfov: BFoV,
+    viewWidthPx: int,
+    viewHeightPx: int,
+) -> NDArray[np.float64]:
+    """Directions of the pixels of a spherical view.
+
+    Pixels are linear in the longitude and latitude of the sphere rotated so that
+    the view center is at (0, 0); ``bfov`` gives the spans.  Unlike a perspective
+    view this stays well defined up to the whole sphere.
+    """
+    _requireFrameDimensions(viewWidthPx, viewHeightPx)
+    if xPx.shape != yPx.shape:
+        raise GeometryError(f"local coordinate shapes must match: {xPx.shape} != {yPx.shape}")
+    if not np.isfinite(xPx).all() or not np.isfinite(yPx).all():
+        raise GeometryError("local coordinates must contain only finite values")
+    forward, right, up = viewAxes(bfov.center, bfov.rollRad)
+    longitude = (xPx / viewWidthPx - 0.5) * bfov.horizontalFovRad
+    latitude = (0.5 - yPx / viewHeightPx) * bfov.verticalFovRad
+    cosLatitude = np.cos(latitude)[..., np.newaxis]
+    return (
+        cosLatitude * np.cos(longitude)[..., np.newaxis] * forward
+        + cosLatitude * np.sin(longitude)[..., np.newaxis] * right
+        + np.sin(latitude)[..., np.newaxis] * up
+    )
+
+
+def unitVectorToSphericalPixel(
+    vector: tuple[float, float, float], bfov: BFoV, viewWidthPx: int, viewHeightPx: int
+) -> tuple[float, float]:
+    """Pixel of a direction in a spherical view; it may lie outside the view."""
+    forward, right, up = viewAxes(bfov.center, bfov.rollRad)
+    direction = np.asarray(vector, dtype=np.float64)
+    direction = direction / np.linalg.norm(direction)
+    longitude = atan2(float(direction @ right), float(direction @ forward))
+    latitude = asin(min(1.0, max(-1.0, float(direction @ up))))
+    return (
+        (longitude / bfov.horizontalFovRad + 0.5) * viewWidthPx,
+        (0.5 - latitude / bfov.verticalFovRad) * viewHeightPx,
+    )
+
+
+def viewPixelsToUnitVectors(
+    xPx: NDArray[np.float64], yPx: NDArray[np.float64], spec: ViewSpec
+) -> NDArray[np.float64]:
+    """Directions of local pixel coordinates under the view's projection."""
+    convert = (
+        sphericalPixelsToUnitVectors
+        if spec.projection is ViewProjection.SPHERICAL
+        else localPixelsToUnitVectors
+    )
+    return convert(xPx, yPx, spec.bfov, spec.outputWidthPx, spec.outputHeightPx)
 
 
 def unitVectorsToErpPixels(

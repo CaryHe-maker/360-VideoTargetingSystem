@@ -31,6 +31,8 @@ VARIANT_OVERRIDES: dict[str, dict[str, object]] = {
     },
     "template_off": {"onlineTemplate": False},
     "legacy_search": {"alignedSearch": False},
+    # Large targets in a 90 degree perspective view with a padded crop, as before.
+    "perspective_only": {"sphericalSearch": False},
     # The fake backend is frame-level either way; this turns template updates back on.
     "frame_model": {"sequenceModel": False},
 }
