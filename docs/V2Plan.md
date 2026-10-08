@@ -103,7 +103,7 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
 
 1. **先诊断再动手**：在 tune 集上把每一帧的失败归类：视图没有覆盖到目标 / 覆盖到了但后端框错 / 回投误差 / 跨缝或极点。每类统计帧数占比，按占比从高到低处理。
 2. **一次只改一个变量**，每项实验都报告 S<sub>dual</sub>、P<sub>angle</sub>、丢失率、每帧前向次数和 P95 延迟。
-3. **硬回归门槛**：每项改动先在 5 条硬回归序列（[`configs/splits/360vos_tune_hard.txt`](../configs/splits/360vos_tune_hard.txt)）上跑，任何一条下降超过 2 个点就停止；通过后再跑整个 tune 集，提升要看配对 bootstrap 的 95% 区间是否不含 0（`tools/benchmark.py compare`）。
+3. **硬回归门槛**：7 条稳定的硬回归序列（[`configs/splits/360vos_tune_hard.txt`](../configs/splits/360vos_tune_hard.txt)）任何一条下降超过 3 个点就停止；14 条不稳定的序列作为一组看合计。整个 tune 集上的提升要看配对 bootstrap 的 95% 区间是否不含 0（`tools/benchmark.py compare`）。2026-10-08 之前是 5 条序列加 2 个点的门槛，见 [Evaluation](modules/evaluation.md#硬回归序列和不稳定序列)。
 4. **每一轮实验都在 [evaluation-log.md](evaluation-log.md) 追加一条记录**（不论是否采纳）；被采纳的改动进入 README 的消融表。
 
 按预期收益排序的实验清单（详细说明见第 3 节对应模块）：

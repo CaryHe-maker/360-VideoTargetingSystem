@@ -123,18 +123,33 @@ python tools/benchmark.py compare --dataset-root <train> --label-root <labels/tr
     --baseline outputs/tune:ours --candidate outputs/tune_exp/E00x:ours
 ```
 
-加 `--hard-file` 时还会逐条检查硬回归序列，有任何一条的 S<sub>dual</sub> 下降超过 0.02，命令以退出码 1 结束。一个改动的标准流程是先只跑硬回归序列，通过了再跑整个 tune 集：
+加 `--hard-file` 时逐条检查硬回归序列（7 条稳定的序列，任何一条下降超过 0.03 就不通过）；加 `--fragile-file` 时把不稳定的序列作为一组判断（区间整体低于 0 才不通过）。任何一项不通过，命令以退出码 1 结束。两份名单的含义见 [Evaluation](modules/evaluation.md#硬回归序列和不稳定序列)。
+
+一个改动的标准流程：
 
 ```bash
-# 1. 只跑 5 条硬回归序列（约 3 分钟）
+# 1. 跑整个 tune 集
 python tools/benchmark.py run --dataset-root <train> --label-root <labels/train> \
-    --sequence-file configs/splits/360vos_tune_hard.txt \
-    --output-root outputs/tune_exp/E00x --method ours --config <新配置>
+    --sequence-file configs/splits/360vos_tune.txt \
+    --output-root outputs/E0xx_tune --method ours --config <新配置>
+# 2. 和当前基准比较
 python tools/benchmark.py compare --dataset-root <train> --label-root <labels/train> \
-    --baseline outputs/tune:ours --candidate outputs/tune_exp/E00x:ours \
-    --hard-file configs/splits/360vos_tune_hard.txt
-# 2. 通过后跑整个 tune 集（断点续跑会跳过已完成的 5 条），再比较一次
+    --sequence-file configs/splits/360vos_tune.txt \
+    --baseline outputs/g_tune:ours --candidate outputs/E0xx_tune:ours \
+    --hard-file configs/splits/360vos_tune_hard.txt \
+    --fragile-file configs/splits/360vos_tune_fragile.txt
+# 3. 归档这次运行（无论结果好坏）
+python tools/benchmark.py archive --dataset-root <train> --label-root <labels/train> \
+    --sequence-file configs/splits/360vos_tune.txt --split tune \
+    --output-root outputs/E0xx_tune --method ours \
+    --name E0xx-tune-<简称> --experiment E0xx --timing solo --note "<改了什么>"
 ```
+
+想先快速看一眼时，可以只跑 7 条硬回归序列（约 5 分钟）并只加 `--hard-file`；断点续跑会在之后的全量运行里跳过它们。
+
+### 运行记录
+
+`archive` 写出的记录在 [`docs/runs/`](runs/README.md)，随仓库提交。它保存逐条序列的分数和耗时、生效的配置、commit 和环境，用来代替“翻本地的 `outputs/`”和“重跑一遍”。`--timing` 必须如实填写：只有 `solo` 的延迟可以相互比较。
 
 ### 分数与 IoU 的关系
 

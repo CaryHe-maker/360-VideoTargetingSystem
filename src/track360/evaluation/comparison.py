@@ -14,8 +14,11 @@ from track360.evaluation.bootstrap import (
 )
 from track360.evaluation.vot360_metrics import Vot360Scores
 
-# A hard-regression sequence fails when its S_dual drops by more than this.
-HARD_REGRESSION_TOLERANCE = 0.02
+# A hard-regression sequence fails when its S_dual drops by more than this.  The
+# sequences are chosen to move less than this between unrelated configurations.
+HARD_REGRESSION_TOLERANCE = 0.03
+# Per-sequence changes smaller than this are not counted as up or down.
+CHANGE_THRESHOLD = 0.02
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +122,56 @@ def hardRegressions(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class GroupChange:
+    """Mean S_dual of a group of sequences in both runs, and the paired difference."""
+
+    sequences: tuple[str, ...]
+    baseline: float
+    candidate: float
+    difference: Interval
+
+    @property
+    def regressed(self) -> bool:
+        """The group got worse beyond what resampling its sequences explains."""
+        return self.difference.high < 0.0
+
+
+def groupChange(
+    comparison: Comparison,
+    sequences: Sequence[str],
+    *,
+    samples: int = DEFAULT_SAMPLES,
+    seed: int = 0,
+) -> GroupChange:
+    """Judge sequences that are too unstable to be judged one by one.
+
+    The score of a fragile sequence swings with changes that have nothing to do with
+    it, so only the group mean and the bootstrap interval of its paired difference
+    carry information.  Every sequence must have results from both trackers.
+    """
+    byName = {change.sequence: change for change in comparison.changes}
+    missing = [name for name in sequences if name not in byName]
+    if missing:
+        raise ProtocolError(
+            f"fragile sequences without results from both trackers: {', '.join(missing)}"
+        )
+    if not sequences:
+        raise ProtocolError("the fragile group is empty")
+    base = [byName[name].baseline for name in sequences]
+    cand = [byName[name].candidate for name in sequences]
+    return GroupChange(
+        sequences=tuple(sequences),
+        baseline=sum(base) / len(base),
+        candidate=sum(cand) / len(cand),
+        difference=bootstrapDifference(base, cand, samples=samples, seed=seed),
+    )
+
+
 __all__ = [
+    "CHANGE_THRESHOLD",
+    "GroupChange",
+    "groupChange",
     "HARD_REGRESSION_TOLERANCE",
     "Comparison",
     "MetricComparison",

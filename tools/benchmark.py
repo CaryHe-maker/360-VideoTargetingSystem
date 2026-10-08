@@ -28,10 +28,13 @@ from track360.core.errors import Track360Error
 from track360.datasets.tune_split import readSequenceFile
 from track360.datasets.vots_info import loadVotsInfo
 from track360.evaluation.comparison import (
+    CHANGE_THRESHOLD,
     HARD_REGRESSION_TOLERANCE,
     Comparison,
+    GroupChange,
     SequenceChange,
     compareScores,
+    groupChange,
     hardRegressions,
 )
 from track360.evaluation.vot360_metrics import Vot360Scores
@@ -42,8 +45,10 @@ from track360.runtime.benchmark import (
     loadEfficiency,
     runBenchmark,
 )
+from track360.runtime.run_archive import TIMING_STATES, archiveRun
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
+DEFAULT_ARCHIVE = Path(__file__).resolve().parents[1] / "docs" / "runs"
 ATTRIBUTE_SETS = ("360vot", "360vos-train")
 
 
@@ -92,6 +97,23 @@ def buildParser() -> argparse.ArgumentParser:
         help="score result files shorter than their sequence (smoke runs only)",
     )
 
+    archive = commands.add_parser(
+        "archive", help="write the versioned record of one run (scores, cost, configuration)"
+    )
+    _addCommon(archive)
+    archive.add_argument("--method", required=True)
+    archive.add_argument("--name", required=True, help="record file name, without extension")
+    archive.add_argument("--experiment", default="", help="evaluation-log entry, e.g. E011")
+    archive.add_argument("--split", default="", help="tune / hold-out / test")
+    archive.add_argument("--note", default="")
+    archive.add_argument(
+        "--timing",
+        choices=TIMING_STATES,
+        default="unknown",
+        help="solo: nothing else was running, so the latencies are comparable",
+    )
+    archive.add_argument("--archive-root", type=Path, default=DEFAULT_ARCHIVE)
+
     compare = commands.add_parser(
         "compare", help="difference between two runs with bootstrap confidence intervals"
     )
@@ -104,6 +126,13 @@ def buildParser() -> argparse.ArgumentParser:
         default=None,
         help="hard-regression sequences; exit 1 when one drops by more than "
         f"{HARD_REGRESSION_TOLERANCE} S_dual",
+    )
+    compare.add_argument(
+        "--fragile-file",
+        type=Path,
+        default=None,
+        help="unstable sequences judged as a group; exit 1 when the interval of their "
+        "mean S_dual difference lies below 0",
     )
     compare.add_argument("--samples", type=int, default=10_000, help="bootstrap resamples")
     compare.add_argument("--json", type=Path, default=None, help="also write the result as JSON")
@@ -128,6 +157,22 @@ def main(argv: list[str] | None = None) -> int:
                 shard=_parseShard(args.shard),
             )
             return 1 if summary.failures else 0
+        if args.command == "archive":
+            path = archiveRun(
+                datasetRoot=args.dataset_root,
+                outputRoot=args.output_root,
+                labelRoot=args.label_root,
+                method=args.method,
+                name=args.name,
+                archiveRoot=args.archive_root,
+                sequences=sequences,
+                split=args.split,
+                experiment=args.experiment,
+                note=args.note,
+                timing=args.timing,
+            )
+            print(f"record written: {path}")
+            return 0
         if args.command == "compare":
             return _compare(args, sequences)
 
@@ -272,18 +317,39 @@ def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
         )
     comparison = compareScores(scores[0], scores[1], samples=args.samples)
     failed = () if hard is None else hardRegressions(comparison, hard)
+    fragile = (
+        None
+        if args.fragile_file is None
+        else groupChange(comparison, readSequenceFile(args.fragile_file), samples=args.samples)
+    )
     print(formatComparison(comparison, args.baseline, args.candidate))
     print()
     print(formatEfficiency(efficiency))
     if hard is not None:
         print()
         print(formatHardRegressions(comparison, hard, failed))
+    if fragile is not None:
+        print()
+        print(formatGroupChange(fragile))
     if args.json is not None:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(
             json.dumps(
                 {
                     **_comparisonPayload(comparison, args, failed),
+                    "fragileGroup": None
+                    if fragile is None
+                    else {
+                        "sequences": list(fragile.sequences),
+                        "baseline": fragile.baseline,
+                        "candidate": fragile.candidate,
+                        "difference": {
+                            "value": fragile.difference.value,
+                            "low": fragile.difference.low,
+                            "high": fragile.difference.high,
+                        },
+                        "regressed": fragile.regressed,
+                    },
                     "efficiency": {
                         label: _efficiencyPayload(item) for label, item in efficiency.items()
                     },
@@ -293,7 +359,7 @@ def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
             + "\n",
             encoding="utf-8",
         )
-    return 1 if failed else 0
+    return 1 if failed or (fragile is not None and fragile.regressed) else 0
 
 
 def formatComparison(comparison: Comparison, baseline: str, candidate: str) -> str:
@@ -313,8 +379,8 @@ def formatComparison(comparison: Comparison, baseline: str, candidate: str) -> s
             f"{_interval(metric.candidate):>24}"
             f"{_interval(metric.difference, signed=True):>26}{verdict}"
         )
-    up = sum(change.difference > HARD_REGRESSION_TOLERANCE for change in comparison.changes)
-    down = sum(change.difference < -HARD_REGRESSION_TOLERANCE for change in comparison.changes)
+    up = sum(change.difference > CHANGE_THRESHOLD for change in comparison.changes)
+    down = sum(change.difference < -CHANGE_THRESHOLD for change in comparison.changes)
     lines += ["", f"S_dual per sequence: {up} up, {down} down (by more than 0.02)"]
     lines += [_changeLine(change) for change in comparison.changes[:5]]
     if len(comparison.changes) > 10:
@@ -334,6 +400,24 @@ def formatHardRegressions(
         lines.append(f"{_changeLine(byName[name])}  {status}")
     lines.append("result: " + (f"FAILED ({len(failed)} of {len(hard)})" if failed else "passed"))
     return "\n".join(lines)
+
+
+def formatGroupChange(group: GroupChange) -> str:
+    verdict = (
+        "REGRESSED (interval below 0)"
+        if group.regressed
+        else "improved (interval above 0)"
+        if group.difference.low > 0.0
+        else "no change beyond noise (interval includes 0)"
+    )
+    return "\n".join(
+        [
+            f"fragile sequences, judged as a group ({len(group.sequences)} sequences)",
+            f"    mean S_dual  {group.baseline:.3f} -> {group.candidate:.3f}  "
+            f"difference {_interval(group.difference, signed=True)}",
+            f"result: {verdict}",
+        ]
+    )
 
 
 def _interval(interval, *, signed: bool = False) -> str:
