@@ -1,0 +1,498 @@
+{
+ "format": "track360.run-record.v1",
+ "name": "E001-tune-b0",
+ "experiment": "E001",
+ "split": "tune",
+ "method": "b0",
+ "note": "b0，帧级用法",
+ "outputRoot": "outputs/tune",
+ "createdAt": "2026-10-03T07:32:23+00:00",
+ "git": {
+  "commit": "8de8d952ee590b85d53545579bdd71fbe435cbf3",
+  "dirty": false
+ },
+ "configHash": "4e028e32c3c04a28463f316c3c00228ecd8a0715a8630e80976bc56722f35d66",
+ "weightsSha256": "a99b7f8086e4827ecfe32ec8a9d32ad41c1ca9ff3cac551b62ec95576ca01d05",
+ "config": {
+  "schemaVersion": 1,
+  "model": {
+   "backend": "pytorch",
+   "variant": "artrackv2_b_256",
+   "weights": "D:\\19810\\Documents\\GitHub\\360-VideoTargetingSystem\\models\\artrackv2_b_256.pth.tar",
+   "precision": "fp32"
+  },
+  "scoring": {
+   "calibrationArtifact": null,
+   "requireCheckpointHashMatch": true
+  },
+  "geometry": {
+   "viewWidthPx": 256,
+   "viewHeightPx": 256,
+   "boundarySamplesPerEdge": 65,
+   "minFovRad": 0.3490658503988659,
+   "maxFovRad": 2.0943951023931953,
+   "resampler": "cpu"
+  },
+  "evaluator": {
+   "supportWeight": 0.25,
+   "agreementWeight": 0.25,
+   "minReacquireViews": 2,
+   "successRate": 0.9,
+   "firstRoundFusionOverlap": 0.3,
+   "overlapThreshold": 0.7,
+   "fusionSourceMinConfidence": 0.740642,
+   "fusionBoxMode": "best_source"
+  },
+  "motion": {
+   "minSamplesForVelocity": 2,
+   "maxTangentSpanRad": 1.2,
+   "huberDeltaRad": 0.15,
+   "processNoiseRadPerSec": 0.04,
+   "maxAngularSpeedRadPerSec": 2.0,
+   "maxLogScaleRatePerSec": 1.0
+  },
+  "tracking": {
+   "candidateMinScore": 0.597262,
+   "stableFramesBeforeUpdate": 8,
+   "windowLength": 5,
+   "contextScale": 2.0,
+   "contextMarginRatio": 0.15,
+   "scaleClusterTolerance": 0.5,
+   "maxPredictionHorizon": 3,
+   "guardYawStepRad": 2.0943951023931953,
+   "minViewsForCommit": 2,
+   "sameFrameEscalationEnabled": true,
+   "maxAttemptsPerFrame": 2,
+   "maxViewsPerFrameTotal": 12,
+   "uncertainFovScale": 1.25,
+   "reacquireCooldownFrames": 2
+  },
+  "recovery": {
+   "maxViewsPerFrame": 12,
+   "globalSearchInterval": 5,
+   "ringRadii": [
+    1.0,
+    1.75,
+    2.5
+   ],
+   "viewsPerRing": [
+    4,
+    8,
+    12
+   ],
+   "cubeMapOverlapRatio": 0.1,
+   "maxCoveredCells": 256
+  },
+  "backendTuning": {
+   "acceptAnyCandidate": true,
+   "directMode": false,
+   "singleRound": false,
+   "adaptiveViewCount": false,
+   "singleView": false,
+   "singleViewHorizontalFovCapRad": 1.5707963267948966,
+   "singleViewVerticalFovCapRad": 1.5707963267948966,
+   "fourViewFovCapRad": null,
+   "fullViewSearch": false,
+   "useMotionScore": false,
+   "templateFovScale": 2.5,
+   "onlineTemplate": true,
+   "templateMinConfidence": 0.515,
+   "allowSingleViewTemplate": true,
+   "holdWeakBox": true,
+   "fusionSourceMinConfidence": 0.35,
+   "fusionOverlap": 0.45,
+   "fusionBoxMode": null
+  },
+  "reproducibility": {
+   "seed": 0,
+   "deterministic": true
+  },
+  "visualization": {
+   "enabled": false,
+   "outputRoot": "D:\\19810\\Documents\\GitHub\\360-VideoTargetingSystem\\outputs\\visualization",
+   "stages": [
+    "backend_box",
+    "geometry_box",
+    "local_rgb"
+   ]
+  },
+  "sourcePath": "D:\\19810\\Documents\\GitHub\\360-VideoTargetingSystem\\configs\\default.yaml"
+ },
+ "environment": {
+  "python": "3.14.0",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "packages": {
+   "track360": "2.0.0.dev0",
+   "torch": "2.11.0+cu128",
+   "torchvision": "0.26.0+cu128",
+   "numpy": "2.5.3",
+   "opencv-python-headless": "4.14.0.94",
+   "timm": "0.5.4"
+  },
+  "device": {
+   "cuda": true,
+   "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+   "driver": "566.07",
+   "cudaRuntime": "12.8",
+   "cudnn": 91900,
+   "cudnnDeterministic": true
+  }
+ },
+ "scores": {
+  "bbox": {
+   "representation": "bbox",
+   "sequences": 25,
+   "frames": 14923,
+   "S_dual": 0.3098802903904552,
+   "P_dual": 0.30953869024357217,
+   "norm_P_dual": 0.3329893180943094,
+   "P_angle": 0.34333864305833883,
+   "loss_rate": 0.569523554245125
+  },
+  "bfov": {
+   "representation": "bfov",
+   "sequences": 25,
+   "frames": 14923,
+   "S_sphere": 0.3103464282076992,
+   "P_dual": null,
+   "norm_P_dual": null,
+   "P_angle": 0.33563175782566873,
+   "loss_rate": null
+  }
+ },
+ "efficiency": {
+  "timing": "unknown",
+  "sequences": 25,
+  "forwardsPerFrame": null,
+  "p50LatencyMs": 51.87040000055276,
+  "p95LatencyMs": 62.187530000119295,
+  "fps": 18.776422163212644
+ },
+ "perSequence": {
+  "006": {
+   "S_dual": 0.4294409493120556,
+   "P_angle": 0.6229860365198711,
+   "P_dual": 0.6229860365198711,
+   "frames": 931,
+   "lostFrames": 314,
+   "firstLostFrame": 218,
+   "fps": 20.899514239841437,
+   "p50LatencyMs": 46.232599999711965,
+   "p95LatencyMs": 53.17176500029745,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "009": {
+   "S_dual": 0.16887229951362967,
+   "P_angle": 0.17814726840855108,
+   "P_dual": 0.17814726840855108,
+   "frames": 421,
+   "lostFrames": 346,
+   "firstLostFrame": 75,
+   "fps": 21.193886247458988,
+   "p50LatencyMs": 43.72550000061892,
+   "p95LatencyMs": 71.51598000036755,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "016": {
+   "S_dual": 0.11854995023311854,
+   "P_angle": 0.1408140814081408,
+   "P_dual": 0.13641364136413642,
+   "frames": 909,
+   "lostFrames": 556,
+   "firstLostFrame": 138,
+   "fps": 23.29358039968827,
+   "p50LatencyMs": 42.31970000000729,
+   "p95LatencyMs": 47.38791500012667,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "026": {
+   "S_dual": 0.009713863372399958,
+   "P_angle": 0.013303769401330377,
+   "P_dual": 0.011086474501108648,
+   "frames": 451,
+   "lostFrames": 445,
+   "firstLostFrame": 6,
+   "fps": 23.717097122602418,
+   "p50LatencyMs": 41.72489999928075,
+   "p95LatencyMs": 45.999105000191776,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "029": {
+   "S_dual": 0.7537746806039489,
+   "P_angle": 0.7195121951219512,
+   "P_dual": 0.6951219512195121,
+   "frames": 328,
+   "lostFrames": 22,
+   "firstLostFrame": 136,
+   "fps": 21.395882787667247,
+   "p50LatencyMs": 46.242199998232536,
+   "p95LatencyMs": 52.880880000884645,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "048": {
+   "S_dual": 0.0055658627087198514,
+   "P_angle": 0.005411255411255411,
+   "P_dual": 0.005411255411255411,
+   "frames": 924,
+   "lostFrames": 866,
+   "firstLostFrame": 5,
+   "fps": 14.544642861654333,
+   "p50LatencyMs": 63.341099999888684,
+   "p95LatencyMs": 139.76754000050278,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "049": {
+   "S_dual": 0.0014109347442680777,
+   "P_angle": 0.0024691358024691358,
+   "P_dual": 0.0012345679012345679,
+   "frames": 810,
+   "lostFrames": 628,
+   "firstLostFrame": 1,
+   "fps": 18.195684069101066,
+   "p50LatencyMs": 51.173599998946884,
+   "p95LatencyMs": 75.29067999967081,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "050": {
+   "S_dual": 0.09840541721275667,
+   "P_angle": 0.13646788990825687,
+   "P_dual": 0.13302752293577982,
+   "frames": 872,
+   "lostFrames": 616,
+   "firstLostFrame": 52,
+   "fps": 19.72500011072771,
+   "p50LatencyMs": 51.511800000298535,
+   "p95LatencyMs": 57.335749998856045,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "054": {
+   "S_dual": 0.14580522660270823,
+   "P_angle": 0.20776495278069254,
+   "P_dual": 0.2025183630640084,
+   "frames": 953,
+   "lostFrames": 642,
+   "firstLostFrame": 117,
+   "fps": 19.481223402022916,
+   "p50LatencyMs": 51.90924999988056,
+   "p95LatencyMs": 57.866339999782205,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "064": {
+   "S_dual": 0.583531746031746,
+   "P_angle": 0.4791666666666667,
+   "P_dual": 0.33125,
+   "frames": 480,
+   "lostFrames": 99,
+   "firstLostFrame": 343,
+   "fps": 15.332236288402248,
+   "p50LatencyMs": 50.07060000025376,
+   "p95LatencyMs": 121.30742000099414,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "068": {
+   "S_dual": 0.5678311085865757,
+   "P_angle": 0.7554671968190855,
+   "P_dual": 0.5566600397614314,
+   "frames": 503,
+   "lostFrames": 31,
+   "firstLostFrame": 419,
+   "fps": 17.004272869520598,
+   "p50LatencyMs": 56.31309999989753,
+   "p95LatencyMs": 72.47696000031283,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "076": {
+   "S_dual": 0.2259533295389869,
+   "P_angle": 0.2589641434262948,
+   "P_dual": 0.250996015936255,
+   "frames": 251,
+   "lostFrames": 184,
+   "firstLostFrame": 66,
+   "fps": 15.81418755534365,
+   "p50LatencyMs": 63.630900000134716,
+   "p95LatencyMs": 68.48987500043222,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "081": {
+   "S_dual": 0.12863756613756613,
+   "P_angle": 0.07407407407407407,
+   "P_dual": 0.037037037037037035,
+   "frames": 432,
+   "lostFrames": 281,
+   "firstLostFrame": 151,
+   "fps": 17.89172138951857,
+   "p50LatencyMs": 54.67049999970186,
+   "p95LatencyMs": 63.78165000023728,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "082": {
+   "S_dual": 0.2979300984051578,
+   "P_angle": 0.41092636579572445,
+   "P_dual": 0.2755344418052256,
+   "frames": 421,
+   "lostFrames": 166,
+   "firstLostFrame": 87,
+   "fps": 18.23705341614802,
+   "p50LatencyMs": 54.19175000042742,
+   "p95LatencyMs": 60.95049000032304,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "099": {
+   "S_dual": 0.8538265306122449,
+   "P_angle": 0.9839285714285714,
+   "P_dual": 0.9571428571428572,
+   "frames": 560,
+   "lostFrames": 0,
+   "firstLostFrame": null,
+   "fps": 17.78049463735795,
+   "p50LatencyMs": 56.71230000007199,
+   "p95LatencyMs": 62.187530000119295,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "107": {
+   "S_dual": 0.3726482418580511,
+   "P_angle": 0.2098092643051771,
+   "P_dual": 0.15803814713896458,
+   "frames": 367,
+   "lostFrames": 163,
+   "firstLostFrame": 140,
+   "fps": 17.314276105636747,
+   "p50LatencyMs": 57.82509999971808,
+   "p95LatencyMs": 64.82489999962127,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "108": {
+   "S_dual": 0.10309523809523807,
+   "P_angle": 0.13666666666666666,
+   "P_dual": 0.12833333333333333,
+   "frames": 600,
+   "lostFrames": 430,
+   "firstLostFrame": 108,
+   "fps": 17.443620648139383,
+   "p50LatencyMs": 58.63810000118974,
+   "p95LatencyMs": 63.78197000012734,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "109": {
+   "S_dual": 0.002300136764888723,
+   "P_angle": 0.005221932114882507,
+   "P_dual": 0.0039164490861618795,
+   "frames": 766,
+   "lostFrames": 763,
+   "firstLostFrame": 3,
+   "fps": 18.948753297079914,
+   "p50LatencyMs": 51.87040000055276,
+   "p95LatencyMs": 59.72841999900993,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "118": {
+   "S_dual": 0.08040988547317661,
+   "P_angle": 0.06329113924050633,
+   "P_dual": 0.05443037974683544,
+   "frames": 790,
+   "lostFrames": 703,
+   "firstLostFrame": 75,
+   "fps": 16.41912787661559,
+   "p50LatencyMs": 58.9559999989433,
+   "p95LatencyMs": 74.40263999997113,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "131": {
+   "S_dual": 0.3395511070670307,
+   "P_angle": 0.36942675159235666,
+   "P_dual": 0.27388535031847133,
+   "frames": 314,
+   "lostFrames": 150,
+   "firstLostFrame": 83,
+   "fps": 19.769582991811767,
+   "p50LatencyMs": 50.27869999867107,
+   "p95LatencyMs": 54.25481999955082,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "139": {
+   "S_dual": 0.013653013653013656,
+   "P_angle": 0.013986013986013986,
+   "P_dual": 0.013986013986013986,
+   "frames": 429,
+   "lostFrames": 422,
+   "firstLostFrame": 7,
+   "fps": 20.696790299788276,
+   "p50LatencyMs": 48.35164999985864,
+   "p95LatencyMs": 54.586879999715165,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "149": {
+   "S_dual": 0.6926190476190476,
+   "P_angle": 0.8175,
+   "P_dual": 0.75,
+   "frames": 800,
+   "lostFrames": 65,
+   "firstLostFrame": 253,
+   "fps": 22.403866988095984,
+   "p50LatencyMs": 43.9539999988483,
+   "p95LatencyMs": 50.21445000093078,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "150": {
+   "S_dual": 0.6929606625258798,
+   "P_angle": 0.8130434782608695,
+   "P_dual": 0.8043478260869565,
+   "frames": 230,
+   "lostFrames": 40,
+   "firstLostFrame": 190,
+   "fps": 16.974107732964796,
+   "p50LatencyMs": 55.714500000249245,
+   "p95LatencyMs": 77.93668000049365,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "156": {
+   "S_dual": 0.5186156011844085,
+   "P_angle": 0.5851172273190621,
+   "P_dual": 0.5769622833843018,
+   "frames": 981,
+   "lostFrames": 399,
+   "firstLostFrame": 402,
+   "fps": 19.960708129418357,
+   "p50LatencyMs": 48.46514999917417,
+   "p95LatencyMs": 63.39506500034985,
+   "forwards": null,
+   "invalidFrames": 0
+  },
+  "160": {
+   "S_dual": 0.5419047619047618,
+   "P_angle": 0.58,
+   "P_dual": 0.58,
+   "frames": 400,
+   "lostFrames": 168,
+   "firstLostFrame": 46,
+   "fps": 18.8773882438677,
+   "p50LatencyMs": 53.108500000234926,
+   "p95LatencyMs": 60.64779000080305,
+   "forwards": null,
+   "invalidFrames": 0
+  }
+ }
+}

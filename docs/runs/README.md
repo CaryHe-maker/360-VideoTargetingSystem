@@ -1,0 +1,43 @@
+# 评测运行记录
+
+本目录由 `tools/benchmark.py archive` 生成，每个 JSON 文件对应一次运行：逐条序列的分数和耗时、生效的配置、commit 和环境。结果文件本身在本地的 `outputs/` 下，不随仓库提交；需要某次运行的数字时先查这里，不要重跑。
+
+延迟和 FPS 只有“计时”一列为 `solo`（运行时机器上没有别的评测任务）的才可以相互比较；每帧前向次数不受机器影响。实验的结论和上下文见 [评测记录](../evaluation-log.md)。
+
+| 记录 | 实验 | 划分 | 方法 | 运行时间 (UTC) | Commit | 配置哈希 | 序列 | S<sub>dual</sub> | P<sub>angle</sub> | 丢失率 | 前向 / 帧 | P50 ms | P95 ms | FPS | 计时 | 说明 |
+|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
+| [E001-tune-b0](E001-tune-b0.json) | E001 | tune | `b0` | 2026-10-03 07:32 | `8de8d95` | `4e028e32` | 25 | 0.310 | 0.343 | 0.570 | — | 52 | 62 | 18.8 | unknown | b0，帧级用法 |
+| [E001-tune-b2](E001-tune-b2.json) | E001 | tune | `b2` | 2026-10-03 07:45 | `8de8d95` | `af87fefc` | 25 | 0.271 | 0.320 | 0.551 | — | 66 | 76 | 15.3 | unknown | 单个透视视图（旧取法），帧级 |
+| [E001-tune-multiview](E001-tune-multiview.json) | E001 | tune | `ours` | 2026-10-03 08:02 | `8de8d95` | `4e028e32` | 25 | 0.065 | 0.054 | 0.820 | — | 237 | 263 | 4.4 | unknown | 四角视图 + 融合，已删除 |
+| [E002-tune-fullview](E002-tune-fullview.json) | E002 | tune | `b2` | 2026-10-03 09:09 | `acd253d` | `92ac3a31` | 25 | 0.311 | 0.392 | 0.501 | — | 75 | 86 | 13.2 | unknown | fullViewSearch，未采纳 |
+| [E003-tune-single](E003-tune-single.json) | E003 | tune | `ours` | 2026-10-06 02:27 | `acd253d*` | `b7ed6f0c` | 25 | 0.271 | 0.320 | 0.551 | — | 71 | 79 | 14.0 | unknown | 删除多视图后的单视图（旧取法） |
+| [E004-test-legacy](E004-test-legacy.json) | E004 | test | `ours` | 2026-10-06 05:26 | `c0414cf*` | `b7ed6f0c` | 120 | 0.310 | 0.327 | 0.487 | — | 95 | 132 | 9.6 | unknown | 测试集第一次运行；单视图旧取法，帧级 |
+| [E004-test-b0](E004-test-b0.json) | E004 | test | `b0` | 2026-10-06 05:39 | `c0414cf*` | `b7ed6f0c` | 120 | 0.368 | 0.393 | 0.523 | — | 84 | 121 | 10.2 | unknown | 测试集第一次运行；b0，帧级用法 |
+| [E006-tune-template-off](E006-tune-template-off.json) | E006 | tune | `ours` | 2026-10-06 07:11 | `81f9491*` | `0ba2e878` | 25 | 0.267 | 0.315 | 0.559 | — | 80 | 87 | 12.4 | unknown | 关闭在线模板，未采纳 |
+| [E007-holdout-legacy](E007-holdout-legacy.json) | E007 | hold-out | `ours` | 2026-10-06 09:36 | `b7ca6c0*` | `f775e982` | 41 | 0.283 | 0.368 | 0.509 | — | 67 | 74 | 14.9 | unknown | 单视图旧取法，帧级 |
+| [E007-holdout-aligned-bug](E007-holdout-aligned-bug.json) | E007 | hold-out | `ours` | 2026-10-06 10:14 | `b7ca6c0*` | `a73e87d8` | 41 | 0.504 | 0.607 | 0.311 | — | 66 | 73 | 15.4 | unknown | alignedSearch，含 010 整条失败的缺陷 |
+| [E007-holdout-b0](E007-holdout-b0.json) | E007 | hold-out | `b0` | 2026-10-06 23:09 | `0f6c666` | `f775e982` | 41 | 0.459 | 0.543 | 0.340 | — | 53 | 66 | 16.5 | unknown | b0，帧级用法 |
+| [E008-tune-aligned](E008-tune-aligned.json) | E008 | tune | `ours` | 2026-10-06 23:16 | `0f6c666*` | `a73e87d8` | 25 | 0.421 | 0.489 | 0.428 | — | 68 | 79 | 14.6 | unknown | alignedSearch，帧级用法 |
+| [E009-holdout-aligned](E009-holdout-aligned.json) | E009 | hold-out | `ours` | 2026-10-07 00:09 | `39c60ef*` | `a73e87d8` | 41 | 0.520 | 0.621 | 0.292 | — | 58 | 66 | 16.5 | unknown | alignedSearch，帧级，修复 010 之后 |
+| [E010-tune-seq](E010-tune-seq.json) | E010 | tune | `ours` | 2026-10-07 01:53 | `204c5f3*` | `7e388ffa` | 25 | 0.418 | 0.489 | 0.432 | — | 69 | 80 | 14.4 | solo | 序列级模型；修复顺序依赖之前 |
+| [E010-tune-seq-b0](E010-tune-seq-b0.json) | E010 | tune | `b0` | 2026-10-07 02:11 | `204c5f3*` | `7e388ffa` | 25 | 0.335 | 0.360 | 0.511 | — | 60 | 70 | 16.9 | solo | b0，序列级；修复顺序依赖之前 |
+| [E010-holdout-seq](E010-holdout-seq.json) | E010 | hold-out | `ours` | 2026-10-07 02:26 | `204c5f3*` | `7e388ffa` | 41 | 0.526 | 0.641 | 0.314 | — | 75 | 80 | 13.2 | solo | 序列级模型；修复顺序依赖之前 |
+| [E010-holdout-seq-b0](E010-holdout-seq-b0.json) | E010 | hold-out | `b0` | 2026-10-07 03:09 | `204c5f3*` | `7e388ffa` | 41 | 0.458 | 0.547 | 0.341 | — | 59 | 67 | 16.2 | solo | b0，序列级；修复顺序依赖之前 |
+| [E011-tune-sph90-prefix](E011-tune-sph90-prefix.json) | E011 | tune | `ours` | 2026-10-07 05:20 | `b4b2ac3*` | `67e72130` | 25 | 0.423 | 0.486 | 0.426 | 1.00 | 69 | 80 | 14.8 | solo | 球面采样 90° 切换；修复顺序依赖之前 |
+| [E011-tune-sph90](E011-tune-sph90.json) | E011 | tune | `ours` | 2026-10-07 05:43 | `b4b2ac3*` | `67e72130` | 25 | 0.424 | 0.493 | 0.421 | 1.00 | 71 | 82 | 14.6 | solo | 修复后，球面采样 90° 切换 |
+| [E011-tune-persp](E011-tune-persp.json) | E011 | tune | `ours` | 2026-10-07 06:00 | `b4b2ac3*` | `fdb370d5` | 25 | 0.421 | 0.487 | 0.436 | 1.00 | 76 | 85 | 12.9 | solo | 修复后，sphericalSearch=false |
+| [E011-tune-sph120-cap120](E011-tune-sph120-cap120.json) | E011 | tune | `ours` | 2026-10-07 06:26 | `4acbc63*` | `a7a6db24` | 25 | 0.446 | 0.519 | 0.393 | 1.00 | 74 | 85 | 13.7 | solo | 修复后，120° 切换且透视上限 120° |
+| [E011-holdout-default](E011-holdout-default.json) | E011 | hold-out | `ours` | 2026-10-07 06:47 | `4acbc63*` | `ebbd867c` | 41 | 0.528 | 0.634 | 0.277 | 1.00 | 113 | 153 | 7.1 | parallel | 修复后的默认配置（球面 120°）；当前基准 |
+| [E011-tune-default](E011-tune-default.json) | E011 | tune | `ours` | 2026-10-07 06:47 | `4acbc63*` | `ebbd867c` | 25 | 0.424 | 0.498 | 0.427 | 1.00 | 181 | 228 | 5.6 | parallel | 修复后的默认配置（球面 120°）；当前基准 |
+| [E011-holdout-persp](E011-holdout-persp.json) | E011 | hold-out | `ours` | 2026-10-07 06:48 | `4acbc63*` | `0e286d68` | 41 | 0.498 | 0.603 | 0.338 | 1.00 | 114 | 164 | 7.1 | parallel | 修复后，sphericalSearch=false |
+| [E011-tune-b0](E011-tune-b0.json) | E011 | tune | `b0` | 2026-10-07 22:32 | `d0f5195` | `ebbd867c` | 25 | 0.344 | 0.377 | 0.504 | 1.00 | 54 | 62 | 17.8 | solo | b0，修复后；当前基准 |
+| [E011-holdout-b0](E011-holdout-b0.json) | E011 | hold-out | `b0` | 2026-10-07 22:46 | `d0f5195` | `ebbd867c` | 41 | 0.454 | 0.540 | 0.332 | 1.00 | 54 | 59 | 18.5 | solo | b0，修复后；当前基准 |
+| [E012-tune-nopred](E012-tune-nopred.json) | E012 | tune | `ours` | 2026-10-07 23:23 | `199239d*` | `72c11a0b` | 25 | 0.408 | 0.460 | 0.434 | 1.00 | 60 | 69 | 16.8 | solo | predictiveSearch=false，未采纳 |
+| [E012-holdout-nopred](E012-holdout-nopred.json) | E012 | hold-out | `ours` | 2026-10-07 23:38 | `199239d*` | `72c11a0b` | 41 | 0.500 | 0.602 | 0.286 | 1.00 | 59 | 68 | 16.7 | solo | predictiveSearch=false，未采纳 |
+| [E014-tune-opencv](E014-tune-opencv.json) | E014 | tune | `ours` | 2026-10-08 01:18 | `5bbbf88*` | `5b604d22` | 25 | 0.445 | 0.516 | 0.406 | 1.00 | 35 | 44 | 27.6 | solo | resampler=opencv（cv2.remap 取色） |
+| [E014-tune-default-solo](E014-tune-default-solo.json) | E014 | tune | `ours` | 2026-10-08 01:27 | `5bbbf88*` | `58a48d67` | 25 | 0.424 | 0.498 | 0.427 | 1.00 | 64 | 75 | 15.6 | solo | 默认配置（resampler=cpu）单独重跑，结果与 E011-tune-default 逐字节相同，用于计时 |
+| [E014-holdout-opencv](E014-holdout-opencv.json) | E014 | hold-out | `ours` | 2026-10-08 01:44 | `8832720*` | `5b604d22` | 41 | 0.516 | 0.618 | 0.301 | 1.00 | 41 | 56 | 22.6 | solo | resampler=opencv（cv2.remap 取色） |
+| [E015-tune-align](E015-tune-align.json) | E015 | tune | `ours` | 2026-10-08 02:27 | `f128368*` | `5b604d22` | 25 | 0.431 | 0.505 | 0.406 | 1.00 | 38 | 51 | 24.8 | solo | BFoV 垂直方向改用纬度跨度 + ERP 包络加内部点；当前基准 |
+| [E015-holdout-align](E015-holdout-align.json) | E015 | hold-out | `ours` | 2026-10-08 02:38 | `f128368*` | `5b604d22` | 41 | 0.549 | 0.663 | 0.253 | 1.00 | 45 | 61 | 21.4 | solo | BFoV 垂直方向改用纬度跨度 + ERP 包络加内部点；当前基准 |
+
+Commit 后的 `*` 表示运行时工作区有未提交的改动。
