@@ -816,7 +816,7 @@ hold-out 上变化超过 0.02 的序列：010（0.022 → 0.768）、011（0.181
 - **环境**：RTX 4060 Laptop GPU、PyTorch 2.11.0；三次运行依次单独进行（`solo`）
 - **对照**：E011 的默认配置（`resampler: cpu`）。tune 集的对照单独重跑了一次以取得可比的计时，结果文件与 E011 逐字节相同
 - **改动**：只改取视图这一步的实现。采样位置不变；坐标改用单精度计算，取色改用 `cv2.remap`（双线性，`BORDER_WRAP`）
-- **运行记录**：[`E014-tune-default-solo`](runs/E014-tune-default-solo.json)、[`E014-tune-opencv`](runs/E014-tune-opencv.json)、[`E014-holdout-opencv`](runs/E014-holdout-opencv.json)；没有无效帧
+- **运行记录**：`E014-tune-default-solo`、`E014-tune-opencv`、`E014-holdout-opencv`；没有无效帧
 
 **单步的差别**（3840×1920 的原图，256×256 的视图）：
 
@@ -870,7 +870,7 @@ hold-out 上变化超过 0.02 的序列：010（0.022 → 0.768）、011（0.181
 - **改动**（两处合成一次实验）：
   1. 透视视图里拟合 BFoV 时，垂直方向从“切平面上的角度”改为“转到拟合中心之后的纬度跨度”，与官方工具 `localBbox2Bfov` 的定义一致；
   2. ERP 框的包络在所有视图里都加上框内部 33×33 的采样点，之前只有球面视图这样做。
-- **运行记录**：[`E015-tune-align`](runs/E015-tune-align.json)、[`E015-holdout-align`](runs/E015-holdout-align.json)；没有无效帧
+- **运行记录**：`E015-tune-align`、`E015-holdout-align`；没有无效帧
 
 | 划分 | E014 | 本次 | Δ（95% 区间） | P<sub>angle</sub> | 丢失率 | S<sub>sphere</sub>（BFoV 结果） | 逐条序列（变化超过 0.02） |
 |---|---:|---:|---|---|---|---|---|

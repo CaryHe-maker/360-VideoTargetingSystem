@@ -149,7 +149,7 @@ python tools/benchmark.py archive --dataset-root <train> --label-root <labels/tr
 
 ### 运行记录
 
-`archive` 写出的记录在 [`docs/runs/`](runs/README.md)，随仓库提交。它保存逐条序列的分数和耗时、生效的配置、commit 和环境，用来代替“翻本地的 `outputs/`”和“重跑一遍”。`--timing` 必须如实填写：只有 `solo` 的延迟可以相互比较。
+`archive` 写出的记录在 `docs/runs/`，只保存在本地；随仓库提交的是自动生成的总表 [`docs/runs/README.md`](runs/README.md)。它保存逐条序列的分数和耗时、生效的配置、commit 和环境，用来代替“翻本地的 `outputs/`”和“重跑一遍”。`--timing` 必须如实填写：只有 `solo` 的延迟可以相互比较。
 
 ### 分数与 IoU 的关系
 

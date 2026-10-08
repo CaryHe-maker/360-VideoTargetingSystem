@@ -35,8 +35,9 @@ runs/
 # The Python package named ``datasets`` is source code, not data.
 !src/track360/datasets/
 
-# The versioned records of benchmark runs are documentation, not run outputs.
+# The index of benchmark runs is documentation; the per-run records stay local.
 !docs/runs/
+docs/runs/*.json
 
 # Model weights are downloaded separately and never committed.
 models/*

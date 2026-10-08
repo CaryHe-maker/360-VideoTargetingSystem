@@ -1,9 +1,9 @@
-"""Keep a small, versioned record of every benchmark run.
+"""Keep a small record of every benchmark run.
 
-Result files live under ``outputs/``, which is local and not committed.  A record
-holds what is needed to look a run up later without repeating it: the scores per
-sequence, the cost per sequence, and the configuration and commit that produced
-them.
+Result files live under ``outputs/``, which is local.  A record holds what is needed
+to look a run up later without repeating it: the scores per sequence, the cost per
+sequence, and the configuration and commit that produced them.  The records stay
+local as well; the generated index of all runs is what gets committed.
 """
 
 from __future__ import annotations
@@ -128,10 +128,10 @@ def writeIndex(archiveRoot: str | Path) -> Path:
     lines = [
         "# 评测运行记录",
         "",
-        "本目录由 `tools/benchmark.py archive` 生成，每个 JSON 文件对应一次运行："
-        "逐条序列的分数和耗时、生效的配置、commit 和环境。"
-        "结果文件本身在本地的 `outputs/` 下，不随仓库提交；"
-        "需要某次运行的数字时先查这里，不要重跑。",
+        "本表由 `tools/benchmark.py archive` 生成，每一行对应一次运行。"
+        "每次运行还有一个同名的 JSON 记录（逐条序列的分数和耗时、生效的配置、commit 和环境），"
+        "和结果文件（`outputs/`）一样只保存在本地，不随仓库提交；随仓库提交的只有这张表。"
+        "需要某次运行的数字时先查这里和本地的记录，不要重跑。",
         "",
         "延迟和 FPS 只有“计时”一列为 `solo`（运行时机器上没有别的评测任务）的才可以相互比较；"
         "每帧前向次数不受机器影响。实验的结论和上下文见 [评测记录](../evaluation-log.md)。",
@@ -150,7 +150,7 @@ def writeIndex(archiveRoot: str | Path) -> Path:
             "| "
             + " | ".join(
                 [
-                    f"[{record['name']}]({record['name']}.json)",
+                    f"`{record['name']}`",
                     record.get("experiment") or "",
                     record.get("split") or "",
                     f"`{record['method']}`",

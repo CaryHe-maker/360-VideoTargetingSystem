@@ -162,7 +162,7 @@ class BenchmarkTest(unittest.TestCase):
         self.assertIn("configHash", record)
         self.assertTrue(record["config"]["backendTuning"]["sphericalSearch"])
         index = (archive / "README.md").read_text(encoding="utf-8")
-        self.assertIn("[T001-ours](T001-ours.json)", index)
+        self.assertIn("| `T001-ours` |", index)
         self.assertIn("| solo | unit test |", index)
         with self.assertRaisesRegex(ValueError, "timing must be"):
             archiveRun(
