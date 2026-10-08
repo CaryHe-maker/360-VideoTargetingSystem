@@ -32,7 +32,9 @@ class TemplatePolicy:
     ) -> None:
         self._tracking = trackingConfig
         self._tuning = backendTuning or BackendTuningConfig()
-        self._enabled = self._tuning.onlineTemplate
+        # The sequence-level model rewrites its own appearance feature every frame and
+        # takes no template updates from outside.
+        self._enabled = self._tuning.onlineTemplate and not self._tuning.sequenceModel
 
     def decide(
         self,

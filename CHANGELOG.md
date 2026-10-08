@@ -4,6 +4,87 @@
 
 ## [未发布]
 
+### 取视图改用 OpenCV 重映射
+
+#### 变更
+
+- `geometry.resampler` 增加 `opencv` 并成为默认值：用单精度算采样坐标，`cv2.remap` 双线性取色。取一个 256×256 的视图从约 19 ms 降到约 2 ms，像素值与参考实现最多差 1 个灰度级。
+- tune 集上整条流水线的 P50 / P95 从 64 / 75 ms 降到 35 / 44 ms（15.6 → 27.6 FPS，单独运行）；66 条训练序列上 S<sub>dual</sub> 0.489 → 0.489（95% 区间 [−0.026, +0.030]）。见评测记录 E014。
+- 原来的双精度实现保留为 `resampler: cpu`。金标准轨迹重新录制。
+
+### 评测：运行记录和新的回归检查
+
+#### 新增
+
+- `tools/benchmark.py archive`：把一次运行写成记录放进 `docs/runs/`（逐条序列的分数和耗时、配置、commit、环境），并更新总表。到 E012 为止的 28 次运行已经补录。
+- `compare --fragile-file` 和 `configs/splits/360vos_tune_fragile.txt`：14 条不稳定的序列作为一组判断，看平均 S<sub>dual</sub> 的差值和 bootstrap 区间。
+
+#### 变更
+
+- 硬回归名单换成 7 条稳定的序列（156、099、160、139、149、082、068），门槛从 0.02 改为 0.03。原来的 5 条里有 3 条在无关的改动下就会摆动 0.1 以上，几乎每个实验都误报。
+
+### 实验：运动预测消融
+
+#### 新增
+
+- `backendTuning.predictiveSearch`（默认开启，行为不变）：关闭后搜索视图跟随上一帧提交的结果，不做位置和尺寸的外推。66 条序列上关闭后 S<sub>dual</sub> 0.489 → 0.465（95% 区间 [−0.061, +0.014]），没有采纳。见评测记录 E012。
+
+### 大目标改用球面采样
+
+#### 新增
+
+- `ViewSpec.projection`：视图的投影方式，透视或球面。球面视图的像素在“以视图中心为 (0, 0) 的经纬度”上均匀分布，最多覆盖整个球面，做法与 360VOT 的扩展 BFoV 相同。
+- `backendTuning.sphericalSearch`（默认开启）和 `sphericalSearchFovDeg`（默认 120°）：搜索区域达到这个角度时，搜索视图和模板视图改用球面采样。之前是 90° 的透视视图加补黑边。
+- `ViewPlanner.templateView()`；Geometry 的裁剪和回投按视图的投影方式处理，球面视图的 ERP 框额外使用框内部的采样点（处理包含极点的框）。
+- 66 条可用训练序列上 S<sub>dual</sub> 0.469 → 0.489（95% 区间 [−0.001, +0.049]），P<sub>angle</sub> +0.023 [+0.003, +0.051]，丢失率 0.368 → 0.323；目标接近 180° 的 010 号序列 0.022 → 0.768。见评测记录 E011。
+
+#### 修复
+
+- 序列级模型的结果依赖序列的运行顺序：坐标嵌入表的 `max_norm` 在首次查表时才生效，同一张表又是输出层。加载权重后一次缩放到位。E010 及更早的序列级数字带有这种噪声。
+- 运动模型外推出的目标尺寸超出 BFoV 能表示的范围时，整帧报错。
+
+#### 变更
+
+- 默认配置的金标准轨迹重新录制；之前的行为保留为 `perspective_only` 变体，摘要与此前的 `default` 相同。
+
+### 评测：效率数字进入报告
+
+#### 新增
+
+- 每条序列的运行报告增加前向次数（`forwards`）。
+- `tools/benchmark.py` 的 `eval` 和 `compare` 打印效率表：每帧前向次数、P50 / P95 延迟、FPS；`--json` 输出里增加 `efficiency` 字段。延迟只作参考（机器负载不受控），前向次数不受机器影响。
+
+#### 修复
+
+- 续跑时被跳过的序列不再用空报告覆盖它原来的运行报告。
+
+### 清理没有调用方的代码
+
+#### 移除
+
+- `scoreMotionConsistency()`、`calibrateMotionScore()`：基于协方差的运动一致性打分，没有调用方。
+- `TrackStateMachine.update()`、`StateUpdate` 以及 `uncertainFrames` / `recoveryFrames` 计数：为旧调用方保留的适配层。状态机只剩 `transition()` 和 `recordScore()`。
+- `TrackMode.TERMINATED` 和没有任何地方产生的 `TransitionReason`（`PATIENCE_EXHAUSTED`、`RECOVERY_PROGRESS`、`REACQUIRED`、`RECOVERY_EXHAUSTED`、`END_OF_STREAM`、`EXTERNAL_RESET`）。
+- `evaluation/spherical_metrics.py`（`SphericalMetrics`、`bfovSphericalIoU()`）：评测使用官方工具包的球面指标。
+- 序列级会话的 `inferBatchWithFovs()`。
+
+输出不变：金标准轨迹的摘要没有变化。
+
+### 按序列级模型运行 ARTrackV2
+
+#### 变更
+
+- 官方的 ARTrackV2-B-256 权重是序列级训练的结果。此前用帧级的模型代码加载，303 组参数里有 106 组被丢掉，推理时不输入轨迹。现在默认按序列级模型运行（`backendTuning.sequenceModel: true`）：权重严格加载，每帧输入前 7 帧的目标框，使用模型自己每帧更新的外观特征。`b0` 基线同样切换。
+- 66 条可用训练序列上 S<sub>dual</sub> 0.483 → 0.485（95% 区间 [−0.046, +0.047]），总分不变，逐条序列有升有降；硬回归序列 131 不通过，作为已知问题保留。分数从与 IoU 无关变成随跟踪质量变化（丢失帧对好帧的 AUROC 0.42–0.46 → 0.72）。见评测记录 E010。
+- 序列级用法下框架不做模板更新，`onlineTemplate` 只在 `sequenceModel: false` 时起作用。
+- 默认配置的金标准轨迹重新录制；帧级用法保留为 `frame_model` 变体，摘要与此前的 `default` 相同。
+
+#### 新增
+
+- `backends/artrack_seq_session.py`：`PyTorchARTrackV2SeqSession` 和 `createArtrackSession()`。
+- `ViewSpec.trajectory`：目标在前 7 帧的框，换算成这一帧视图里的像素坐标，由 `ViewPlanner` 从控制器保存的历史 BFoV 生成（`localBoxOfBfov()`）。
+- `third_party/artrackv2/` 增加上游的序列级模型代码、外观解码器和配置（同一上游版本，见 `NOTICE`）。
+
 ### 对齐搜索区域成为默认
 
 #### 变更

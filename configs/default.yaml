@@ -13,7 +13,7 @@ geometry:
   boundarySamplesPerEdge: 65
   minFovDeg: 20.0
   maxFovDeg: 120.0
-  resampler: cpu
+  resampler: opencv
 motion:
   minSamplesForVelocity: 2
   maxTangentSpanRad: 1.20
@@ -29,12 +29,16 @@ tracking:
   contextMarginRatio: 0.15
   maxPredictionHorizon: 3
 backendTuning:
+  sequenceModel: true
   acceptAnyCandidate: true
   viewHorizontalFovCapDeg: 90.0
   viewVerticalFovCapDeg: 90.0
   fullViewSearch: false
   alignedSearch: true
   alignedMinFovDeg: 2.0
+  sphericalSearch: true
+  sphericalSearchFovDeg: 120.0
+  predictiveSearch: true
   useMotionScore: false
   templateFovScale: 2.5
   onlineTemplate: true

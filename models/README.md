@@ -1,6 +1,6 @@
 # 模型权重
 
-默认配置读取本目录下的 `artrackv2_b_256.pth.tar`，即官方 [ARTrackV2-B-256](https://github.com/MIV-XJTU/ARTrack) checkpoint（约 1.6 GB）。权重**不随仓库分发**，需要单独下载后放到本目录，并重命名为 `artrackv2_b_256.pth.tar`。本目录中除本说明外的文件都被 `.gitignore` 忽略，不会被提交。
+默认配置读取本目录下的 `artrackv2_b_256.pth.tar`，即官方 [ARTrackV2-B-256](https://github.com/MIV-XJTU/ARTrack) checkpoint（约 1.6 GB）。这是官方的**序列级**权重（训练 40 个 epoch，带轨迹位置嵌入和外观解码器，共 303 组参数），默认按序列级模型加载，见 [Backends](../docs/modules/backends.md#这份权重是序列级模型)。权重**不随仓库分发**，需要单独下载后放到本目录，并重命名为 `artrackv2_b_256.pth.tar`。本目录中除本说明外的文件都被 `.gitignore` 忽略，不会被提交。
 
 ## 获取方式
 

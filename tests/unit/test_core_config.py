@@ -25,7 +25,7 @@ class CoreConfigTest(unittest.TestCase):
         self.assertIsNone(config.scoring.calibrationArtifact)
         self.assertTrue(config.scoring.requireCheckpointHashMatch)
         self.assertFalse(config.visualization.enabled)
-        self.assertEqual(config.geometry.resampler, "cpu")
+        self.assertEqual(config.geometry.resampler, "opencv")
         self.assertTrue(config.backendTuning.acceptAnyCandidate)
         self.assertAlmostEqual(config.backendTuning.viewHorizontalFovCapRad, 1.5707963267948966)
         self.assertAlmostEqual(config.backendTuning.viewVerticalFovCapRad, 1.5707963267948966)
@@ -94,7 +94,7 @@ class CoreConfigTest(unittest.TestCase):
         self._assertRejected("  viewHorizontalFovCapDeg: 90.0", "  viewHorizontalFovCapDeg: 200.0")
         self._assertRejected("  templateMinConfidence: 0.515", "  templateMinConfidence: 1.5")
         self._assertRejected("  holdWeakBox: true", "  holdWeakBox: 1")
-        self._assertRejected("  resampler: cpu", "  resampler: gpu")
+        self._assertRejected("  resampler: opencv", "  resampler: gpu")
 
     def _assertRejected(self, old: str, new: str) -> None:
         source = (REPOSITORY_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")

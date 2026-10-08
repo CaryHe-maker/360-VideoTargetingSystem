@@ -17,6 +17,7 @@ from track360.core.types import (
     FramePacket,
     LocalBoxProjection,
     LocalView,
+    ViewProjection,
     ViewSpec,
 )
 from track360.geometry.bfov_projector import BfovProjector
@@ -27,6 +28,7 @@ from track360.geometry.projection_math import (
     makeSphericalPoint,
     unitVectorsToErpPixels,
     unitVectorToYawPitch,
+    viewPixelsToUnitVectors,
 )
 from track360.geometry.seam import minimalCircularInterval, wrapPixelX
 
@@ -36,11 +38,13 @@ class SphericalGeometryImpl(SphericalGeometryProtocol):
     """Default geometry implementation for ERP crops and BFoV envelopes."""
 
     boundarySamplesPerEdge: int = 65
+    # Crop views with OpenCV's remap; see ``BfovProjector.useRemap``.
+    useRemap: bool = False
     _projector: BfovProjector = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         _requireBoundarySamplesPerEdge(self.boundarySamplesPerEdge)
-        self._projector = BfovProjector(self.boundarySamplesPerEdge)
+        self._projector = BfovProjector(self.boundarySamplesPerEdge, self.useRemap)
 
     def bboxToBfov(self, bbox: BBoxXYWH, frameWidthPx: int, frameHeightPx: int) -> BFoV:
         _requireFrameDimensions(frameWidthPx, frameHeightPx)
@@ -81,6 +85,8 @@ class SphericalGeometryImpl(SphericalGeometryProtocol):
     def localBoxToBfov(self, localBox: BBoxXYWH, spec: ViewSpec) -> BFoV:
         _requireViewSpec(spec)
         _requireLocalBox(localBox, spec.outputWidthPx, spec.outputHeightPx)
+        if spec.projection is ViewProjection.SPHERICAL:
+            return _sphericalBoxBfov(localBox, spec)
         sampleX, sampleY = _sampleErpBoxBoundary(
             localBox.xPx,
             localBox.yPx,
@@ -88,14 +94,7 @@ class SphericalGeometryImpl(SphericalGeometryProtocol):
             localBox.heightPx,
             self.boundarySamplesPerEdge,
         )
-        vectors = localPixelsToUnitVectors(
-            sampleX,
-            sampleY,
-            spec.bfov,
-            spec.outputWidthPx,
-            spec.outputHeightPx,
-        )
-        return _fitBfovFromVectors(vectors)
+        return _fitBfovFromVectors(viewPixelsToUnitVectors(sampleX, sampleY, spec))
 
     def projectLocalBoxBoundary(
         self,
@@ -115,25 +114,38 @@ class SphericalGeometryImpl(SphericalGeometryProtocol):
             localBox.heightPx,
             self.boundarySamplesPerEdge,
         )
-        vectors = localPixelsToUnitVectors(
-            sampleX,
-            sampleY,
-            spec.bfov,
-            spec.outputWidthPx,
-            spec.outputHeightPx,
-        )
-        bfov = _fitBfovFromVectors(vectors)
+        vectors = viewPixelsToUnitVectors(sampleX, sampleY, spec)
         erpX, erpY = unitVectorsToErpPixels(vectors, frameWidthPx, frameHeightPx)
-        xPx, widthPx = minimalCircularInterval(erpX, frameWidthPx)
-        yMin = float(np.min(erpY))
-        yMax = float(np.max(erpY))
+        if spec.projection is ViewProjection.SPHERICAL:
+            bfov = _sphericalBoxBfov(localBox, spec)
+            # A box this large can contain a pole or wrap the whole frame, which its
+            # boundary alone does not show: the ERP envelope also covers the interior.
+            insideX, insideY = unitVectorsToErpPixels(
+                viewPixelsToUnitVectors(*_sampleBoxInterior(localBox), spec),
+                frameWidthPx,
+                frameHeightPx,
+            )
+            envelopeX = np.concatenate((erpX, insideX))
+            envelopeY = np.concatenate((erpY, insideY))
+        else:
+            bfov = _fitBfovFromVectors(vectors)
+            envelopeX, envelopeY = erpX, erpY
+        xPx, widthPx = minimalCircularInterval(envelopeX, frameWidthPx)
+        yMin = float(np.min(envelopeY))
+        yMax = float(np.max(envelopeY))
         bbox = BBoxXYWH(
             xPx=xPx,
             yPx=yMin,
             widthPx=widthPx,
             heightPx=max(yMax - yMin, float(np.finfo(np.float64).eps)),
         )
-        indirectBbox = self.bfovToBbox(bfov, frameWidthPx, frameHeightPx)
+        # The envelope of the fitted BFoV is a perspective construction; a box from a
+        # spherical view has no such second envelope.
+        indirectBbox = (
+            bbox
+            if spec.projection is ViewProjection.SPHERICAL
+            else self.bfovToBbox(bfov, frameWidthPx, frameHeightPx)
+        )
         directArea = bbox.widthPx * bbox.heightPx
         indirectArea = indirectBbox.widthPx * indirectBbox.heightPx
         sphericalBoundary = tuple(
@@ -166,6 +178,48 @@ class SphericalGeometryImpl(SphericalGeometryProtocol):
         bbox = BBoxXYWH(xPx=xPx, yPx=yMin, widthPx=widthPx, heightPx=max(yMax - yMin, 0.0))
         _requireErpBox(bbox, frameWidthPx, frameHeightPx)
         return bbox
+
+
+_INTERIOR_SAMPLES_PER_AXIS = 33
+_MAX_HORIZONTAL_SPAN_RAD = 2.0 * pi - 1e-6
+_MAX_VERTICAL_SPAN_RAD = pi - 1e-6
+
+
+def _sphericalBoxBfov(localBox: BBoxXYWH, spec: ViewSpec) -> BFoV:
+    """BFoV of a box in a spherical view: its center direction and angular spans.
+
+    A spherical view is linear in angle, so the box maps to the spans directly, except
+    that meridians converge away from the view's equator: there a box covers more
+    longitude than it is wide, by the cosine of its latitude.  This is the extended
+    BFoV of 360VOT, used there for regions too large for a tangent plane.
+    """
+    centerY = localBox.yPx + 0.5 * localBox.heightPx
+    center = viewPixelsToUnitVectors(
+        np.asarray([localBox.xPx + 0.5 * localBox.widthPx], dtype=np.float64),
+        np.asarray([centerY], dtype=np.float64),
+        spec,
+    )[0]
+    latitude = (0.5 - centerY / spec.outputHeightPx) * spec.bfov.verticalFovRad
+    horizontal = (
+        localBox.widthPx / spec.outputWidthPx * spec.bfov.horizontalFovRad * cos(latitude)
+    )
+    vertical = localBox.heightPx / spec.outputHeightPx * spec.bfov.verticalFovRad
+    minimum = float(np.finfo(np.float64).eps)
+    return BFoV(
+        center=makeSphericalPoint(*unitVectorToYawPitch(tuple(center))),
+        horizontalFovRad=min(_MAX_HORIZONTAL_SPAN_RAD, max(minimum, horizontal)),
+        verticalFovRad=min(_MAX_VERTICAL_SPAN_RAD, max(minimum, vertical)),
+    )
+
+
+def _sampleBoxInterior(
+    localBox: BBoxXYWH,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    edge = np.linspace(0.0, 1.0, _INTERIOR_SAMPLES_PER_AXIS, dtype=np.float64)
+    gridX, gridY = np.meshgrid(
+        localBox.xPx + edge * localBox.widthPx, localBox.yPx + edge * localBox.heightPx
+    )
+    return gridX.reshape(-1), gridY.reshape(-1)
 
 
 def fitBfovToVectors(vectors: NDArray[np.float64]) -> BFoV:

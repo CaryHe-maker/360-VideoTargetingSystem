@@ -8,6 +8,10 @@ from track360.backends.artrack_model import (
     ARTrackTemplate,
     PyTorchARTrackV2Session,
 )
+from track360.backends.artrack_seq_session import (
+    PyTorchARTrackV2SeqSession,
+    createArtrackSession,
+)
 from track360.backends.observation import buildRgbObservation, clipLocalBox
 from track360.backends.template_cache import TemplateCache, TemplateSample, TemplateSnapshot
 
@@ -16,6 +20,7 @@ __all__ = [
     "ARTrackPrediction",
     "ARTrackSession",
     "ARTrackTemplate",
+    "PyTorchARTrackV2SeqSession",
     "PyTorchARTrackV2Session",
     "TemplateCache",
     "TemplateSample",
@@ -24,4 +29,5 @@ __all__ = [
     "TrackerBackendImpl",
     "buildRgbObservation",
     "clipLocalBox",
+    "createArtrackSession",
 ]

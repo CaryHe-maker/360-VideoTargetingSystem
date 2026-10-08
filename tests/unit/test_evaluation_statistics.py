@@ -6,7 +6,7 @@ import numpy as np
 from track360.core.errors import ProtocolError
 from track360.datasets.tune_split import readSequenceFile
 from track360.evaluation.bootstrap import bootstrapDifference, bootstrapRatio
-from track360.evaluation.comparison import compareScores, hardRegressions
+from track360.evaluation.comparison import compareScores, groupChange, hardRegressions
 from track360.evaluation.loss_rate import (
     LOST_IOU_THRESHOLD,
     LOST_MIN_RUN_FRAMES,
@@ -175,6 +175,20 @@ class ComparisonTest(unittest.TestCase):
         self.assertEqual(hardRegressions(self.comparison, ["a", "c"]), ())
         self.assertEqual(hardRegressions(self.comparison, ["b"], tolerance=0.9), ())
 
+    def testFragileSequencesAreJudgedAsAGroup(self) -> None:
+        group = groupChange(self.comparison, ["a", "b", "c"], samples=2000)
+        changes = {change.sequence: change for change in self.comparison.changes}
+
+        self.assertAlmostEqual(
+            group.baseline, sum(changes[name].baseline for name in "abc") / 3.0
+        )
+        self.assertAlmostEqual(group.difference.value, group.candidate - group.baseline)
+        # One sequence dropped and the others did not: the group as a whole is undecided.
+        self.assertFalse(group.regressed)
+        self.assertTrue(groupChange(self.comparison, ["b"], samples=200).regressed)
+        with self.assertRaisesRegex(ProtocolError, "only"):
+            groupChange(self.comparison, ["a", "only"])
+
     def testAHardSequenceWithoutResultsIsAnError(self) -> None:
         with self.assertRaisesRegex(ProtocolError, "only"):
             hardRegressions(self.comparison, ["a", "only"])
@@ -191,9 +205,13 @@ class HardRegressionListTest(unittest.TestCase):
         tune = readSequenceFile(ROOT / "configs" / "splits" / "360vos_tune.txt")
         hard = readSequenceFile(ROOT / "configs" / "splits" / "360vos_tune_hard.txt")
 
-        self.assertEqual(len(hard), 5)
+        fragile = readSequenceFile(ROOT / "configs" / "splits" / "360vos_tune_fragile.txt")
+
+        self.assertEqual((len(hard), len(fragile)), (7, 14))
         self.assertEqual(len(set(hard)), len(hard))
-        self.assertLessEqual(set(hard), set(tune))
+        self.assertEqual(len(set(fragile)), len(fragile))
+        self.assertLessEqual(set(hard) | set(fragile), set(tune))
+        self.assertFalse(set(hard) & set(fragile))
 
 
 if __name__ == "__main__":

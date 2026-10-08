@@ -9,18 +9,23 @@ import numpy as np
 from numpy.typing import NDArray
 
 from track360.core.errors import GeometryError
-from track360.core.types import FramePacket, LocalView, ViewSpec
+from track360.core.types import FramePacket, LocalView, ViewProjection, ViewSpec
 from track360.geometry.projection_math import (
-    localPixelsToUnitVectors,
     unitVectorsToErpPixels,
+    viewAxes,
+    viewPixelsToUnitVectors,
 )
 
 
 @dataclass(frozen=True, slots=True)
 class BfovProjector:
-    """Project ERP frames into local perspective views."""
+    """Project ERP frames into local views."""
 
     boundarySamplesPerEdge: int = 65
+    # Sample with single-precision coordinates and OpenCV's remap instead of the
+    # double-precision reference path.  Same sampling positions; values differ by
+    # at most one intensity level.
+    useRemap: bool = False
 
     def __post_init__(self) -> None:
         _requireBoundarySamplesPerEdge(self.boundarySamplesPerEdge)
@@ -29,14 +34,10 @@ class BfovProjector:
         """Crop one local RGB view."""
         _requireFrame(frame)
         _requireViewSpec(spec)
+        if self.useRemap:
+            return LocalView(spec=spec, rgb=_remapView(frame.rgb, spec))
         localX, localY = _localPixelGrid(spec.outputWidthPx, spec.outputHeightPx)
-        vectors = localPixelsToUnitVectors(
-            localX,
-            localY,
-            spec.bfov,
-            spec.outputWidthPx,
-            spec.outputHeightPx,
-        )
+        vectors = viewPixelsToUnitVectors(localX, localY, spec)
         sampleX, sampleY = unitVectorsToErpPixels(
             vectors,
             frame.rgb.shape[1],
@@ -53,6 +54,66 @@ class BfovProjector:
     ) -> list[LocalView]:
         """Crop multiple views while preserving the input order."""
         return [self.cropView(frame, spec) for spec in specs]
+
+
+def _remapView(image: NDArray[np.uint8], spec: ViewSpec) -> NDArray[np.uint8]:
+    """Sample a view with ``cv2.remap``: the positions of the reference path.
+
+    The view is separable in its own coordinates, so the directions are built from
+    one row and one column of values.  ``BORDER_WRAP`` makes the ERP columns
+    cyclic; rows never leave the frame because the row coordinate is clamped.
+    """
+    import cv2
+
+    if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
+        raise GeometryError("rgb image must have shape [H, W, 3] and dtype uint8")
+    frameHeightPx, frameWidthPx = image.shape[:2]
+    widthPx, heightPx = spec.outputWidthPx, spec.outputHeightPx
+    single = np.float32
+    column = (np.arange(widthPx, dtype=single) + single(0.5)) / single(widthPx)
+    row = (np.arange(heightPx, dtype=single) + single(0.5)) / single(heightPx)
+    if spec.projection is ViewProjection.SPHERICAL:
+        longitude = (column - single(0.5)) * single(spec.bfov.horizontalFovRad)
+        latitude = (single(0.5) - row) * single(spec.bfov.verticalFovRad)
+        cosLatitude = np.cos(latitude)[:, np.newaxis]
+        along = cosLatitude * np.cos(longitude)[np.newaxis, :]
+        across = cosLatitude * np.sin(longitude)[np.newaxis, :]
+        upward = np.broadcast_to(np.sin(latitude)[:, np.newaxis], along.shape)
+    else:
+        horizontal = (single(2.0) * column - single(1.0)) * single(
+            np.tan(spec.bfov.horizontalFovRad / 2.0)
+        )
+        vertical = (single(1.0) - single(2.0) * row) * single(
+            np.tan(spec.bfov.verticalFovRad / 2.0)
+        )
+        shape = (heightPx, widthPx)
+        along = np.ones(shape, dtype=single)
+        across = np.broadcast_to(horizontal[np.newaxis, :], shape)
+        upward = np.broadcast_to(vertical[:, np.newaxis], shape)
+    forward, right, up = (
+        axis.astype(single) for axis in viewAxes(spec.bfov.center, spec.bfov.rollRad)
+    )
+    x = along * forward[0] + across * right[0] + upward * up[0]
+    y = along * forward[1] + across * right[1] + upward * up[1]
+    z = along * forward[2] + across * right[2] + upward * up[2]
+    yaw = np.arctan2(x, z)
+    pitch = np.arctan2(y, np.hypot(x, z))
+    mapX = np.mod(
+        (yaw + single(np.pi)) * single(frameWidthPx / (2.0 * np.pi)) - single(0.5),
+        single(frameWidthPx),
+    )
+    mapY = np.clip(
+        (single(np.pi / 2.0) - pitch) * single(frameHeightPx / np.pi) - single(0.5),
+        single(0.0),
+        single(frameHeightPx - 1),
+    )
+    return cv2.remap(
+        image,
+        np.ascontiguousarray(mapX, dtype=single),
+        np.ascontiguousarray(mapY, dtype=single),
+        cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_WRAP,
+    )
 
 
 def _localPixelGrid(

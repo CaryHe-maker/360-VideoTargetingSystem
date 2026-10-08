@@ -11,7 +11,7 @@ from track360.core.errors import ConfigError
 
 SUPPORTED_SCHEMA_VERSION = 1
 VISUALIZATION_STAGES = frozenset({"local_rgb", "backend_box", "geometry_box"})
-GEOMETRY_RESAMPLERS = frozenset({"cpu", "cuda"})
+GEOMETRY_RESAMPLERS = frozenset({"cpu", "opencv", "cuda"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +51,7 @@ class GeometryConfig:
     boundarySamplesPerEdge: int
     minFovRad: float
     maxFovRad: float
-    resampler: str = "cpu"
+    resampler: str = "opencv"
 
     def __post_init__(self) -> None:
         if self.viewWidthPx <= 0 or self.viewHeightPx <= 0:
@@ -119,12 +119,16 @@ class BackendTuningConfig:
     applies.
     """
 
+    sequenceModel: bool = True
     acceptAnyCandidate: bool = True
     viewHorizontalFovCapRad: float | None = pi / 2.0
     viewVerticalFovCapRad: float | None = pi / 2.0
     fullViewSearch: bool = False
     alignedSearch: bool = True
     alignedMinFovRad: float = pi / 90.0
+    sphericalSearch: bool = True
+    sphericalSearchFovRad: float = 2.0 * pi / 3.0
+    predictiveSearch: bool = True
     useMotionScore: bool = False
     templateFovScale: float = 2.5
     onlineTemplate: bool = True
@@ -133,9 +137,12 @@ class BackendTuningConfig:
 
     def __post_init__(self) -> None:
         for name in (
+            "sequenceModel",
             "acceptAnyCandidate",
             "fullViewSearch",
             "alignedSearch",
+            "sphericalSearch",
+            "predictiveSearch",
             "useMotionScore",
             "onlineTemplate",
             "holdWeakBox",
@@ -150,6 +157,8 @@ class BackendTuningConfig:
             raise ConfigError(
                 "backendTuning.alignedSearch and fullViewSearch cannot both be enabled"
             )
+        if not 0.0 < self.sphericalSearchFovRad < 2.0 * pi:
+            raise ConfigError("backendTuning.sphericalSearchFovDeg must be in (0, 360)")
         if not 0.0 < self.alignedMinFovRad < pi:
             raise ConfigError("backendTuning.alignedMinFovDeg must be in (0, 180)")
         if not isfinite(self.templateFovScale) or self.templateFovScale < 1.0:
@@ -283,12 +292,16 @@ def loadConfig(path: str | Path) -> AppConfig:
         root,
         "backendTuning",
         {
+            "sequenceModel",
             "acceptAnyCandidate",
             "viewHorizontalFovCapDeg",
             "viewVerticalFovCapDeg",
             "fullViewSearch",
             "alignedSearch",
             "alignedMinFovDeg",
+            "sphericalSearch",
+            "sphericalSearchFovDeg",
+            "predictiveSearch",
             "useMotionScore",
             "templateFovScale",
             "onlineTemplate",
@@ -383,6 +396,9 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
         ),
         backendTuning=BackendTuningConfig(
+            sequenceModel=_requireBool(
+                "backendTuning.sequenceModel", tuningRaw["sequenceModel"]
+            ),
             acceptAnyCandidate=_requireBool(
                 "backendTuning.acceptAnyCandidate", tuningRaw["acceptAnyCandidate"]
             ),
@@ -399,6 +415,18 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
             alignedSearch=_requireBool(
                 "backendTuning.alignedSearch", tuningRaw["alignedSearch"]
+            ),
+            sphericalSearch=_requireBool(
+                "backendTuning.sphericalSearch", tuningRaw["sphericalSearch"]
+            ),
+            predictiveSearch=_requireBool(
+                "backendTuning.predictiveSearch", tuningRaw["predictiveSearch"]
+            ),
+            sphericalSearchFovRad=_degreesToRadians(
+                "backendTuning.sphericalSearchFovDeg",
+                _requireFloat(
+                    "backendTuning.sphericalSearchFovDeg", tuningRaw["sphericalSearchFovDeg"]
+                ),
             ),
             alignedMinFovRad=_degreesToRadians(
                 "backendTuning.alignedMinFovDeg",

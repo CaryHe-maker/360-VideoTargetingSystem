@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, replace
-from math import asin, atan2, tan
+from math import asin, atan2, pi
 from typing import TYPE_CHECKING
 
 from track360.controller.motion_estimator import SphericalMotionEstimator
@@ -16,7 +17,7 @@ from track360.controller.state_model import (
     TransitionDecision,
 )
 from track360.controller.template_policy import TemplateDecision, TemplatePolicy
-from track360.controller.view_planner import ViewPlanner
+from track360.controller.view_planner import TRAJECTORY_LENGTH, ViewPlanner
 from track360.core.config import (
     AppConfig,
     BackendTuningConfig,
@@ -43,15 +44,17 @@ from track360.core.types import (
     TemplateCommandKind,
     TrackResult,
     TrackStatus,
-    ViewSpec,
 )
 from track360.geometry.projection_math import (
-    fovToFocalLengthPx,
     makeSphericalPoint,
 )
 
 if TYPE_CHECKING:
     from track360.core.protocols import MotionEstimator
+
+
+_MAX_HORIZONTAL_SIZE_RAD = 2.0 * pi - 1e-6
+_MAX_VERTICAL_SIZE_RAD = pi - 1e-6
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +120,8 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._initialBox: BBoxXYWH | None = None
         self._currentBox: BBoxXYWH | None = None
         self._currentBfov: BFoV | None = None
+        # The target's BFoV after each of the last frames, oldest first.
+        self._trajectory: deque[BFoV] = deque(maxlen=TRAJECTORY_LENGTH)
         self._pendingTemplate = TemplateDecision(TemplateCommandKind.KEEP)
         self._pending: _PendingFrame | None = None
         self._initialPlan: InitializationPlan | None = None
@@ -167,18 +172,14 @@ class TrackControllerImpl(TrackControllerProtocol):
         else:
             assert initialBox is not None
             objectBfov = self._geometry.bboxToBfov(initialBox, frameWidthPx, frameHeightPx)
-        templateBfov = self._planner.templateBfov(objectBfov)
+        templateView = self._planner.templateView(objectBfov)
+        assert templateView.priorBox is not None
         plan = InitializationPlan(
             sequenceId=frame.sequenceId,
             frameIndex=FrameIndex(0),
             stateRevision=0,
-            templateView=self._makeViewSpec(0, templateBfov),
-            templateBox=_boxForBfov(
-                self._geometryConfig.viewWidthPx,
-                self._geometryConfig.viewHeightPx,
-                templateBfov,
-                objectBfov,
-            ),
+            templateView=replace(templateView, priorBox=None),
+            templateBox=templateView.priorBox,
         )
         self._initialPlan = plan
         self._lastFrame = frame
@@ -211,6 +212,8 @@ class TrackControllerImpl(TrackControllerProtocol):
                 self._lastFrame.timestampNs,
             )
         self._stateMachine.initialize()
+        self._trajectory.clear()
+        self._trajectory.extend([self._currentBfov] * TRAJECTORY_LENGTH)
         self._initialized = True
         self._initialPlan = None
         self._stateRevision = 0
@@ -247,18 +250,27 @@ class TrackControllerImpl(TrackControllerProtocol):
         # Size the view from the predicted target; before the estimator exposes an
         # angular scale, the last committed BFoV is the basis.
         targetBfov = self._currentBfov
-        if prediction.horizontalSizeRad > 0.0 and prediction.verticalSizeRad > 0.0:
+        viewCenter = prediction.center
+        if not self._backendTuning.predictiveSearch:
+            # The view follows the last committed target, as the tracker's own loop does;
+            # the motion estimate is left to the backend's trajectory input.
+            viewCenter = self._currentBfov.center
+        elif prediction.horizontalSizeRad > 0.0 and prediction.verticalSizeRad > 0.0:
+            # Extrapolating a growing target can leave the range a BFoV can express.
             targetBfov = BFoV(
-                prediction.center, prediction.horizontalSizeRad, prediction.verticalSizeRad
+                prediction.center,
+                min(prediction.horizontalSizeRad, _MAX_HORIZONTAL_SIZE_RAD),
+                min(prediction.verticalSizeRad, _MAX_VERTICAL_SIZE_RAD),
             )
         plan = SearchPlan(
             sequenceId=frame.sequenceId,
             frameIndex=frame.frameIndex,
             stateRevision=self._stateRevision + 1,
             view=self._planner.searchView(
-                prediction.center,
+                viewCenter,
                 targetBfov.horizontalFovRad,
                 targetBfov.verticalFovRad,
+                tuple(self._trajectory),
             ),
             templateCommand=TemplateCommand(
                 kind=self._pendingTemplate.kind,
@@ -434,6 +446,8 @@ class TrackControllerImpl(TrackControllerProtocol):
             self._stableFrames,
             evaluation,
         )
+        assert self._currentBfov is not None
+        self._trajectory.append(self._currentBfov)
         self._stateRevision = pending.plan.stateRevision
         self._lastFrameIndex = int(pending.frame.frameIndex)
         self._lastFrame = pending.frame
@@ -493,14 +507,6 @@ class TrackControllerImpl(TrackControllerProtocol):
             reliability=motion.reliability,
         )
 
-    def _makeViewSpec(self, viewId: int, bfov: BFoV) -> ViewSpec:
-        return ViewSpec(
-            viewId=viewId,
-            bfov=bfov,
-            outputWidthPx=self._geometryConfig.viewWidthPx,
-            outputHeightPx=self._geometryConfig.viewHeightPx,
-        )
-
     def _requireInitialized(self) -> None:
         if not self._initialized:
             raise ProtocolError("controller has not been initialized")
@@ -525,26 +531,6 @@ def _publicStatus(mode: TrackMode) -> TrackStatus:
     if mode is TrackMode.LOST:
         return TrackStatus.LOST
     return TrackStatus.TRACKING
-
-
-def _boxForBfov(
-    viewWidthPx: int,
-    viewHeightPx: int,
-    viewBfov: BFoV,
-    objectBfov: BFoV,
-) -> BBoxXYWH:
-    focalX = fovToFocalLengthPx(viewBfov.horizontalFovRad, viewWidthPx)
-    focalY = fovToFocalLengthPx(viewBfov.verticalFovRad, viewHeightPx)
-    width = 2.0 * focalX * tan(objectBfov.horizontalFovRad / 2.0)
-    height = 2.0 * focalY * tan(objectBfov.verticalFovRad / 2.0)
-    width = max(2.0, min(float(viewWidthPx), width))
-    height = max(2.0, min(float(viewHeightPx), height))
-    return BBoxXYWH(
-        xPx=(float(viewWidthPx) - width) / 2.0,
-        yPx=(float(viewHeightPx) - height) / 2.0,
-        widthPx=width,
-        heightPx=height,
-    )
 
 
 __all__ = ["TrackControllerImpl"]

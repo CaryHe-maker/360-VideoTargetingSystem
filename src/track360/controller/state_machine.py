@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from track360.controller.state_model import (
     ScoreGroup,
     TrackMode,
@@ -12,17 +10,6 @@ from track360.controller.state_model import (
 )
 from track360.core.config import TrackingConfig
 from track360.core.errors import ProtocolError
-from track360.core.types import TrackStatus
-
-
-@dataclass(frozen=True, slots=True)
-class StateUpdate:
-    status: TrackStatus
-    uncertainFrames: int
-    recoveryFrames: int
-    accepted: bool
-    recovered: bool
-    reason: TransitionReason = TransitionReason.RELIABLE_MEASUREMENT
 
 
 class TrackStateMachine:
@@ -30,36 +17,18 @@ class TrackStateMachine:
 
     def __init__(self, trackingConfig: TrackingConfig) -> None:
         self._config = trackingConfig
-        self._status: TrackStatus | None = None
+        self._initialized = False
         self._scoreGroup = ScoreGroup()
-        self._uncertainFrames = 0
-        self._recoveryFrames = 0
-
-    @property
-    def status(self) -> TrackStatus | None:
-        return self._status
-
-    @property
-    def uncertainFrames(self) -> int:
-        return self._uncertainFrames
-
-    @property
-    def recoveryFrames(self) -> int:
-        """Compatibility counter; LOST has no public RECOVERING state."""
-        return self._recoveryFrames
 
     @property
     def scoreGroup(self) -> ScoreGroup:
         return self._scoreGroup
 
-    def initialize(self) -> StateUpdate:
-        if self._status is not None:
+    def initialize(self) -> None:
+        if self._initialized:
             raise ProtocolError("track state machine is already initialized")
-        self._status = TrackStatus.TRACKING
+        self._initialized = True
         self._scoreGroup = ScoreGroup()
-        self._uncertainFrames = 0
-        self._recoveryFrames = 0
-        return StateUpdate(TrackStatus.TRACKING, 0, 0, True, False, TransitionReason.INITIALIZED)
 
     def transition(
         self,
@@ -106,38 +75,4 @@ class TrackStateMachine:
     def recordScore(self, stateScore: float) -> None:
         self._scoreGroup.append(stateScore)
 
-    def update(self, score: float | None, supported: bool, hasCandidate: bool) -> StateUpdate:
-        """Compatibility adapter for old scalar callers."""
-        if self._status is None:
-            raise ProtocolError("track state machine has not been initialized")
-        value = 0.0 if score is None else float(score)
-        accepted = bool(hasCandidate and supported and value >= self._config.candidateMinScore)
-        mode = {
-            TrackStatus.TRACKING: TrackMode.TRACKING,
-            TrackStatus.UNCERTAIN: TrackMode.UNCERTAIN,
-            TrackStatus.LOST: TrackMode.LOST,
-        }[self._status]
-        decision = self.transition(mode, value, measurementAccepted=accepted)
-        self._status = {
-            TrackMode.TRACKING: TrackStatus.TRACKING,
-            TrackMode.UNCERTAIN: TrackStatus.UNCERTAIN,
-            TrackMode.LOST: TrackStatus.LOST,
-        }[decision.nextMode]
-        self.recordScore(value)
-        self._uncertainFrames = (
-            self._uncertainFrames + 1 if self._status is TrackStatus.UNCERTAIN else 0
-        )
-        self._recoveryFrames = (
-            self._recoveryFrames + 1 if self._status is TrackStatus.LOST else 0
-        )
-        return StateUpdate(
-            self._status,
-            self._uncertainFrames,
-            self._recoveryFrames,
-            accepted,
-            mode is TrackMode.LOST and accepted,
-            decision.reason,
-        )
-
-
-__all__ = ["StateUpdate", "TrackStateMachine"]
+__all__ = ["TrackStateMachine"]

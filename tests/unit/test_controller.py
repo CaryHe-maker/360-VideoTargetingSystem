@@ -11,9 +11,9 @@ from track360.controller import (
     TrackControllerImpl,
     TrackStateMachine,
     ViewPlanner,
-    scoreMotionConsistency,
 )
-from track360.controller.state_model import ScoreGroup, TransitionReason
+from track360.controller.state_model import ScoreGroup, TrackMode, TransitionReason
+from track360.controller.view_planner import localBoxOfBfov
 from track360.core.config import loadConfig
 from track360.core.errors import ConfigError, ProtocolError
 from track360.core.types import (
@@ -26,6 +26,8 @@ from track360.core.types import (
     SequenceId,
     TemplateCommandKind,
     TrackStatus,
+    ViewProjection,
+    ViewSpec,
 )
 from track360.geometry import SphericalGeometryImpl, makeSphericalPoint
 
@@ -131,46 +133,46 @@ class MotionEstimatorTest(unittest.TestCase):
         )
 
         prediction = estimator.predictDetailed(1_000_000_000)
-        motionScore = scoreMotionConsistency(
-            BFoV(makeSphericalPoint(0.0, 0.0), 0.40, 0.30),
-            prediction.motionState,
-        )
 
         self.assertEqual(prediction.sampleCount, 1)
         self.assertIn("insufficient_motion_samples", prediction.degradedReasons)
         self.assertGreater(prediction.reliability, 0.0)
         self.assertLess(prediction.reliability, prediction.confidence)
-        self.assertGreater(motionScore.effectiveProbability, 0.5)
 
 
 class StateMachineTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = loadConfig(ROOT / "configs" / "default.yaml")
 
+    def _step(self, state: TrackStateMachine, mode: TrackMode, score: float):
+        decision = state.transition(mode, score, measurementAccepted=score > 0.0)
+        state.recordScore(score)
+        return decision
+
     def testUsesScoreGroupThresholds(self) -> None:
         state = TrackStateMachine(self.config.tracking)
         state.initialize()
-        first = state.update(0.5, True, True)
-        second = state.update(0.5, True, True)
-        uncertain = state.update(0.4, True, True)
-        recovered = state.update(0.9, True, True)
+        first = self._step(state, TrackMode.TRACKING, 0.5)
+        second = self._step(state, first.nextMode, 0.5)
+        uncertain = self._step(state, second.nextMode, 0.4)
+        recovered = self._step(state, uncertain.nextMode, 0.9)
 
-        self.assertEqual(first.status, TrackStatus.TRACKING)
-        self.assertEqual(second.status, TrackStatus.TRACKING)
-        self.assertEqual(uncertain.status, TrackStatus.UNCERTAIN)
-        self.assertTrue(recovered.accepted)
-        self.assertEqual(recovered.status, TrackStatus.TRACKING)
+        self.assertEqual(first.nextMode, TrackMode.TRACKING)
+        self.assertEqual(second.nextMode, TrackMode.TRACKING)
+        self.assertEqual(uncertain.nextMode, TrackMode.UNCERTAIN)
+        self.assertTrue(recovered.acceptMeasurement)
+        self.assertEqual(recovered.nextMode, TrackMode.TRACKING)
 
     def testKeepsHardMissInUncertain(self) -> None:
         state = TrackStateMachine(self.config.tracking)
         state.initialize()
-        state.update(0.8, True, True)
-        state.update(0.8, True, True)
-        state.update(0.8, True, True)
+        for _ in range(3):
+            self._step(state, TrackMode.TRACKING, 0.8)
 
-        hardMiss = state.update(0.0, False, False)
+        hardMiss = self._step(state, TrackMode.TRACKING, 0.0)
 
-        self.assertEqual(hardMiss.status, TrackStatus.UNCERTAIN)
+        self.assertFalse(hardMiss.acceptMeasurement)
+        self.assertEqual(hardMiss.nextMode, TrackMode.UNCERTAIN)
         self.assertEqual(hardMiss.reason, TransitionReason.HARD_MISS)
 
     def testScoreGroupUsesWarmupAndRollingOrderStatistics(self) -> None:
@@ -247,7 +249,7 @@ class ViewPlannerTest(unittest.TestCase):
         self.assertIsNone(legacy.searchView(self.center, 0.2, 0.1).priorBox)
 
     def testAlignedViewFollowsSmallTargetsBelowTheGeometryMinimum(self) -> None:
-        planner = self._planner(alignedSearch=True)
+        planner = self._planner(alignedSearch=True, sphericalSearch=False)
         small = planner.searchView(self.center, math.radians(2.0), math.radians(2.0))
         tiny = planner.searchView(self.center, math.radians(0.2), math.radians(0.2))
         large = planner.searchView(self.center, math.radians(60.0), math.radians(60.0))
@@ -267,6 +269,79 @@ class ViewPlannerTest(unittest.TestCase):
         self.assertEqual(huge.priorBox, bound.priorBox)
         self.assertLess(huge.priorBox.widthPx, 1000.0)
 
+    def testSearchRegionsPastTheSwitchPointAreSampledSpherically(self) -> None:
+        planner = self._planner()
+        # The switch point is a search region of 120 degrees: a 30 degree target.
+        below = planner.searchView(self.center, math.radians(29.0), math.radians(29.0))
+        view = planner.searchView(self.center, math.radians(35.0), math.radians(35.0))
+
+        self.assertIs(below.projection, ViewProjection.PERSPECTIVE)
+        self.assertIs(view.projection, ViewProjection.SPHERICAL)
+        # Four times the target on each axis, linear in angle: no FOV limit applies.
+        self.assertAlmostEqual(math.degrees(view.bfov.horizontalFovRad), 140.0)
+        self.assertAlmostEqual(math.degrees(view.bfov.verticalFovRad), 140.0)
+        self.assertEqual((view.outputWidthPx, view.outputHeightPx), (256, 256))
+        assert view.priorBox is not None
+        self.assertAlmostEqual(view.priorBox.widthPx, 64.0)
+        self.assertAlmostEqual(view.priorBox.xPx + view.priorBox.widthPx / 2.0, 128.0)
+        self.assertIs(
+            self._planner(sphericalSearch=False)
+            .searchView(self.center, math.radians(35.0), math.radians(35.0))
+            .projection,
+            ViewProjection.PERSPECTIVE,
+        )
+
+    def testSphericalViewIsCutAtTheWholeSphereWithIsotropicPixels(self) -> None:
+        planner = self._planner()
+        # A 60 x 60 degree target asks for 240 degrees: the latitude span stops at 180.
+        tall = planner.searchView(self.center, math.radians(60.0), math.radians(60.0))
+        whole = planner.searchView(self.center, math.radians(179.0), math.radians(179.0))
+
+        self.assertAlmostEqual(math.degrees(tall.bfov.horizontalFovRad), 240.0)
+        self.assertEqual(tall.outputWidthPx, 256)
+        self.assertLess(tall.outputHeightPx, 256)
+        self.assertLessEqual(tall.bfov.verticalFovRad, math.pi)
+        for view in (tall, whole):
+            self.assertAlmostEqual(
+                view.outputWidthPx / view.bfov.horizontalFovRad,
+                view.outputHeightPx / view.bfov.verticalFovRad,
+            )
+            prior = view.priorBox
+            assert prior is not None
+            # The backend's 4x crop around the prior is the 256 px search image.
+            self.assertAlmostEqual(4.0 * math.sqrt(prior.widthPx * prior.heightPx), 256.0)
+            self.assertLessEqual(prior.widthPx, view.outputWidthPx)
+            self.assertLessEqual(prior.heightPx, view.outputHeightPx)
+        # The whole sphere at this scale is about 128 x 64 px.
+        self.assertLess(whole.bfov.horizontalFovRad, 2.0 * math.pi)
+        self.assertAlmostEqual(whole.outputWidthPx / whole.outputHeightPx, 2.0, delta=0.05)
+
+    def testSphericalViewIsWidenedForElongatedTargets(self) -> None:
+        view = self._planner().searchView(
+            self.center, math.radians(170.0), math.radians(8.0)
+        )
+
+        # Four times the mean size is 147.5 degrees, less than the target is wide.
+        self.assertAlmostEqual(math.degrees(view.bfov.horizontalFovRad), 212.5, delta=1.0)
+        self.assertGreater(view.outputWidthPx, 256)
+        assert view.priorBox is not None
+        self.assertLess(view.priorBox.widthPx, view.outputWidthPx)
+
+    def testLargeTemplatesAreSampledSphericallyToo(self) -> None:
+        target = BFoV(self.center, math.radians(100.0), math.radians(60.0))
+        view = self._planner().templateView(target)
+        small = self._planner().templateView(BFoV(self.center, 0.2, 0.1))
+
+        self.assertIs(view.projection, ViewProjection.SPHERICAL)
+        self.assertIs(small.projection, ViewProjection.PERSPECTIVE)
+        box = view.priorBox
+        assert box is not None
+        self.assertAlmostEqual(box.widthPx / box.heightPx, 100.0 / 60.0)
+        # The view is templateFovScale times the mean target size across 256 px.
+        self.assertAlmostEqual(2.5 * math.sqrt(box.widthPx * box.heightPx), 256.0)
+        self.assertGreaterEqual(box.xPx, 0.0)
+        self.assertLessEqual(box.yPx + box.heightPx, view.outputHeightPx)
+
     def testAlignedTemplateViewIsSquareSoTheTargetKeepsItsAspect(self) -> None:
         target = BFoV(self.center, math.radians(12.0), math.radians(3.0))
         legacy = self._planner(alignedSearch=False).templateBfov(target)
@@ -280,6 +355,75 @@ class ViewPlannerTest(unittest.TestCase):
     def testAlignedSearchExcludesFullViewSearch(self) -> None:
         with self.assertRaisesRegex(ConfigError, "cannot both be enabled"):
             replace(self.config.backendTuning, alignedSearch=True, fullViewSearch=True)
+
+
+class LocalBoxOfBfovTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.view = ViewSpec(
+            0, BFoV(makeSphericalPoint(0.3, -0.2), math.radians(40.0), math.radians(40.0)), 256, 256
+        )
+
+    def testABfovAtTheViewCenterIsCenteredAndSizedOnTheImagePlane(self) -> None:
+        box = localBoxOfBfov(
+            self.view, BFoV(self.view.bfov.center, math.radians(10.0), math.radians(5.0))
+        )
+
+        self.assertAlmostEqual(box.xPx + box.widthPx / 2.0, 128.0)
+        self.assertAlmostEqual(box.yPx + box.heightPx / 2.0, 128.0)
+        self.assertAlmostEqual(
+            box.widthPx, 256.0 * math.tan(math.radians(5.0)) / math.tan(math.radians(20.0))
+        )
+        self.assertAlmostEqual(
+            box.heightPx, 256.0 * math.tan(math.radians(2.5)) / math.tan(math.radians(20.0))
+        )
+
+    def testOffsetsFollowTheViewAxesAndAgreeWithTheGeometryBackProjection(self) -> None:
+        geometry = SphericalGeometryImpl()
+        local = BBoxXYWH(150.0, 60.0, 40.0, 30.0)
+        box = localBoxOfBfov(self.view, geometry.localBoxToBfov(local, self.view))
+
+        self.assertAlmostEqual(box.xPx + box.widthPx / 2.0, 170.0, delta=1.0)
+        self.assertAlmostEqual(box.yPx + box.heightPx / 2.0, 75.0, delta=1.0)
+        self.assertAlmostEqual(box.widthPx, 40.0, delta=2.0)
+        self.assertAlmostEqual(box.heightPx, 30.0, delta=2.0)
+
+    def testInASphericalViewTheBoxIsLinearInAngleAndInvertsTheGeometry(self) -> None:
+        view = ViewSpec(
+            0,
+            BFoV(makeSphericalPoint(0.3, -0.2), math.radians(240.0), math.radians(120.0)),
+            256,
+            128,
+            projection=ViewProjection.SPHERICAL,
+        )
+        geometry = SphericalGeometryImpl()
+        local = BBoxXYWH(150.0, 30.0, 60.0, 40.0)
+
+        bfov = geometry.localBoxToBfov(local, view)
+        box = localBoxOfBfov(view, bfov)
+
+        # 256 px across 240 degrees: 60 px is 56.25 degrees of longitude, which at the
+        # box's latitude of 13.125 degrees is that much narrower on the sphere.
+        self.assertAlmostEqual(
+            math.degrees(bfov.horizontalFovRad), 56.25 * math.cos(math.radians(13.125))
+        )
+        self.assertAlmostEqual(math.degrees(bfov.verticalFovRad), 37.5)
+        for actual, expected in zip(
+            (box.xPx, box.yPx, box.widthPx, box.heightPx),
+            (local.xPx, local.yPx, local.widthPx, local.heightPx),
+            strict=True,
+        ):
+            self.assertAlmostEqual(actual, expected, places=6)
+        # A direction behind the view center still has a finite place in the view.
+        behind = localBoxOfBfov(view, BFoV(makeSphericalPoint(0.3 - 3.0, 0.2), 0.2, 0.2))
+        self.assertLess(behind.xPx + behind.widthPx / 2.0, 0.0)
+
+    def testADirectionBehindTheViewLandsFarOutsideWithFiniteCoordinates(self) -> None:
+        behind = makeSphericalPoint(0.3 - math.pi, 0.2)
+        box = localBoxOfBfov(self.view, BFoV(behind, 0.2, 0.2))
+
+        self.assertTrue(all(math.isfinite(v) for v in (box.xPx, box.yPx)))
+        center = (box.xPx + box.widthPx / 2.0, box.yPx + box.heightPx / 2.0)
+        self.assertTrue(abs(center[0] - 128.0) > 256.0 or abs(center[1] - 128.0) > 256.0)
 
 
 class ControllerTest(unittest.TestCase):
@@ -317,11 +461,11 @@ class ControllerTest(unittest.TestCase):
             math.tan(initial.bfov.horizontalFovRad / 2.0)
             * math.tan(initial.bfov.verticalFovRad / 2.0)
         )
-        self.assertEqual(plan.view.bfov.horizontalFovRad, plan.view.bfov.verticalFovRad)
-        self.assertAlmostEqual(
-            plan.view.bfov.horizontalFovRad,
-            min(2.0 * math.atan(4.0 * meanHalfSize), math.radians(90.0)),
-        )
+        # A target this large needs a search region past the 120 degree switch point.
+        self.assertGreater(2.0 * math.atan(4.0 * meanHalfSize), math.radians(120.0))
+        self.assertIs(plan.view.projection, ViewProjection.SPHERICAL)
+        self.assertIs(initPlan.templateView.projection, ViewProjection.SPHERICAL)
+        self.assertIsNone(initPlan.templateView.priorBox)
         self.assertIsNotNone(plan.view.priorBox)
 
         result = controller.consume(plan, _observation(0.95))
@@ -431,7 +575,12 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(controller.beginFrame(_frame(2)).frameIndex, FrameIndex(2))
 
     def testConfidentObservationSchedulesARecentTemplateUpdate(self) -> None:
-        controller = self._controller()
+        controller = self._controller(
+            replace(
+                self.config,
+                backendTuning=replace(self.config.backendTuning, sequenceModel=False),
+            )
+        )
         controller.consume(controller.beginFrame(_frame(1)), _observation(0.95))
         controller.consume(controller.beginFrame(_frame(2)), _observation(0.95))
 
@@ -441,6 +590,37 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(command.localBox, _observation(0.95).localBox)
         self.assertEqual(command.expectedRevision, 3)
 
+    def testPlansCarryTheLastSevenTargetBoxesInViewPixels(self) -> None:
+        controller = self._controller()
+        first = controller.beginFrame(_frame(1))
+
+        # Before any measurement the history is the initial target, seven times,
+        # and the view is centered on it.
+        self.assertEqual(len(first.view.trajectory), 7)
+        self.assertEqual(len(set(first.view.trajectory)), 1)
+        box = first.view.trajectory[0]
+        self.assertAlmostEqual(
+            box.xPx + box.widthPx / 2.0, first.view.outputWidthPx / 2.0, places=6
+        )
+        self.assertAlmostEqual(
+            box.yPx + box.heightPx / 2.0, first.view.outputHeightPx / 2.0, places=6
+        )
+        assert first.view.priorBox is not None
+        self.assertAlmostEqual(box.widthPx, first.view.priorBox.widthPx, places=5)
+
+        moved = BFoV(makeSphericalPoint(0.2, 0.0), 0.35, 0.25)
+        controller.consume(first, replace(_observation(0.9), bfov=moved))
+        second = controller.beginFrame(_frame(2))
+
+        # The newest entry is the box just committed; the older ones are unchanged
+        # on the sphere, so in the new view they sit to one side of it.
+        self.assertEqual(len(second.view.trajectory), 7)
+        newest, oldest = second.view.trajectory[-1], second.view.trajectory[0]
+        self.assertEqual(len(set(second.view.trajectory[:-1])), 1)
+        self.assertNotAlmostEqual(
+            newest.xPx + newest.widthPx / 2.0, oldest.xPx + oldest.widthPx / 2.0, places=1
+        )
+
 
 class TemplatePolicyTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -448,6 +628,8 @@ class TemplatePolicyTest(unittest.TestCase):
         self.geometry = SphericalGeometryImpl()
 
     def _decide(self, score: float, stableFrames: int, **tuning: object):
+        # Template updates belong to the frame-level model; see the last test.
+        tuning = {"sequenceModel": False, **tuning}
         config = replace(
             self.config, backendTuning=replace(self.config.backendTuning, **tuning)
         )
@@ -469,6 +651,12 @@ class TemplatePolicyTest(unittest.TestCase):
     def testWeakObservationsNeverRefreshATemplate(self) -> None:
         belowThreshold = self.config.backendTuning.templateMinConfidence - 0.01
         self.assertEqual(self._decide(belowThreshold, 2).kind, TemplateCommandKind.KEEP)
+
+    def testSequenceModelTakesNoTemplateUpdates(self) -> None:
+        self.assertTrue(self.config.backendTuning.sequenceModel)
+        self.assertEqual(
+            self._decide(0.99, 2, sequenceModel=True).kind, TemplateCommandKind.KEEP
+        )
 
     def testRecentRefreshesEveryOtherFrameAndStableOncePerPeriod(self) -> None:
         period = self.config.tracking.stableFramesBeforeUpdate

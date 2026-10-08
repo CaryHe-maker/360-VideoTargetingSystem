@@ -16,7 +16,8 @@ from track360.core.errors import DecodeError, ProtocolError
 from track360.core.types import BBoxXYWH
 from track360.geometry import SphericalGeometryImpl
 from track360.io.vot360_results import readResultFile, resultPaths
-from track360.runtime.benchmark import METHODS, evaluateResults, runBenchmark
+from track360.runtime.benchmark import METHODS, evaluateResults, loadEfficiency, runBenchmark
+from track360.runtime.run_archive import archiveRun, loadRecords
 
 ROOT = Path(__file__).resolve().parents[2]
 FRAME_COUNT = 8
@@ -114,6 +115,65 @@ class BenchmarkTest(unittest.TestCase):
                 self.assertGreater(report.fps, 0.0)
                 self.assertGreater(report.p95LatencyMs, 0.0)
 
+    def testReportsCountOneForwardPerTrackedFrame(self) -> None:
+        for method, summary in self.summaries.items():
+            with self.subTest(method=method):
+                self.assertEqual(
+                    [report.forwards for report in summary.reports], [FRAME_COUNT - 1] * 2
+                )
+                efficiency = loadEfficiency(self.output, method)
+                assert efficiency is not None
+                self.assertEqual((efficiency.sequences, efficiency.frames), (2, 2 * FRAME_COUNT))
+                self.assertAlmostEqual(efficiency.forwardsPerFrame, 1.0)
+                self.assertGreater(efficiency.p95LatencyMs, 0.0)
+                self.assertGreater(efficiency.fps, 0.0)
+        only = loadEfficiency(self.output, "b0", ["0002"])
+        assert only is not None
+        self.assertEqual(only.sequences, 1)
+        self.assertIsNone(loadEfficiency(self.output, "none"))
+
+    def testArchiveKeepsScoresCostAndConfigurationOfARun(self) -> None:
+        archive = Path(self._directory.name) / "runs"
+        for method in METHODS:
+            path = archiveRun(
+                datasetRoot=self.dataset,
+                outputRoot=self.output,
+                method=method,
+                name=f"T001-{method}",
+                archiveRoot=archive,
+                split="synthetic",
+                experiment="T001",
+                note="unit test",
+                timing="solo",
+            )
+            self.assertTrue(path.is_file())
+
+        records = {record["name"]: record for record in loadRecords(archive)}
+        self.assertEqual(sorted(records), ["T001-b0", "T001-ours"])
+        record = records["T001-ours"]
+        self.assertEqual(record["scores"]["bbox"]["sequences"], 2)
+        self.assertGreater(record["scores"]["bbox"]["S_dual"], 0.5)
+        self.assertEqual(record["efficiency"]["timing"], "solo")
+        self.assertAlmostEqual(record["efficiency"]["forwardsPerFrame"], 1.0)
+        self.assertEqual(sorted(record["perSequence"]), ["0001", "0002"])
+        sequence = record["perSequence"]["0001"]
+        self.assertEqual((sequence["frames"], sequence["forwards"]), (FRAME_COUNT, FRAME_COUNT - 1))
+        self.assertGreater(sequence["p95LatencyMs"], 0.0)
+        self.assertIn("configHash", record)
+        self.assertTrue(record["config"]["backendTuning"]["sphericalSearch"])
+        index = (archive / "README.md").read_text(encoding="utf-8")
+        self.assertIn("[T001-ours](T001-ours.json)", index)
+        self.assertIn("| solo | unit test |", index)
+        with self.assertRaisesRegex(ValueError, "timing must be"):
+            archiveRun(
+                datasetRoot=self.dataset,
+                outputRoot=self.output,
+                method="ours",
+                name="x",
+                archiveRoot=archive,
+                timing="fast",
+            )
+
     def testOneModelSessionServesAllSequencesOfAMethod(self) -> None:
         self.assertEqual(len(self.sessions), len(METHODS))
         for session in self.sessions:
@@ -176,6 +236,11 @@ class BenchmarkTest(unittest.TestCase):
 
         self.assertEqual([report.status for report in summary.reports], ["skipped", "done"])
         self.assertEqual(readResultFile(bboxPath).shape, (FRAME_COUNT, 4))
+        # The skipped sequence keeps the timing of the run that tracked it.
+        kept = json.loads(
+            (self.output / "reports" / "ours" / "0001.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual((kept["status"], kept["forwards"]), ("done", FRAME_COUNT - 1))
 
     def testSequenceSelectionShardingAndFrameLimit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

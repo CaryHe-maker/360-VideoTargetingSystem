@@ -245,9 +245,23 @@ class TrackResult:
         _requireProbability("track confidence", self.confidence)
 
 
+class ViewProjection(Enum):
+    """How the pixels of a local view map to directions on the sphere."""
+
+    # A pinhole camera: pixels are linear on the tangent plane.  Needs FOV < 180 deg.
+    PERSPECTIVE = auto()
+    # Pixels are linear in longitude and latitude of the sphere rotated so that the
+    # view center is at (0, 0).  Reaches the whole sphere: up to 360 x 180 degrees.
+    SPHERICAL = auto()
+
+
 @dataclass(frozen=True, slots=True)
 class ViewSpec:
-    """The perspective view requested from an ERP frame."""
+    """The local view requested from an ERP frame.
+
+    ``bfov`` gives the view center and its extent: the camera FOV of a perspective
+    view, the longitude and latitude span of a spherical one.
+    """
 
     viewId: int
     bfov: BFoV
@@ -256,6 +270,10 @@ class ViewSpec:
     # Where the target is expected in this view, in view pixels.  When set, the
     # backend centers its search crop on it instead of deriving one from the template.
     priorBox: BBoxXYWH | None = None
+    # The target's boxes in the previous frames, in this view's pixels, oldest first.
+    # They may lie outside the view.  Read by sequence-level backends.
+    trajectory: tuple[BBoxXYWH, ...] = ()
+    projection: ViewProjection = ViewProjection.PERSPECTIVE
 
     def __post_init__(self) -> None:
         if self.viewId < 0:

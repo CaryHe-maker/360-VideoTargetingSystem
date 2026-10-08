@@ -22,10 +22,25 @@ Controller 决定“看哪里、是否接受这一帧的框、下一帧处于什
 - 是正方形，两个方向的角分辨率相同，目标保持原来的长宽比；
 - 边长是目标平均尺寸 `sqrt(宽 × 高)` 的 4 倍（ARTrackV2 训练时的搜索倍数），在成像平面上计算。`width` / `height` 是预测的目标角尺寸，运动模型还没有给出尺寸时用上一次提交的 BFoV；
 - 视场下限是 `alignedMinFovDeg`（2°），上限是 `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg`（默认 90°）和 `geometry.maxFovDeg`；
-- 带一个 `priorBox`：目标在视图里预计的位置和大小。后端以它为中心裁 4 倍的搜索区域。视场没有被上限截住时，这个裁剪正好是整个视图；目标很大（约 28° 以上）、视场被截住时，裁剪范围超出视图，超出部分补黑边，目标在搜索区域里仍然占 1/4 左右；
+- 带一个 `priorBox`：目标在视图里预计的位置和大小。后端以它为中心裁 4 倍的搜索区域。视场没有被上限截住时，这个裁剪正好是整个视图；视场被截住时（搜索区域在 90° 到球面视图的切换点之间），裁剪范围超出视图，超出部分补黑边，目标在搜索区域里仍然占 1/4 左右；
+- 带一个 `trajectory`：目标在前 7 帧的框，换算成这一帧视图里的像素坐标，最旧的在前。控制器保存最近 7 帧提交的 BFoV（初始化时是 7 份初始目标），每帧把它们投影到新视图里：中心按透视投影计算，大小按“位于视图中心时”的大小计算。落在视图外甚至视图背面的历史框也照样给出，由后端限制到它的坐标范围。序列级后端把它作为轨迹提示；
 - 输出尺寸为 `geometry.viewWidthPx × viewHeightPx`（256×256）。
 
-模板视图（`ViewPlanner.templateBfov()`）同样是正方形，边长是目标平均尺寸的 `templateFovScale` 倍。
+模板视图（`ViewPlanner.templateView()`）同样是正方形，边长是目标平均尺寸的 `templateFovScale` 倍。
+
+### 大目标：球面视图
+
+透视视图表示不了 180° 以上的范围，超过 90° 边缘就拉伸得很厉害。搜索区域（目标平均角尺寸的 4 倍）达到 `sphericalSearchFovDeg`（默认 120°，即目标约 30°）时，视图换成**球面视图**（`ViewSpec.projection = SPHERICAL`，`backendTuning.sphericalSearch: true`，默认）：
+
+- 像素在经度和纬度上均匀分布，经纬度是把球转到“视图中心位于 (0, 0)”之后的。相当于一块以目标为中心的 ERP，目标落在形变最小的位置。做法与 360VOT 的扩展 BFoV 相同，见 [360VOT 基准框架](../benchmarkFramework.md#22-从-erp-上取一块局部搜索区域)；
+- 每个方向跨目标平均尺寸的 4 倍，尺度定为“这 4 倍正好是 256 像素”，两个方向的角分辨率相同；
+- 横向最多 360°，纵向最多 180°，超出就截断，所以视图不一定是正方形（目标 180° 时是整个球面，约 128×64）。截掉的部分由后端裁搜索图时补黑边；
+- 细长的目标按“平均尺寸的 4 倍”取景可能装不下，这时那个方向至少取目标自身的 1.25 倍；
+- `priorBox` 和 `trajectory` 的大小按角度线性换算。目标偏离视图的“赤道”时，同样的宽度占更多的经度，按纬度的余弦修正。
+
+模板视图用同样的条件切换。球面视图里得到的 BFoV 是“中心方向 + 经纬度跨度”，可以超过 180°；透视视图里得到的是“中心方向 + 相机视场”。两者在小角度下一致。
+
+`sphericalSearch: false` 是之前的行为：透视视场封顶在 `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg`，超出部分补黑边。
 
 `TRACKING` 和 `UNCERTAIN` 两种状态使用相同的规划，没有“丢失后全局搜索”的路径。这种取法不支持 `geometry.resampler: cuda`，同时配置会直接报错。
 
@@ -85,7 +100,9 @@ StateScore < LT        → UNCERTAIN（记录 HARD_MISS）
 
 ## 模板策略
 
-模板固定使用第 0 帧初始化时的 anchor。`onlineTemplate: true`（默认）时，分数不低于 `templateMinConfidence` 的观测可以刷新 recent 模板（大约每两帧一次），连续稳定 `stableFramesBeforeUpdate` 帧后刷新 stable 模板；anchor 始终保留，防止目标漂移后模板被完全污染。
+默认的序列级模型自己每帧更新外观特征，框架不做模板更新，本节只适用于 `sequenceModel: false`。
+
+模板固定使用第 0 帧初始化时的 anchor。`onlineTemplate: true` 时，分数不低于 `templateMinConfidence` 的观测可以刷新 recent 模板（大约每两帧一次），连续稳定 `stableFramesBeforeUpdate` 帧后刷新 stable 模板；anchor 始终保留，防止目标漂移后模板被完全污染。
 
 ## 逐帧协议
 

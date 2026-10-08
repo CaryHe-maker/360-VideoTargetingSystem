@@ -15,7 +15,7 @@
 |---|---|---|
 | `model` | Backends | `variant`（当前只支持 `artrackv2_b_256`）、`weights`、`precision`（当前只支持 `fp32`） |
 | `scoring` | Controller | `calibrationArtifact`：可选的分数校准 JSON；`requireCheckpointHashMatch`：校准产物必须与权重的 SHA-256 绑定 |
-| `geometry` | Geometry | 局部视图尺寸 256×256、`boundarySamplesPerEdge`（局部框每条边回投的采样点数）、FoV 范围 20°–120°、`resampler`（`cpu` / `cuda`） |
+| `geometry` | Geometry | 局部视图尺寸 256×256、`boundarySamplesPerEdge`（局部框每条边回投的采样点数）、FoV 范围 20°–120°、`resampler`（`opencv`：默认，`cv2.remap` 取色；`cpu`：双精度的参考实现，慢约 17 ms / 帧，像素值最多差 1 级；`cuda`） |
 | `motion` | Controller | 球面运动估计：Huber 参数、过程噪声、最大角速度、最大尺度变化率 |
 | `tracking` | Controller | `candidateMinScore`（带门槛模式下接受测量的最低分）、`stableFramesBeforeUpdate`（stable 模板的更新周期）、运动窗口长度、没有框时输出范围的放大系数 |
 | `backendTuning` | Controller / Backends | 针对 ARTrackV2 后端的开关和阈值，见下一节 |
@@ -24,18 +24,22 @@
 
 ## backendTuning
 
-ARTrackV2 的原始分数集中在 0.5 附近，不是校准过的概率，所以 `tracking.candidateMinScore` 这类按概率设定的门槛不能直接使用。`backendTuning` 把针对这个后端的调整集中在一处。
+`backendTuning` 把针对 ARTrackV2 后端的开关和阈值集中在一处。分数的含义取决于 `sequenceModel`：序列级用法下它是模型对“预测框与真值的 IoU”的估计；帧级用法下它集中在 0.5 附近、与 IoU 无关（[评测记录](evaluation-log.md) E008）。`tracking.candidateMinScore` 和 `templateMinConfidence` 的现有取值都是按帧级用法定的，序列级用法下还没有重新确定。
 
 | 字段 | 默认值 | 作用 |
 |---|---|---|
+| `sequenceModel` | `true` | 按序列级模型运行 ARTrackV2：喂入前 7 帧的轨迹，使用模型自己更新的外观特征，见 [Backends](modules/backends.md#这份权重是序列级模型)。`false` 是 2026-10-07 之前的帧级用法，只用于对照 |
 | `acceptAnyCandidate` | `true` | 只要这一帧有框就作为测量接受；为 `false` 时分数低于 `candidateMinScore` 的框不被接受 |
-| `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg` | `90.0` | 搜索视图的视场上限；`null` 表示只受 `geometry.maxFovDeg` 限制。`alignedSearch` 下视图是正方形，取两者中较小的 |
+| `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg` | `90.0` | 透视搜索视图的视场上限；`null` 表示只受 `geometry.maxFovDeg` 限制。`alignedSearch` 下视图是正方形，取两者中较小的 |
 | `fullViewSearch` | `false` | 只在 `alignedSearch: false` 时有意义：把整个局部视图缩放后作为搜索区域，跳过 ARTrackV2 自己的 4 倍搜索裁剪 |
 | `alignedSearch` | `true` | 搜索区域和 ARTrackV2 的训练裁剪对齐：正方形视图、边长为目标平均尺寸的 4 倍，见 [Controller](modules/controller.md#视图规划)。`false` 是旧的取法，只用于对照。不能和 `fullViewSearch` 同时打开，也不支持 `geometry.resampler: cuda` |
 | `alignedMinFovDeg` | `2.0` | `alignedSearch` 下视图视场的下限，代替 `geometry.minFovDeg` |
+| `sphericalSearch` | `true` | 大目标的视图改用球面采样（以目标为中心的局部 ERP），见 [Controller](modules/controller.md#大目标球面视图)。需要 `alignedSearch: true`。`false` 时透视视场封顶在上面的上限，超出部分补黑边 |
+| `sphericalSearchFovDeg` | `120.0` | 搜索区域（目标平均角尺寸的 4 倍）达到这个角度时切换到球面视图。360VOT 论文用 90°；本项目在 tune 集上 90° 和 120° 没有可分辨的差别，取 120° 只是为了少偏离透视路径（[评测记录](evaluation-log.md) E011） |
+| `predictiveSearch` | `true` | 搜索视图的中心和大小取运动模型对这一帧的预测。`false` 时直接取上一帧提交的结果，和上游跟踪器自己的循环一致。66 条序列上关掉后 S<sub>dual</sub> −0.023 [−0.061, +0.014]，没有采纳（[评测记录](evaluation-log.md) E012） |
 | `useMotionScore` | `false` | 用“外观 + 运动”加权得到 SingleScore；为 `false` 时只用外观分。没有校准产物时运动权重为 0，此开关不影响结果 |
 | `templateFovScale` | `2.5` | 模板视图视场相对目标角尺寸的倍数（≥ 1） |
-| `onlineTemplate` | `true` | 保留第 0 帧 anchor 的同时允许更新 recent / stable 模板 |
+| `onlineTemplate` | `true` | 保留第 0 帧 anchor 的同时允许更新 recent / stable 模板。只在 `sequenceModel: false` 时起作用 |
 | `templateMinConfidence` | `0.515` | 允许更新模板的最低分 |
 | `holdWeakBox` | `true` | 测量未被接受且目标面积 ≥ 画面的 10% 时，保持上一帧的框 |
 

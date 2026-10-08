@@ -45,7 +45,7 @@
 | 单视图（`ours`）在 tune 集上不如直接在 ERP 上跟踪（`b0`）：S<sub>dual</sub> 0.271 对 0.310（E001） | 透视视图还没有带来收益，离“比 B0 高 8 个点”的目标差得远 | Phase 4 |
 | 读视频文件依赖系统里的 ffmpeg / ffprobe | 没装 ffmpeg 的机器只能跟踪图像序列 | Phase 6 |
 | 只有 tune 集上的结果，360VOT 测试集还没有跑过 | 无法和论文基线直接对比 | Phase 2 |
-| ARTrackV2 调用时 `seq_input=None`，没有使用模型的轨迹提示（trajectory prompt） | 很可能丢掉了 ARTrackV2 的大部分时序优势 | Phase 4 |
+| ARTrackV2 调用时 `seq_input=None`，没有使用模型的轨迹提示（trajectory prompt） | 很可能丢掉了 ARTrackV2 的大部分时序优势 | Phase 4。**已完成（2026-10-07，评测记录 E010）**：总分没有变化，但分数开始反映跟踪质量 |
 | 目标丢失后没有重新检测（原来的 cubemap 找回路径从未触发，已随多视图一起删除） | 跟丢之后找不回来：`b0` 和 `ours` 的 IoU 到第 200 帧都只剩 0.24–0.31（E001） | Phase 4 |
 | ARTrackV2 的分数集中在 0.5 附近，状态机和模板更新门槛依赖这个分数 | 门控不可靠 | Phase 4 |
 | 函数和变量用 camelCase，YAML 键也是 camelCase | 不符合 PEP 8 | Phase 3 |
@@ -103,7 +103,7 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
 
 1. **先诊断再动手**：在 tune 集上把每一帧的失败归类：视图没有覆盖到目标 / 覆盖到了但后端框错 / 回投误差 / 跨缝或极点。每类统计帧数占比，按占比从高到低处理。
 2. **一次只改一个变量**，每项实验都报告 S<sub>dual</sub>、P<sub>angle</sub>、丢失率、每帧前向次数和 P95 延迟。
-3. **硬回归门槛**：每项改动先在 5 条硬回归序列（[`configs/splits/360vos_tune_hard.txt`](../configs/splits/360vos_tune_hard.txt)）上跑，任何一条下降超过 2 个点就停止；通过后再跑整个 tune 集，提升要看配对 bootstrap 的 95% 区间是否不含 0（`tools/benchmark.py compare`）。
+3. **硬回归门槛**：7 条稳定的硬回归序列（[`configs/splits/360vos_tune_hard.txt`](../configs/splits/360vos_tune_hard.txt)）任何一条下降超过 3 个点就停止；14 条不稳定的序列作为一组看合计。整个 tune 集上的提升要看配对 bootstrap 的 95% 区间是否不含 0（`tools/benchmark.py compare`）。2026-10-08 之前是 5 条序列加 2 个点的门槛，见 [Evaluation](modules/evaluation.md#硬回归序列和不稳定序列)。
 4. **每一轮实验都在 [evaluation-log.md](evaluation-log.md) 追加一条记录**（不论是否采纳）；被采纳的改动进入 README 的消融表。
 
 按预期收益排序的实验清单（详细说明见第 3 节对应模块）：
@@ -191,7 +191,7 @@ Phase 2 360VOT 评测打通与基线 ─┼─▶ Phase 3 代码规范化（用�
 
 ### 3.4 Backends
 
-- **轨迹提示（最高优先级）**：官方 ARTrackV2 推理时会把前几帧的框坐标作为 `seq_input` 输入，当前实现传入 `None`。需要对照官方 tracker 代码确认输入格式，再把上一帧的球面轨迹投影到每个视图的局部坐标系，转换成 400-bin 的坐标 token。
+- **轨迹提示（已完成，评测记录 E010）**：实际做法见 [Backends](modules/backends.md#这份权重是序列级模型)；总分没有变化，下面是当时的计划。官方 ARTrackV2 推理时会把前几帧的框坐标作为 `seq_input` 输入，当前实现传入 `None`。需要对照官方 tracker 代码确认输入格式，再把上一帧的球面轨迹投影到每个视图的局部坐标系，转换成 400-bin 的坐标 token。
 - **FP16 生效**：实现 `model.precision: fp16`，模板特征在初始化时缓存为半精度。
 - **注册表与多后端**：抽象出 `encode_template / infer_batch / decode` 三步，新增 OSTrack-B256；可选一个轻量后端（如 HiT）作为速度档。
 
