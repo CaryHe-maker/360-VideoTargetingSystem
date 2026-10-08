@@ -139,8 +139,15 @@ class BackendTuningConfig:
     verifierModel: str = "dinov2"
     verifierMemoryRate: float = 0.05
     verifierTrustSimilarity: float = 0.40
-    suspectSimilarity: float = 0.30
-    suspectScore: float = 0.50
+    verifierTrustScore: float = 0.50
+    # State score: a weighted mean of the backend score, the appearance similarity
+    # and the motion score; a frame below ``uncertainScore`` is not trusted.
+    stateBackendWeight: float = 0.40
+    stateAppearanceWeight: float = 0.55
+    stateMotionWeight: float = 0.05
+    motionOffsetScale: float = 0.5
+    motionSizeScale: float = 0.1
+    uncertainScore: float = 0.60
     lostAfterFrames: int = 4
     scanViewsPerFrame: int = 4
     reacquireSimilarity: float = 0.45
@@ -172,14 +179,26 @@ class BackendTuningConfig:
             )
         for name in (
             "verifierTrustSimilarity",
-            "suspectSimilarity",
-            "suspectScore",
+            "verifierTrustScore",
+            "uncertainScore",
             "reacquireSimilarity",
             "reacquireMargin",
             "reacquireScore",
         ):
             if not -1.0 <= getattr(self, name) <= 1.0:
                 raise ConfigError(f"backendTuning.{name} must be in [-1, 1]")
+        weights = (
+            self.stateBackendWeight,
+            self.stateAppearanceWeight,
+            self.stateMotionWeight,
+        )
+        if min(weights) < 0.0 or self.stateBackendWeight + self.stateMotionWeight <= 0.0:
+            raise ConfigError(
+                "backendTuning state weights must be non-negative, and the backend and "
+                "motion weights must not both be zero"
+            )
+        if self.motionOffsetScale <= 0.0 or self.motionSizeScale <= 0.0:
+            raise ConfigError("backendTuning motion scales must be positive")
         if not 0.0 <= self.verifierMemoryRate <= 1.0:
             raise ConfigError("backendTuning.verifierMemoryRate must be in [0, 1]")
         if self.lostAfterFrames < 1 or self.scanViewsPerFrame < 0:
@@ -341,8 +360,13 @@ def loadConfig(path: str | Path) -> AppConfig:
             "verifierModel",
             "verifierMemoryRate",
             "verifierTrustSimilarity",
-            "suspectSimilarity",
-            "suspectScore",
+            "verifierTrustScore",
+            "stateBackendWeight",
+            "stateAppearanceWeight",
+            "stateMotionWeight",
+            "motionOffsetScale",
+            "motionSizeScale",
+            "uncertainScore",
             "lostAfterFrames",
             "scanViewsPerFrame",
             "reacquireSimilarity",
@@ -498,12 +522,18 @@ def loadConfig(path: str | Path) -> AppConfig:
             verifierTrustSimilarity=_requireFloat(
                 "backendTuning.verifierTrustSimilarity", tuningRaw["verifierTrustSimilarity"]
             ),
-            suspectSimilarity=_requireFloat(
-                "backendTuning.suspectSimilarity", tuningRaw["suspectSimilarity"]
-            ),
-            suspectScore=_requireFloat(
-                "backendTuning.suspectScore", tuningRaw["suspectScore"]
-            ),
+            **{
+                name: _requireFloat(f"backendTuning.{name}", tuningRaw[name])
+                for name in (
+                    "verifierTrustScore",
+                    "stateBackendWeight",
+                    "stateAppearanceWeight",
+                    "stateMotionWeight",
+                    "motionOffsetScale",
+                    "motionSizeScale",
+                    "uncertainScore",
+                )
+            },
             lostAfterFrames=_requireInt(
                 "backendTuning.lostAfterFrames", tuningRaw["lostAfterFrames"]
             ),

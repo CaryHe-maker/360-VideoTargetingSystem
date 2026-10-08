@@ -1,34 +1,41 @@
-"""Score-group state reduction for the four-state controller."""
+"""Track state from the fused state score of each frame."""
 
 from __future__ import annotations
 
-from track360.controller.state_model import (
-    ScoreGroup,
-    TrackMode,
-    TransitionDecision,
-    TransitionReason,
-)
-from track360.core.config import TrackingConfig
+from track360.controller.state_model import TrackMode, TransitionDecision, TransitionReason
+from track360.core.config import BackendTuningConfig
 from track360.core.errors import ProtocolError
 
 
 class TrackStateMachine:
-    """State selection and a committed ten-score rolling history."""
+    """TRACKING while the state score holds, UNCERTAIN when it drops, LOST when it stays down.
 
-    def __init__(self, trackingConfig: TrackingConfig) -> None:
-        self._config = trackingConfig
+    A frame whose state score is below ``uncertainScore`` is not trusted.  The first
+    such frames are UNCERTAIN; after ``lostAfterFrames`` of them in a row the target
+    counts as LOST.  One trusted frame brings the track back to TRACKING.
+    """
+
+    def __init__(self, tuning: BackendTuningConfig | None = None) -> None:
+        tuning = tuning or BackendTuningConfig()
+        self._uncertainScore = tuning.uncertainScore
+        self._lostAfterFrames = tuning.lostAfterFrames
         self._initialized = False
-        self._scoreGroup = ScoreGroup()
+        self._untrustedFrames = 0
 
     @property
-    def scoreGroup(self) -> ScoreGroup:
-        return self._scoreGroup
+    def untrustedFrames(self) -> int:
+        """How many frames in a row were below the uncertain score."""
+        return self._untrustedFrames
 
     def initialize(self) -> None:
         if self._initialized:
             raise ProtocolError("track state machine is already initialized")
         self._initialized = True
-        self._scoreGroup = ScoreGroup()
+        self._untrustedFrames = 0
+
+    def reset(self) -> None:
+        """Start counting afresh, as after the track jumped to a re-found target."""
+        self._untrustedFrames = 0
 
     def transition(
         self,
@@ -37,42 +44,31 @@ class TrackStateMachine:
         *,
         measurementAccepted: bool,
     ) -> TransitionDecision:
-        """Choose the next mode before appending the current score."""
         if not 0.0 <= float(stateScore) <= 1.0:
             raise ProtocolError("StateScore must be in [0, 1]")
         if mode is TrackMode.INIT:
-            nextMode = TrackMode.TRACKING
-            reason = TransitionReason.INITIALIZED
-        elif len(self._scoreGroup.values) < 2:
-            nextMode = TrackMode.TRACKING
-            reason = TransitionReason.RELIABLE_MEASUREMENT
-        elif len(self._scoreGroup.values) == 2:
-            nextMode = (
-                TrackMode.TRACKING
-                if stateScore > self._scoreGroup.values[-1]
-                else TrackMode.UNCERTAIN
+            self._untrustedFrames = 0
+            return TransitionDecision(
+                "COMMIT", TrackMode.TRACKING, TransitionReason.INITIALIZED, measurementAccepted
             )
-            reason = TransitionReason.RELIABLE_MEASUREMENT
-        else:
-            thresholds = self._scoreGroup.thresholds()
-            assert thresholds is not None
-            uncertainThreshold, lostThreshold = thresholds
-            if stateScore <= 0.0 and uncertainThreshold == 0.0 and lostThreshold == 0.0:
-                # Keep the hard-miss diagnostic, but run the UNCERTAIN path for this experiment.
-                nextMode = TrackMode.UNCERTAIN
-                reason = TransitionReason.HARD_MISS
-            elif stateScore >= uncertainThreshold:
-                nextMode = TrackMode.TRACKING
-                reason = TransitionReason.RELIABLE_MEASUREMENT
-            elif stateScore >= lostThreshold:
-                nextMode = TrackMode.UNCERTAIN
-                reason = TransitionReason.WEAK_MEASUREMENT
-            else:
-                nextMode = TrackMode.UNCERTAIN
-                reason = TransitionReason.HARD_MISS
+        if stateScore >= self._uncertainScore:
+            self._untrustedFrames = 0
+            return TransitionDecision(
+                "COMMIT",
+                TrackMode.TRACKING,
+                TransitionReason.RELIABLE_MEASUREMENT,
+                measurementAccepted,
+            )
+        self._untrustedFrames += 1
+        nextMode = (
+            TrackMode.LOST
+            if self._untrustedFrames >= self._lostAfterFrames
+            else TrackMode.UNCERTAIN
+        )
+        reason = (
+            TransitionReason.HARD_MISS if stateScore <= 0.0 else TransitionReason.WEAK_MEASUREMENT
+        )
         return TransitionDecision("COMMIT", nextMode, reason, measurementAccepted)
 
-    def recordScore(self, stateScore: float) -> None:
-        self._scoreGroup.append(stateScore)
 
 __all__ = ["TrackStateMachine"]

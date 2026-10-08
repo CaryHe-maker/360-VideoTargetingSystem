@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 
 from track360.core.types import (
@@ -99,39 +98,16 @@ class StateObservation:
     backendScore: float
     motionScore: float
     scaleScore: float
+    # The weighted mean of the backend, appearance and motion scores.
     stateScore: float
     measurementAccepted: bool
+    # Similarity of the box to the target's appearance; None: not measured.
+    appearanceScore: float | None = None
     uncertainThreshold: float = 0.0
-    lostThreshold: float = 0.0
 
     @property
     def hasCandidate(self) -> bool:
         return self.measuredBfov is not None
-
-
-@dataclass(slots=True)
-class ScoreGroup:
-    """The bounded score history used to derive the next-frame state thresholds."""
-
-    capacity: int = 10
-    values: deque[float] = field(default_factory=lambda: deque(maxlen=10))
-
-    def append(self, score: float) -> None:
-        value = float(score)
-        if not 0.0 <= value <= 1.0:
-            raise ValueError("StateScore must be in [0, 1]")
-        self.values.append(value)
-
-    def thresholds(self) -> tuple[float, float] | None:
-        """Return ``(UT, LT)`` from the scores already committed."""
-        if len(self.values) < 2:
-            return None
-        ordered = sorted(self.values, reverse=True)
-        if len(ordered) < self.capacity:
-            highest = ordered[0]
-            lowest = ordered[-1]
-            return (0.5 * highest + 0.5 * lowest, 0.2 * highest + 0.8 * lowest)
-        return (ordered[4], ordered[7])
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +121,6 @@ class TransitionDecision:
 __all__ = [
     "MotionPrediction",
     "MotionSample",
-    "ScoreGroup",
     "StateObservation",
     "TrackMode",
     "TransitionDecision",

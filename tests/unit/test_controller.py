@@ -12,7 +12,8 @@ from track360.controller import (
     TrackStateMachine,
     ViewPlanner,
 )
-from track360.controller.state_model import ScoreGroup, TrackMode, TransitionReason
+from track360.controller.state_evaluator import fuseStateScore, motionAgreement
+from track360.controller.state_model import TrackMode, TransitionReason
 from track360.controller.view_planner import localBoxOfBfov
 from track360.core.config import loadConfig
 from track360.core.errors import ConfigError, ProtocolError
@@ -144,49 +145,79 @@ class StateMachineTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = loadConfig(ROOT / "configs" / "default.yaml")
 
-    def _step(self, state: TrackStateMachine, mode: TrackMode, score: float):
-        decision = state.transition(mode, score, measurementAccepted=score > 0.0)
-        state.recordScore(score)
-        return decision
-
-    def testUsesScoreGroupThresholds(self) -> None:
-        state = TrackStateMachine(self.config.tracking)
+    def _machine(self, **tuning: object) -> TrackStateMachine:
+        state = TrackStateMachine(
+            replace(self.config.backendTuning, uncertainScore=0.6, lostAfterFrames=3, **tuning)
+        )
         state.initialize()
-        first = self._step(state, TrackMode.TRACKING, 0.5)
-        second = self._step(state, first.nextMode, 0.5)
-        uncertain = self._step(state, second.nextMode, 0.4)
-        recovered = self._step(state, uncertain.nextMode, 0.9)
+        return state
 
-        self.assertEqual(first.nextMode, TrackMode.TRACKING)
-        self.assertEqual(second.nextMode, TrackMode.TRACKING)
-        self.assertEqual(uncertain.nextMode, TrackMode.UNCERTAIN)
-        self.assertTrue(recovered.acceptMeasurement)
+    def testAFrameBelowTheUncertainScoreIsNotTrustedAndOneGoodFrameRestoresTracking(self) -> None:
+        state = self._machine()
+        modes = []
+        mode = TrackMode.TRACKING
+        for score in (0.8, 0.59, 0.9, 0.6):
+            mode = state.transition(mode, score, measurementAccepted=True).nextMode
+            modes.append(mode)
+
+        self.assertEqual(
+            modes,
+            [TrackMode.TRACKING, TrackMode.UNCERTAIN, TrackMode.TRACKING, TrackMode.TRACKING],
+        )
+        self.assertEqual(state.untrustedFrames, 0)
+
+    def testEnoughUntrustedFramesInARowMeanTheTargetIsLost(self) -> None:
+        state = self._machine()
+        mode = TrackMode.TRACKING
+        decisions = []
+        for score in (0.5, 0.4, 0.0, 0.3):
+            decision = state.transition(mode, score, measurementAccepted=score > 0.0)
+            mode = decision.nextMode
+            decisions.append(decision)
+
+        self.assertEqual(
+            [decision.nextMode for decision in decisions],
+            [TrackMode.UNCERTAIN, TrackMode.UNCERTAIN, TrackMode.LOST, TrackMode.LOST],
+        )
+        self.assertEqual(decisions[1].reason, TransitionReason.WEAK_MEASUREMENT)
+        self.assertEqual(decisions[2].reason, TransitionReason.HARD_MISS)
+        self.assertFalse(decisions[2].acceptMeasurement)
+        self.assertEqual(state.untrustedFrames, 4)
+        state.reset()
+        self.assertEqual(state.untrustedFrames, 0)
+        recovered = state.transition(TrackMode.LOST, 0.7, measurementAccepted=True)
         self.assertEqual(recovered.nextMode, TrackMode.TRACKING)
 
-    def testKeepsHardMissInUncertain(self) -> None:
-        state = TrackStateMachine(self.config.tracking)
-        state.initialize()
-        for _ in range(3):
-            self._step(state, TrackMode.TRACKING, 0.8)
+    def testStateScoreIsAWeightedMeanAndLeavesOutAMissingAppearanceScore(self) -> None:
+        tuning = replace(
+            self.config.backendTuning,
+            stateBackendWeight=0.5,
+            stateAppearanceWeight=0.3,
+            stateMotionWeight=0.2,
+        )
+        self.assertAlmostEqual(fuseStateScore(0.8, 0.4, 1.0, tuning), 0.4 + 0.12 + 0.2)
+        # Without an appearance score the other two keep their proportion.
+        self.assertAlmostEqual(fuseStateScore(0.8, None, 1.0, tuning), (0.4 + 0.2) / 0.7)
+        with self.assertRaises(ConfigError):
+            replace(tuning, stateBackendWeight=0.0, stateMotionWeight=0.0)
 
-        hardMiss = self._step(state, TrackMode.TRACKING, 0.0)
+    def testMotionScoreFallsWithDistanceFromThePredictionAndWithSizeChange(self) -> None:
+        estimator = SphericalMotionEstimator(windowLength=3, minSamplesForVelocity=2)
+        estimator.resetFromMeasurement(
+            makeSphericalPoint(0.0, 0.0), 0, 0, 1.0, horizontalSizeRad=0.2, verticalSizeRad=0.2
+        )
+        prediction = estimator.predictDetailed(1_000_000_000)
 
-        self.assertFalse(hardMiss.acceptMeasurement)
-        self.assertEqual(hardMiss.nextMode, TrackMode.UNCERTAIN)
-        self.assertEqual(hardMiss.reason, TransitionReason.HARD_MISS)
+        def score(yaw: float, size: float) -> float:
+            box = BFoV(makeSphericalPoint(yaw, 0.0), size, size)
+            return motionAgreement(box, prediction, 1.0, 0.3)
 
-    def testScoreGroupUsesWarmupAndRollingOrderStatistics(self) -> None:
-        group = ScoreGroup()
-        self.assertIsNone(group.thresholds())
-        group.append(0.2)
-        self.assertIsNone(group.thresholds())
-        group.append(0.8)
-        self.assertAlmostEqual(group.thresholds()[0], 0.5)
-        self.assertAlmostEqual(group.thresholds()[1], 0.32)
-        for value in (0.1, 0.3, 0.4, 0.5, 0.6, 0.7, 0.9, 0.95):
-            group.append(value)
-        self.assertEqual(group.thresholds(), (0.6, 0.3))
-        self.assertEqual(len(group.values), 10)
+        self.assertAlmostEqual(score(0.0, 0.2), 1.0)
+        # One target size away with an offset scale of one target size: exp(-1/2).
+        self.assertAlmostEqual(score(0.2, 0.2), math.exp(-0.5), places=5)
+        self.assertGreater(score(0.1, 0.2), score(0.3, 0.2))
+        # Twice as large: the log size ratio is log 2.
+        self.assertAlmostEqual(score(0.0, 0.4), math.exp(-0.5 * (math.log(2.0) / 0.3) ** 2))
 
 
 class ViewPlannerTest(unittest.TestCase):
@@ -474,7 +505,11 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(result.resultSource, ResultSource.OBSERVED_CONFIRMED)
         self.assertEqual(result.bbox, _observation(0.95).bbox)
         assert controller.lastStateObservation is not None
-        self.assertAlmostEqual(controller.lastStateObservation.stateScore, 0.95)
+        # The published confidence is the backend's score; the state score also counts
+        # how well the box agrees with the motion prediction.
+        self.assertAlmostEqual(result.confidence, 0.95)
+        self.assertAlmostEqual(controller.lastStateObservation.backendScore, 0.95)
+        self.assertLessEqual(controller.lastStateObservation.stateScore, 0.95)
 
         nextPlan = controller.beginFrame(_frame(2))
         self.assertEqual(nextPlan.stateRevision, 2)
@@ -499,16 +534,24 @@ class ControllerTest(unittest.TestCase):
         result = controller.consume(controller.beginFrame(_frame(1)), None)
 
         self.assertFalse(result.valid)
-        self.assertEqual(result.status, TrackStatus.TRACKING)
+        # A frame without a box has a state score of zero: it is not trusted.
+        self.assertEqual(result.status, TrackStatus.UNCERTAIN)
         self.assertEqual(result.resultSource, ResultSource.MOTION_PREDICTED)
         self.assertGreater(result.bbox.widthPx, 0.0)
 
-    def testRepeatedMissesStayUncertainAndNeverBecomeLost(self) -> None:
+    def testRepeatedMissesAreUncertainFirstAndLostAfterEnoughOfThem(self) -> None:
         controller = self._controller()
-        for index in range(1, 6):
-            result = controller.consume(controller.beginFrame(_frame(index)), None)
-            self.assertNotEqual(result.status, TrackStatus.LOST)
-        self.assertEqual(result.status, TrackStatus.UNCERTAIN)
+        statuses = [
+            controller.consume(controller.beginFrame(_frame(index)), None).status
+            for index in range(1, 7)
+        ]
+        patience = self.config.backendTuning.lostAfterFrames
+
+        self.assertEqual(statuses[: patience - 1], [TrackStatus.UNCERTAIN] * (patience - 1))
+        self.assertEqual(statuses[patience - 1 :], [TrackStatus.LOST] * (7 - patience))
+        # One trusted box brings the track back.
+        back = controller.consume(controller.beginFrame(_frame(7)), _observation(0.95))
+        self.assertEqual(back.status, TrackStatus.TRACKING)
 
     def testDefaultConfigAcceptsALowScoredBox(self) -> None:
         controller = self._controller()

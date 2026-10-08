@@ -212,7 +212,7 @@ def buildRuntime(
             Path(config.model.weights).parent / "hub",
             memoryRate=tuning.verifierMemoryRate,
             trustSimilarity=tuning.verifierTrustSimilarity,
-            trustScore=tuning.suspectScore,
+            trustScore=tuning.verifierTrustScore,
         )
     return RuntimeBundle(
         geometry=geometry,

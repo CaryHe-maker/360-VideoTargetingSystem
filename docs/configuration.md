@@ -43,10 +43,12 @@
 | `templateMinConfidence` | `0.515` | 允许更新模板的最低分 |
 | `lossHandling` | `false` | 丢失处理的总开关：可疑帧不更新外观记忆，连续可疑后扫描并跳转，见 [Controller](modules/controller.md#丢失处理)。需要 `models/hub/` 下的外观模型权重 |
 | `verifierModel` | `dinov2` | 计算外观相似度的模型：`dinov2`（ViT-S/14）、`dino`（ViT-S/16）或 `resnet18` |
-| `suspectSimilarity` / `suspectScore` | `0.30` / `0.50` | 外观相似度或跟踪器分数低于它就算可疑。tune 集上这组阈值误判 5% 的好帧、抓到 49% 的丢失帧（E016） |
-| `lostAfterFrames` | `4` | 连续多少帧可疑后开始扫描 |
+| `stateBackendWeight` / `stateAppearanceWeight` / `stateMotionWeight` | `0.40` / `0.55` / `0.05` | 状态分数里后端分、外观分、运动分的权重，见 [Controller](modules/controller.md#状态机)。没有外观分时另外两个按比例归一。数值来自 E018 |
+| `motionOffsetScale` / `motionSizeScale` | `0.5` / `0.1` | 运动分的两个衰减宽度：框离预测位置的距离（以目标尺寸为单位）和尺寸比的对数 |
+| `uncertainScore` | `0.60` | 状态分数低于它的帧不可信（`UNCERTAIN`）。自由运行时约误判 0.8% 的好帧、抓到 30%–40% 的丢失帧（E018） |
+| `lostAfterFrames` | `4` | 连续多少帧不可信后状态变为 `LOST`（丢失处理开启时开始扫描） |
 | `scanViewsPerFrame` | `4` | 扫描时每帧多取几个视图，每个多一次前向 |
-| `verifierMemoryRate` / `verifierTrustSimilarity` | `0.05` / `0.40` | 外观相似度除了对第 0 帧模板，还对“可信帧的滑动平均”计算，取较大的。前者是滑动平均的更新率，后者是一帧进入平均所需的相似度（分数还要不低于 `suspectScore`）。更新率为 0 时只对模板 |
+| `verifierMemoryRate` / `verifierTrustSimilarity` | `0.05` / `0.40` | 外观相似度除了对第 0 帧模板，还对“可信帧的滑动平均”计算，取较大的。前者是滑动平均的更新率，后者是一帧进入平均所需的相似度（分数还要不低于 `verifierTrustScore`，默认 0.50）。更新率为 0 时只对模板 |
 | `reacquireSimilarity` / `reacquireMargin` / `reacquireScore` | `0.45` / `0.15` / `0.70` | 扫描候选被采纳的条件：相似度的下限、比当前框高出的幅度、无状态前向分数的下限。分数是区分真假候选的主要信号（E017） |
 | `holdWeakBox` | `true` | 测量未被接受且目标面积 ≥ 画面的 10% 时，保持上一帧的框 |
 

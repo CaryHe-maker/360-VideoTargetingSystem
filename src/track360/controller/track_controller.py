@@ -108,7 +108,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         )
         self._evaluator = StateEvaluator(trackingConfig, backendTuning)
         self._planner = ViewPlanner(geometryConfig, trackingConfig, backendTuning)
-        self._stateMachine = TrackStateMachine(trackingConfig)
+        self._stateMachine = TrackStateMachine(backendTuning)
         self._templatePolicy = TemplatePolicy(trackingConfig, backendTuning)
 
         self._initialized = False
@@ -130,9 +130,8 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._lastStateObservation: StateObservation | None = None
         self._lastTransition: TransitionDecision | None = None
         self._lastPipelineProfile: dict[str, object] = {}
-        # Loss handling: consecutive doubtful frames, where the target was last
-        # trusted, and how far the scan around that place has got.
-        self._suspectFrames = 0
+        # Loss handling: where the target was last trusted, and how far the scan
+        # around that place has got.
         self._lastGoodBfov: BFoV | None = None
         self._scanCursor = 0
         self._lastFrameSuspect = False
@@ -162,7 +161,7 @@ class TrackControllerImpl(TrackControllerProtocol):
 
     @property
     def suspectFrames(self) -> int:
-        return self._suspectFrames
+        return self._stateMachine.untrustedFrames
 
     @property
     def status(self) -> TrackStatus | None:
@@ -301,7 +300,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         scanViews: tuple[ViewSpec, ...] = ()
         if (
             self._backendTuning.lossHandling
-            and self._suspectFrames >= self._backendTuning.lostAfterFrames
+            and self._mode is TrackMode.LOST
             and self._lastGoodBfov is not None
         ):
             scanViews, self._scanCursor = self._planner.scanViews(
@@ -371,13 +370,6 @@ class TrackControllerImpl(TrackControllerProtocol):
             frameWidthPx=pending.frame.rgb.shape[1],
             frameHeightPx=pending.frame.rgb.shape[0],
         )
-        thresholds = self._stateMachine.scoreGroup.thresholds()
-        if thresholds is not None:
-            evaluation = replace(
-                evaluation,
-                uncertainThreshold=thresholds[0],
-                lostThreshold=thresholds[1],
-            )
         decision = self._stateMachine.transition(
             pending.mode,
             evaluation.stateScore,
@@ -389,27 +381,16 @@ class TrackControllerImpl(TrackControllerProtocol):
             "finalMeasurementAccepted": bool(decision.acceptMeasurement),
             "finalStateRevision": int(plan.stateRevision),
         }
-        self._stateMachine.recordScore(evaluation.stateScore)
         self._lastStateObservation = evaluation
         self._lastTransition = decision
         if self._backendTuning.lossHandling:
-            if observation is None or self._isSuspect(observation):
-                self._suspectFrames += 1
-                self._suspectFrameCount += 1
-                self._lastFrameSuspect = True
-            else:
-                self._suspectFrames = 0
+            if decision.nextMode is TrackMode.TRACKING:
                 self._scanCursor = 0
                 self._lastGoodBfov = self._currentBfov
+            else:
+                self._suspectFrameCount += 1
+                self._lastFrameSuspect = True
         return result
-
-    def _isSuspect(self, observation: ProjectedObservation) -> bool:
-        """Whether the box may not be the target: a low score or an unlike appearance."""
-        tuning = self._backendTuning
-        if _observationScore(observation) < tuning.suspectScore:
-            return True
-        similarity = observation.appearanceSimilarity
-        return similarity is not None and similarity < tuning.suspectSimilarity
 
     def _reacquisitionCandidate(
         self,
@@ -457,14 +438,13 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._trajectory.clear()
         self._trajectory.extend([candidate.bfov] * TRAJECTORY_LENGTH)
         self._lastGoodBfov = candidate.bfov
-        self._suspectFrames = 0
+        self._stateMachine.reset()
         self._scanCursor = 0
         self._lastFrameReacquired = True
         self._reacquiredFrames.append(int(frame.frameIndex))
         self._mode = TrackMode.TRACKING
         self._stableFrames = 0
         self._pendingTemplate = TemplateDecision(TemplateCommandKind.KEEP)
-        self._stateMachine.recordScore(score)
         self._stateRevision = plan.stateRevision
         self._lastFrameIndex = int(frame.frameIndex)
         self._lastFrame = frame
@@ -555,8 +535,12 @@ class TrackControllerImpl(TrackControllerProtocol):
         holdingWeak = False
         outputBfov = evaluation.proposedOutputBfov
         outputBox = evaluation.proposedOutputBbox
+        # The published confidence stays the backend's own score: the state score is
+        # an internal judgement and is reported through the track status.
         outputConfidence = (
-            evaluation.stateScore if hasCandidate else max(0.0, pending.prediction.confidence * 0.5)
+            evaluation.backendScore
+            if hasCandidate
+            else max(0.0, pending.prediction.confidence * 0.5)
         )
         if accepted:
             self._recordMeasurement(pending, outputBfov, outputConfidence)
@@ -586,7 +570,7 @@ class TrackControllerImpl(TrackControllerProtocol):
                 self._recordMeasurement(
                     pending,
                     evaluation.measuredBfov,
-                    max(self._trackingConfig.candidateMinScore, evaluation.stateScore),
+                    max(self._trackingConfig.candidateMinScore, evaluation.backendScore),
                 )
         self._mode = decision.nextMode
         if accepted and self._mode is TrackMode.TRACKING:

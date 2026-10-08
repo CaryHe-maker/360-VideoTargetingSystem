@@ -48,8 +48,13 @@ backendTuning:
   verifierModel: dinov2
   verifierMemoryRate: 0.05
   verifierTrustSimilarity: 0.40
-  suspectSimilarity: 0.30
-  suspectScore: 0.50
+  verifierTrustScore: 0.50
+  stateBackendWeight: 0.40
+  stateAppearanceWeight: 0.55
+  stateMotionWeight: 0.05
+  motionOffsetScale: 0.5
+  motionSizeScale: 0.1
+  uncertainScore: 0.60
   lostAfterFrames: 4
   scanViewsPerFrame: 4
   reacquireSimilarity: 0.45

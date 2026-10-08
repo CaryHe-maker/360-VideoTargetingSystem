@@ -57,8 +57,19 @@ def _observation(
 class LossHandlingControllerTest(unittest.TestCase):
     def setUp(self) -> None:
         config = loadConfig(ROOT / "configs" / "default.yaml")
+        # State score = mean of the backend score and the appearance similarity; a
+        # frame below 0.6 is not trusted and three of them in a row mean lost.
         self.config = replace(
-            config, backendTuning=replace(config.backendTuning, lossHandling=True)
+            config,
+            backendTuning=replace(
+                config.backendTuning,
+                lossHandling=True,
+                stateBackendWeight=0.5,
+                stateAppearanceWeight=0.5,
+                stateMotionWeight=0.0,
+                uncertainScore=0.6,
+                lostAfterFrames=4,
+            ),
         )
         self.controller = TrackControllerImpl(SphericalGeometryImpl(), self.config)
         self.controller.commitInitialization(
@@ -142,7 +153,7 @@ class LossHandlingControllerTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             replace(config.backendTuning, lostAfterFrames=0)
         with self.assertRaises(ConfigError):
-            replace(config.backendTuning, suspectSimilarity=2.0)
+            replace(config.backendTuning, uncertainScore=2.0)
 
 
 class ScanViewsTest(unittest.TestCase):

@@ -4,6 +4,22 @@
 
 ## [未发布]
 
+### 状态机改用融合的状态分数
+
+#### 变更
+
+- 状态分数是后端分、外观分、运动分的加权平均（默认 0.40 / 0.55 / 0.05）；低于 `uncertainScore`（0.60）是 `UNCERTAIN`，连续 `lostAfterFrames` 帧是 `LOST`。权重和阈值来自评测记录 E018 的数据。
+- 丢失处理直接使用这个状态；`suspectSimilarity` / `suspectScore` 两个配置项删除，新增 `stateBackendWeight`、`stateAppearanceWeight`、`stateMotionWeight`、`motionOffsetScale`、`motionSizeScale`、`uncertainScore`、`verifierTrustScore`。
+- 没有框的帧和低分的帧现在会进入 `UNCERTAIN` / `LOST`（此前永远不会到 `LOST`）。结果里的状态标签因此改变；丢失处理关闭时框和置信度不变。金标准轨迹重新录制。
+
+#### 移除
+
+- 基于历史分数自适应阈值的状态判定（`ScoreGroup`）。
+
+#### 新增
+
+- `tools/fusion_dataset.py`、`tools/fusion_freerun.py`、`tools/fusion_analysis.py`：采集和分析三个分数与 IoU 的关系，搜索融合权重。
+
 ### 丢失判定、扫描和找回（默认关闭）
 
 #### 新增
