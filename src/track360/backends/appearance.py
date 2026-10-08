@@ -88,6 +88,10 @@ class AppearanceModels:
         self._std = torch.tensor(_STD, device=self._device).view(1, 3, 1, 1)
 
     @property
+    def torch(self) -> Any:
+        return self._torch
+
+    @property
     def names(self) -> tuple[str, ...]:
         return tuple(self._models)
 
@@ -119,7 +123,15 @@ _SHARED: dict[tuple[str, str], AppearanceModels] = {}
 class AppearanceVerifier:
     """Similarity of a box in a local view to the template of one sequence."""
 
-    def __init__(self, model: str, hubDirectory: str | Path) -> None:
+    def __init__(
+        self,
+        model: str,
+        hubDirectory: str | Path,
+        *,
+        memoryRate: float = 0.0,
+        trustSimilarity: float = 1.0,
+        trustScore: float = 1.0,
+    ) -> None:
         if model not in MODEL_NAMES:
             raise ValueError(f"unknown appearance model '{model}'")
         key = (model, str(hubDirectory))
@@ -128,16 +140,44 @@ class AppearanceVerifier:
             _SHARED[key] = AppearanceModels(hubDirectory, (model,))
         self._models = _SHARED[key]
         self._model = model
-        self._template: dict[str, Any] | None = None
+        self._memoryRate = float(memoryRate)
+        self._trustSimilarity = float(trustSimilarity)
+        self._trustScore = float(trustScore)
+        self._template: Any | None = None
+        self._recent: Any | None = None
 
     def setTemplate(self, template: LocalView, templateBox: BBoxXYWH) -> None:
-        self._template = self._models.embed(targetCrop(template.rgb, templateBox))
+        self._template = self._models.embed(targetCrop(template.rgb, templateBox))[self._model]
+        self._recent = self._template.clone()
 
-    def similarity(self, view: LocalView, box: BBoxXYWH) -> float | None:
-        if self._template is None:
+    def similarity(
+        self, view: LocalView, box: BBoxXYWH, trackerScore: float | None = None
+    ) -> float | None:
+        """How much the box looks like the target: the larger of two similarities.
+
+        One is to the frame-0 template.  The other is to a slowly moving average of
+        the boxes that were trusted so far, which follows the target as its look
+        changes.  With ``trackerScore`` given, the box belongs to the tracked sequence
+        and enters that average when it is trusted: similar enough and scored high
+        enough.  Scan candidates are compared without being remembered.
+        """
+        if self._template is None or self._recent is None:
             return None
-        features = self._models.embed(targetCrop(view.rgb, box))
-        return self._models.similarity(self._template, features)[self._model]
+        torch = self._models.torch
+        feature = self._models.embed(targetCrop(view.rgb, box))[self._model]
+        recent = torch.nn.functional.normalize(self._recent, dim=1)
+        value = max(
+            float((feature * self._template).sum().item()),
+            float((feature * recent).sum().item()),
+        )
+        if (
+            trackerScore is not None
+            and self._memoryRate > 0.0
+            and value >= self._trustSimilarity
+            and trackerScore >= self._trustScore
+        ):
+            self._recent = (1.0 - self._memoryRate) * self._recent + self._memoryRate * feature
+        return value
 
 
 __all__ = [

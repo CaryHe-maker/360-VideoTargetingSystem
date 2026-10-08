@@ -46,6 +46,8 @@ backendTuning:
   holdWeakBox: true
   lossHandling: false
   verifierModel: dinov2
+  verifierMemoryRate: 0.05
+  verifierTrustSimilarity: 0.40
   suspectSimilarity: 0.30
   suspectScore: 0.50
   lostAfterFrames: 4

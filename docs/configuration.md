@@ -41,6 +41,12 @@
 | `templateFovScale` | `2.5` | 模板视图视场相对目标角尺寸的倍数（≥ 1） |
 | `onlineTemplate` | `true` | 保留第 0 帧 anchor 的同时允许更新 recent / stable 模板。只在 `sequenceModel: false` 时起作用 |
 | `templateMinConfidence` | `0.515` | 允许更新模板的最低分 |
+| `lossHandling` | `false` | 丢失处理的总开关：可疑帧不更新外观记忆，连续可疑后扫描并跳转，见 [Controller](modules/controller.md#丢失处理)。需要 `models/hub/` 下的外观模型权重 |
+| `verifierModel` | `dinov2` | 计算外观相似度的模型：`dinov2`（ViT-S/14）、`dino`（ViT-S/16）或 `resnet18` |
+| `suspectSimilarity` / `suspectScore` | `0.30` / `0.50` | 外观相似度或跟踪器分数低于它就算可疑。tune 集上这组阈值误判 5% 的好帧、抓到 49% 的丢失帧（E016） |
+| `lostAfterFrames` | `4` | 连续多少帧可疑后开始扫描 |
+| `scanViewsPerFrame` | `4` | 扫描时每帧多取几个视图，每个多一次前向 |
+| `reacquireSimilarity` / `reacquireMargin` / `reacquireScore` | `0.50` / `0.15` / `0.50` | 扫描候选被采纳的条件：相似度的下限、比当前框高出的幅度、分数的下限 |
 | `holdWeakBox` | `true` | 测量未被接受且目标面积 ≥ 画面的 10% 时，保持上一帧的框 |
 
 `core/config.py::BackendTuningConfig` 的 dataclass 默认值与 `configs/default.yaml` 相同，有测试保证两者不会不一致。因此不传配置、直接构造 `TrackControllerImpl` / `StateEvaluator` / `TemplatePolicy` / `ViewPlanner` 时，得到的也是默认配置的行为。

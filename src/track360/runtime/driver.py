@@ -208,7 +208,11 @@ def buildRuntime(
         from track360.backends.appearance import AppearanceVerifier
 
         verifier = AppearanceVerifier(
-            tuning.verifierModel, Path(config.model.weights).parent / "hub"
+            tuning.verifierModel,
+            Path(config.model.weights).parent / "hub",
+            memoryRate=tuning.verifierMemoryRate,
+            trustSimilarity=tuning.verifierTrustSimilarity,
+            trustScore=tuning.suspectScore,
         )
     return RuntimeBundle(
         geometry=geometry,
@@ -370,7 +374,9 @@ def runTracking(
                                     projected = replace(
                                         projected,
                                         appearanceSimilarity=verifier.similarity(
-                                            view, observation.bbox
+                                            view,
+                                            observation.bbox,
+                                            float(projected.singleScore or 0.0),
                                         ),
                                     )
                                 if plan.scanViews:

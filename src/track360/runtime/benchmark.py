@@ -60,6 +60,10 @@ class SequenceReport:
     # Images sent through the network, over all frames of the sequence.
     forwards: int = 0
     invalidFrames: int = 0
+    # Loss handling: doubted frames, frames with scan views, frames of each jump.
+    suspectFrames: int = 0
+    scanFrames: int = 0
+    reacquiredAt: tuple[int, ...] = ()
     error: str | None = None
 
 
@@ -171,7 +175,7 @@ def runBenchmark(
     resume: bool = True,
     shard: tuple[int, int] = (0, 1),
     sessionFactory: SessionFactory | None = None,
-    probe: bool = False,
+    probe: Sequence[str] | None = None,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -207,15 +211,28 @@ def runBenchmark(
         else createArtrackSession(config)
     )
     probeModels = None
-    if probe:
-        from track360.evaluation.appearance_probe import AppearanceModels
+    probeSignals = tuple(probe or ())
+    if probeSignals:
+        from track360.evaluation.appearance_probe import MODEL_SIGNALS, AppearanceModels
 
-        probeModels = AppearanceModels(Path(config.model.weights).parent / "hub")
+        probeModels = AppearanceModels(
+            Path(config.model.weights).parent / "hub",
+            [name for name in MODEL_SIGNALS if name in probeSignals] or MODEL_SIGNALS[:1],
+        )
     reports: list[SequenceReport] = []
     try:
         for position, name in enumerate(names, start=1):
             report = _runOne(
-                dataset, output, method, config, name, session, maxFrames, resume, probeModels
+                dataset,
+                output,
+                method,
+                config,
+                name,
+                session,
+                maxFrames,
+                resume,
+                probeModels,
+                "clean" in probeSignals,
             )
             reports.append(report)
             # A skipped sequence keeps the report of the run that tracked it.
@@ -357,6 +374,7 @@ def _runOne(
     maxFrames: int | None,
     resume: bool,
     probeModels: Any | None = None,
+    probeClean: bool = True,
 ) -> SequenceReport:
     source = Vot360DataSource(maxFrames=maxFrames, labelRoot=dataset.labelRoot)
     try:
@@ -371,11 +389,12 @@ def _runOne(
         if probeModels is not None and method != "b0":
             from track360.evaluation.appearance_probe import AppearanceProbe
 
-            probe = AppearanceProbe(probeModels, session)
+            probe = AppearanceProbe(probeModels, session if probeClean else None)
+        loss: dict[str, object] = {}
         if method == "b0":
             _trackErpDirect(source, session, config, collector)
         else:
-            _trackSpherical(source, session, config, collector, probe)
+            loss = _trackSpherical(source, session, config, collector, probe)
         seconds = perf_counter() - started
         collector.finalize(frameCount)
         frameWidthPx = source.sequence.frameSize[0]
@@ -392,6 +411,9 @@ def _runOne(
             p50LatencyMs=float(np.percentile(latencies, 50)) if latencies.size else 0.0,
             p95LatencyMs=float(np.percentile(latencies, 95)) if latencies.size else 0.0,
             forwards=session.forwards,
+            suspectFrames=int(loss.get("suspectFrames", 0)),
+            scanFrames=int(loss.get("scanFrames", 0)),
+            reacquiredAt=tuple(loss.get("reacquiredAt", ())),
             invalidFrames=sum(1 for result in collector.results if not result.valid),
         )
     except Exception as error:
@@ -409,7 +431,7 @@ def _trackSpherical(
     config: AppConfig,
     collector: ResultCollector,
     probe: Any | None = None,
-) -> None:
+) -> dict[str, object]:
     shared = _SharedSession(session)
     runtime = buildRuntime(config, artrackSessionFactory=lambda _: shared)
     try:
@@ -425,6 +447,7 @@ def _trackSpherical(
             probe=probe,
             verifier=runtime.verifier,
         )
+        return runtime.controller.lossStatistics
     finally:
         closeRuntime(runtime)
 

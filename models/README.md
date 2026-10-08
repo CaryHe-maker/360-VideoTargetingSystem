@@ -38,3 +38,14 @@ ARTrackV2 输出的分数不是校准过的概率。如果需要，可以把与�
 ## 计划
 
 按照 [V2Plan](../docs/V2Plan.md)，之后会把权重发布到 Hugging Face Hub 或 GitHub Releases，并提供 `track360 download` 命令自动下载和校验。
+
+## 外观模型（可选）
+
+丢失处理（`backendTuning.lossHandling`）和外观探针（`tools/benchmark.py run --probe`）用到的小模型放在 `models/hub/`，由 `torch.hub` 在第一次使用时下载，同样不随仓库分发：
+
+| 模型 | 来源 | 许可证 | 大小 |
+|---|---|---|---:|
+| DINOv2 ViT-S/14（默认的验证器） | `facebookresearch/dinov2` | Apache 2.0 | 约 85 MB |
+| DINO ViT-S/16（只用于对比） | `facebookresearch/dino` | Apache 2.0 | 约 83 MB |
+| ResNet-18（只用于对比） | torchvision 的 ImageNet 权重 | BSD-3 | 约 45 MB |
+

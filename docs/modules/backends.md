@@ -47,6 +47,23 @@
 - 首先尝试 `torch.load(weights_only=True)`。官方压缩包中带有旧版训练统计对象，安全加载失败时才回退到兼容模式（只对显式指定的本地文件这样做）；
 - 有 CUDA 时使用 GPU，否则使用 CPU。
 
+## 外观验证器
+
+跟踪器的分数回答的是“这个框框得准不准”，跟到别的物体上之后它照样很高。`backends/appearance.py` 里的 `AppearanceVerifier` 回答另一个问题：框里的东西和第 0 帧的模板是不是同一个。
+
+- 做法：把模板和当前框各裁成“以框为中心、边长为长边 1.1 倍”的正方形（超出图像的部分补黑），缩放到 224，用一个冻结的图像模型提特征，取余弦相似度。模板的特征只在第 0 帧算一次；
+- 模型：默认 DINOv2 ViT-S/14（约 2200 万参数，一次前向约 5 ms）。也可以选 DINO ViT-S/16 或 ResNet-18，效果都明显不如它（[评测记录](../evaluation-log.md) E016）；
+- 权重放在 `models/hub/`，通过 `torch.hub` 加载，不随仓库分发。第一次使用时需要联网下载（DINOv2 约 85 MB）；
+- 只在 `backendTuning.lossHandling: true` 时创建，由 Runtime 在后端推理之后调用，结果写进 `ProjectedObservation.appearanceSimilarity`。
+
+为了配合丢失处理，后端门面还提供三个操作：
+
+| 方法 | 作用 |
+|---|---|
+| `saveState()` / `restoreState(state)` | 保存、恢复跟踪器的外观记忆，用来撤销一帧的影响 |
+| `resetState()` | 清空外观记忆，跟踪器从模板重新开始 |
+| `inferDetached(views)` | 无状态推理：只看第 0 帧模板，不带轨迹，也不读写外观记忆。用来在扫描视图里找候选 |
+
 ## 已知限制
 
 - 推理始终是 FP32，`model.precision` 只接受 `fp32`。FP16 / TensorRT 是 [V2Plan](../V2Plan.md) Phase 5 的工作；

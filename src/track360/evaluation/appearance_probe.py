@@ -65,11 +65,16 @@ class AppearanceProbe:
         self._templateFeatures: dict[str, Any] | None = None
         self._anchor: Any | None = None
         self._rows: dict[int, dict[str, float]] = {}
+        # The feature of every frame's box from the first model, for offline analysis.
+        self._features: dict[int, NDArray[np.float32]] = {}
+        self._templateFeature: NDArray[np.float32] | None = None
 
     def begin(self, template: LocalView, templateBox: BBoxXYWH) -> None:
         self._templateCrop = targetCrop(template.rgb, templateBox)
         if self._models is not None:
             self._templateFeatures = self._models.embed(self._templateCrop)
+            first = self._models.names[0]
+            self._templateFeature = self._templateFeatures[first][0].float().cpu().numpy()
         if self._session is not None:
             self._anchor = self._session.encodeTemplate(template.rgb, templateBox)
 
@@ -79,7 +84,11 @@ class AppearanceProbe:
         crop = targetCrop(view.rgb, observation.bbox)
         row: dict[str, float] = {"hist": histogramSimilarity(self._templateCrop, crop)}
         if self._models is not None and self._templateFeatures is not None:
-            row.update(self._models.similarity(self._templateFeatures, self._models.embed(crop)))
+            features = self._models.embed(crop)
+            row.update(self._models.similarity(self._templateFeatures, features))
+            self._features[frameIndex] = (
+                features[self._models.names[0]][0].float().cpu().numpy()
+            )
         if self._anchor is not None and view.spec.priorBox is not None:
             # A second pass with nothing carried over from earlier frames: the appearance
             # feature starts from the template again and no trajectory is given.
@@ -104,6 +113,16 @@ class AppearanceProbe:
             path = probePath(root, method, signal, sequence)
             path.parent.mkdir(parents=True, exist_ok=True)
             np.savetxt(path, values, fmt="%.6f")
+        if self._templateFeature is not None:
+            # Row 0 is the template; a frame without a box keeps a zero row.
+            table = np.zeros((frameCount, len(self._templateFeature)), dtype=np.float16)
+            table[0] = self._templateFeature
+            for frameIndex, feature in self._features.items():
+                if 0 < frameIndex < frameCount:
+                    table[frameIndex] = feature
+            path = Path(root) / PROBE_DIRECTORY / method / "features" / f"{sequence}.npy"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            np.save(path, table)
 
 
 def probePath(root: str | Path, method: str, signal: str, sequence: str) -> Path:

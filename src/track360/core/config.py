@@ -137,6 +137,8 @@ class BackendTuningConfig:
     # Loss handling: doubt a frame, search for the target elsewhere, jump back to it.
     lossHandling: bool = False
     verifierModel: str = "dinov2"
+    verifierMemoryRate: float = 0.05
+    verifierTrustSimilarity: float = 0.40
     suspectSimilarity: float = 0.30
     suspectScore: float = 0.50
     lostAfterFrames: int = 4
@@ -169,6 +171,7 @@ class BackendTuningConfig:
                 "backendTuning.alignedSearch and fullViewSearch cannot both be enabled"
             )
         for name in (
+            "verifierTrustSimilarity",
             "suspectSimilarity",
             "suspectScore",
             "reacquireSimilarity",
@@ -177,6 +180,8 @@ class BackendTuningConfig:
         ):
             if not -1.0 <= getattr(self, name) <= 1.0:
                 raise ConfigError(f"backendTuning.{name} must be in [-1, 1]")
+        if not 0.0 <= self.verifierMemoryRate <= 1.0:
+            raise ConfigError("backendTuning.verifierMemoryRate must be in [0, 1]")
         if self.lostAfterFrames < 1 or self.scanViewsPerFrame < 0:
             raise ConfigError(
                 "backendTuning.lostAfterFrames must be positive and scanViewsPerFrame "
@@ -334,6 +339,8 @@ def loadConfig(path: str | Path) -> AppConfig:
             "holdWeakBox",
             "lossHandling",
             "verifierModel",
+            "verifierMemoryRate",
+            "verifierTrustSimilarity",
             "suspectSimilarity",
             "suspectScore",
             "lostAfterFrames",
@@ -484,6 +491,12 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
             verifierModel=_requireStr(
                 "backendTuning.verifierModel", tuningRaw["verifierModel"]
+            ),
+            verifierMemoryRate=_requireFloat(
+                "backendTuning.verifierMemoryRate", tuningRaw["verifierMemoryRate"]
+            ),
+            verifierTrustSimilarity=_requireFloat(
+                "backendTuning.verifierTrustSimilarity", tuningRaw["verifierTrustSimilarity"]
             ),
             suspectSimilarity=_requireFloat(
                 "backendTuning.suspectSimilarity", tuningRaw["suspectSimilarity"]

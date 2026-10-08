@@ -137,6 +137,18 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._scanCursor = 0
         self._lastFrameSuspect = False
         self._lastFrameReacquired = False
+        self._suspectFrameCount = 0
+        self._scanFrameCount = 0
+        self._reacquiredFrames: list[int] = []
+
+    @property
+    def lossStatistics(self) -> dict[str, object]:
+        """What loss handling did over the sequence so far."""
+        return {
+            "suspectFrames": self._suspectFrameCount,
+            "scanFrames": self._scanFrameCount,
+            "reacquiredAt": list(self._reacquiredFrames),
+        }
 
     @property
     def lastFrameSuspect(self) -> bool:
@@ -295,6 +307,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             scanViews, self._scanCursor = self._planner.scanViews(
                 self._lastGoodBfov, self._scanCursor, self._backendTuning.scanViewsPerFrame
             )
+            self._scanFrameCount += 1
         plan = SearchPlan(
             sequenceId=frame.sequenceId,
             frameIndex=frame.frameIndex,
@@ -382,6 +395,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         if self._backendTuning.lossHandling:
             if observation is None or self._isSuspect(observation):
                 self._suspectFrames += 1
+                self._suspectFrameCount += 1
                 self._lastFrameSuspect = True
             else:
                 self._suspectFrames = 0
@@ -446,6 +460,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._suspectFrames = 0
         self._scanCursor = 0
         self._lastFrameReacquired = True
+        self._reacquiredFrames.append(int(frame.frameIndex))
         self._mode = TrackMode.TRACKING
         self._stableFrames = 0
         self._pendingTemplate = TemplateDecision(TemplateCommandKind.KEEP)
