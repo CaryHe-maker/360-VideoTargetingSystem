@@ -1,0 +1,28 @@
+# Fragile hold-out sequences: their score swings between configurations that differ in
+# a few frames only (spread of S_dual above 0.05 over the six sequence-model runs of
+# evaluation records E010-E015).  Listed on 2026-10-08 to read hold-out comparisons:
+# a change carried by these sequences alone is not evidence.  The list describes the
+# sequences; it must not be used to choose a configuration.
+# <id>  # frames, mean S_dual, spread over the six runs
+098  # 253, 0.754, 0.063
+095  # 154, 0.027, 0.068
+101  # 257, 0.415, 0.068
+070  # 294, 0.721, 0.070
+078  # 1185, 0.355, 0.113
+093  # 1387, 0.248, 0.124
+059  # 701, 0.454, 0.126
+061  # 1041, 0.083, 0.131
+028  # 1076, 0.438, 0.131
+151  # 1832, 0.145, 0.132
+062  # 1010, 0.699, 0.141
+140  # 1071, 0.101, 0.165
+100  # 1193, 0.586, 0.216
+047  # 1199, 0.200, 0.314
+112  # 62, 0.551, 0.355
+031  # 500, 0.738, 0.360
+011  # 1457, 0.432, 0.374
+024  # 600, 0.508, 0.421
+001  # 846, 0.334, 0.448
+110  # 266, 0.472, 0.492
+007  # 661, 0.496, 0.628
+010  # 1300, 0.519, 0.749

@@ -1,0 +1,17 @@
+# Stable hold-out sequences: tracked well (mean S_dual of at least 0.5) with a spread of
+# at most 0.025 over the six sequence-model runs of evaluation records E010-E015.
+# Listed on 2026-10-08 to read hold-out comparisons, not to choose a configuration.
+# <id>  # frames, mean S_dual, spread over the six runs
+055  # 267, 0.881, 0.001
+111  # 1565, 0.802, 0.001
+030  # 160, 0.929, 0.001
+008  # 251, 0.769, 0.003
+051  # 300, 0.505, 0.004
+027  # 2006, 0.725, 0.012
+015  # 2402, 0.855, 0.012
+119  # 1241, 0.814, 0.018
+080  # 1194, 0.920, 0.018
+069  # 224, 0.791, 0.019
+063  # 854, 0.793, 0.019
+102  # 203, 0.832, 0.023
+018  # 350, 0.719, 0.025
