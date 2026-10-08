@@ -50,6 +50,56 @@ class GeometryTest(unittest.TestCase):
 
         np.testing.assert_array_equal(view.rgb, frame.rgb)
 
+    def testRemapPathMatchesTheReferencePathWithinOneIntensityLevel(self) -> None:
+        import cv2
+
+        rng = np.random.default_rng(2)
+        noise = rng.integers(0, 256, (240, 480, 3), dtype=np.uint8)
+        frame = FramePacket(
+            SequenceId("s"), FrameIndex(0), 0, cv2.GaussianBlur(noise, (0, 0), 2.0)
+        )
+        fast = SphericalGeometryImpl(boundarySamplesPerEdge=33, useRemap=True)
+        # Views across the seam, at a pole, narrow and wide, in both projections.
+        specs = [
+            ViewSpec(0, BFoV(makeSphericalPoint(3.1, 0.2), 0.6, 0.6), 96, 96),
+            ViewSpec(0, BFoV(makeSphericalPoint(-1.0, 1.5), 1.5, 1.2), 96, 64),
+            ViewSpec(0, BFoV(makeSphericalPoint(0.4, -0.3), 0.05, 0.05), 64, 64),
+            ViewSpec(
+                0,
+                BFoV(makeSphericalPoint(-3.0, 0.9), 4.0, 2.5),
+                128,
+                80,
+                projection=ViewProjection.SPHERICAL,
+            ),
+        ]
+        for spec in specs:
+            with self.subTest(spec=spec):
+                reference = self.geometry.cropViews(frame, [spec])[0].rgb
+                actual = fast.cropViews(frame, [spec])[0].rgb
+                difference = np.abs(reference.astype(int) - actual.astype(int))
+                self.assertEqual(actual.shape, reference.shape)
+                self.assertLessEqual(int(difference.max()), 1)
+                self.assertLess(float((difference > 0).mean()), 0.10)
+
+    def testRemapViewOfTheWholeSphereIsTheErpFrameItself(self) -> None:
+        rng = np.random.default_rng(3)
+        frame = FramePacket(
+            SequenceId("s"), FrameIndex(0), 0, rng.integers(0, 256, (32, 64, 3), dtype=np.uint8)
+        )
+        spec = ViewSpec(
+            0,
+            BFoV(makeSphericalPoint(0.0, 0.0), 2.0 * math.pi - 1e-9, math.pi - 1e-9),
+            64,
+            32,
+            projection=ViewProjection.SPHERICAL,
+        )
+        fast = SphericalGeometryImpl(boundarySamplesPerEdge=33, useRemap=True)
+
+        view = fast.cropViews(frame, [spec])[0]
+
+        difference = np.abs(view.rgb.astype(int) - frame.rgb.astype(int))
+        self.assertLessEqual(int(difference.max()), 1)
+
     def testSphericalViewTurnedHalfwayShiftsTheFrameByHalfItsWidth(self) -> None:
         rng = np.random.default_rng(1)
         frame = FramePacket(

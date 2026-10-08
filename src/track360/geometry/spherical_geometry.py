@@ -38,11 +38,13 @@ class SphericalGeometryImpl(SphericalGeometryProtocol):
     """Default geometry implementation for ERP crops and BFoV envelopes."""
 
     boundarySamplesPerEdge: int = 65
+    # Crop views with OpenCV's remap; see ``BfovProjector.useRemap``.
+    useRemap: bool = False
     _projector: BfovProjector = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         _requireBoundarySamplesPerEdge(self.boundarySamplesPerEdge)
-        self._projector = BfovProjector(self.boundarySamplesPerEdge)
+        self._projector = BfovProjector(self.boundarySamplesPerEdge, self.useRemap)
 
     def bboxToBfov(self, bbox: BBoxXYWH, frameWidthPx: int, frameHeightPx: int) -> BFoV:
         _requireFrameDimensions(frameWidthPx, frameHeightPx)

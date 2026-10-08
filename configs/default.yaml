@@ -13,7 +13,7 @@ geometry:
   boundarySamplesPerEdge: 65
   minFovDeg: 20.0
   maxFovDeg: 120.0
-  resampler: cpu
+  resampler: opencv
 motion:
   minSamplesForVelocity: 2
   maxTangentSpanRad: 1.20

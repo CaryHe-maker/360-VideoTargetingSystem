@@ -1,11 +1,11 @@
 {
-  "default": "bad434ccd81dbd0107b3b37053a2d76d8dd8fd35af232cfdb3ca50ece4bca20c",
-  "frame_model": "b7d10ff326c69944eabf13f9b38149005f81e398ac08e1c8b739c3b854781c0a",
-  "gated": "91fff74342ac269538a0618f01f04b24946f59f47e0f07d4040ded36425f7de0",
-  "gated_no_hold": "c622cbf925bf589957f1e3154a8997a9c8a51caa620e695815ed436964f7bbae",
-  "legacy_search": "3d7270f805fbec8b3383ac63bcd34e9d4ea32300e2250e2125907afa9a1d7149",
-  "motion_on": "bad434ccd81dbd0107b3b37053a2d76d8dd8fd35af232cfdb3ca50ece4bca20c",
-  "perspective_only": "ab96999dd6f0b9d1c81216ce35833ef92f09b4337da517cfc3337d981eca0621",
-  "template_off": "bad434ccd81dbd0107b3b37053a2d76d8dd8fd35af232cfdb3ca50ece4bca20c",
-  "view_caps": "17b6fd577d85bbb3dda339d083a1e95af0996d3a4eba4255fb54bb3e87a4b55a"
+  "default": "3ecd05e06092f16aa266ceba415f34af944ea8de21fa5d55c07d0ecda74bf05a",
+  "frame_model": "d7ee483e326b7c50140911e464e6df9b814c9850c39c25d3dbdbcb142790df86",
+  "gated": "b62193e42bb941048349006ae99f5e88b21113706b92c879f16b9523b297815b",
+  "gated_no_hold": "b07e512c9c37bac18195cc90aaf991b7d94acc4ba781f125688d586a82666ebe",
+  "legacy_search": "c44d724cf71879ae781b3c1723c0c07fdc60b322f9bf81830c1de98afb307a7c",
+  "motion_on": "3ecd05e06092f16aa266ceba415f34af944ea8de21fa5d55c07d0ecda74bf05a",
+  "perspective_only": "15f28c194c6cdd5f32a9c3136575163ecd8afc2552e5605c29f65ced476d444a",
+  "template_off": "3ecd05e06092f16aa266ceba415f34af944ea8de21fa5d55c07d0ecda74bf05a",
+  "view_caps": "e98646b88ba40761cb10ca02956f2283920abc0828093d11d31848efa8d1242f"
 }

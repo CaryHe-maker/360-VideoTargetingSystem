@@ -11,7 +11,7 @@ from track360.core.errors import ConfigError
 
 SUPPORTED_SCHEMA_VERSION = 1
 VISUALIZATION_STAGES = frozenset({"local_rgb", "backend_box", "geometry_box"})
-GEOMETRY_RESAMPLERS = frozenset({"cpu", "cuda"})
+GEOMETRY_RESAMPLERS = frozenset({"cpu", "opencv", "cuda"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +51,7 @@ class GeometryConfig:
     boundarySamplesPerEdge: int
     minFovRad: float
     maxFovRad: float
-    resampler: str = "cpu"
+    resampler: str = "opencv"
 
     def __post_init__(self) -> None:
         if self.viewWidthPx <= 0 or self.viewHeightPx <= 0:

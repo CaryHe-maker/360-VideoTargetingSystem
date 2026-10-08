@@ -15,7 +15,7 @@
 |---|---|---|
 | `model` | Backends | `variant`（当前只支持 `artrackv2_b_256`）、`weights`、`precision`（当前只支持 `fp32`） |
 | `scoring` | Controller | `calibrationArtifact`：可选的分数校准 JSON；`requireCheckpointHashMatch`：校准产物必须与权重的 SHA-256 绑定 |
-| `geometry` | Geometry | 局部视图尺寸 256×256、`boundarySamplesPerEdge`（局部框每条边回投的采样点数）、FoV 范围 20°–120°、`resampler`（`cpu` / `cuda`） |
+| `geometry` | Geometry | 局部视图尺寸 256×256、`boundarySamplesPerEdge`（局部框每条边回投的采样点数）、FoV 范围 20°–120°、`resampler`（`opencv`：默认，`cv2.remap` 取色；`cpu`：双精度的参考实现，慢约 17 ms / 帧，像素值最多差 1 级；`cuda`） |
 | `motion` | Controller | 球面运动估计：Huber 参数、过程噪声、最大角速度、最大尺度变化率 |
 | `tracking` | Controller | `candidateMinScore`（带门槛模式下接受测量的最低分）、`stableFramesBeforeUpdate`（stable 模板的更新周期）、运动窗口长度、没有框时输出范围的放大系数 |
 | `backendTuning` | Controller / Backends | 针对 ARTrackV2 后端的开关和阈值，见下一节 |

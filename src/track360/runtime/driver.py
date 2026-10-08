@@ -170,7 +170,8 @@ def buildRuntime(
         )
     else:
         geometry = SphericalGeometryImpl(
-            boundarySamplesPerEdge=config.geometry.boundarySamplesPerEdge
+            boundarySamplesPerEdge=config.geometry.boundarySamplesPerEdge,
+            useRemap=config.geometry.resampler == "opencv",
         )
     rgbSession = (
         artrackSessionFactory(config.model)
