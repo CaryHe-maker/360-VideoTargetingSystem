@@ -36,6 +36,7 @@
 | `alignedMinFovDeg` | `2.0` | `alignedSearch` 下视图视场的下限，代替 `geometry.minFovDeg` |
 | `sphericalSearch` | `true` | 大目标的视图改用球面采样（以目标为中心的局部 ERP），见 [Controller](modules/controller.md#大目标球面视图)。需要 `alignedSearch: true`。`false` 时透视视场封顶在上面的上限，超出部分补黑边 |
 | `sphericalSearchFovDeg` | `120.0` | 搜索区域（目标平均角尺寸的 4 倍）达到这个角度时切换到球面视图。360VOT 论文用 90°；本项目在 tune 集上 90° 和 120° 没有可分辨的差别，取 120° 只是为了少偏离透视路径（[评测记录](evaluation-log.md) E011） |
+| `predictiveSearch` | `true` | 搜索视图的中心和大小取运动模型对这一帧的预测。`false` 时直接取上一帧提交的结果，和上游跟踪器自己的循环一致。66 条序列上关掉后 S<sub>dual</sub> −0.023 [−0.061, +0.014]，没有采纳（[评测记录](evaluation-log.md) E012） |
 | `useMotionScore` | `false` | 用“外观 + 运动”加权得到 SingleScore；为 `false` 时只用外观分。没有校准产物时运动权重为 0，此开关不影响结果 |
 | `templateFovScale` | `2.5` | 模板视图视场相对目标角尺寸的倍数（≥ 1） |
 | `onlineTemplate` | `true` | 保留第 0 帧 anchor 的同时允许更新 recent / stable 模板。只在 `sequenceModel: false` 时起作用 |

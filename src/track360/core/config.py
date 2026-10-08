@@ -128,6 +128,7 @@ class BackendTuningConfig:
     alignedMinFovRad: float = pi / 90.0
     sphericalSearch: bool = True
     sphericalSearchFovRad: float = 2.0 * pi / 3.0
+    predictiveSearch: bool = True
     useMotionScore: bool = False
     templateFovScale: float = 2.5
     onlineTemplate: bool = True
@@ -141,6 +142,7 @@ class BackendTuningConfig:
             "fullViewSearch",
             "alignedSearch",
             "sphericalSearch",
+            "predictiveSearch",
             "useMotionScore",
             "onlineTemplate",
             "holdWeakBox",
@@ -299,6 +301,7 @@ def loadConfig(path: str | Path) -> AppConfig:
             "alignedMinFovDeg",
             "sphericalSearch",
             "sphericalSearchFovDeg",
+            "predictiveSearch",
             "useMotionScore",
             "templateFovScale",
             "onlineTemplate",
@@ -415,6 +418,9 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
             sphericalSearch=_requireBool(
                 "backendTuning.sphericalSearch", tuningRaw["sphericalSearch"]
+            ),
+            predictiveSearch=_requireBool(
+                "backendTuning.predictiveSearch", tuningRaw["predictiveSearch"]
             ),
             sphericalSearchFovRad=_degreesToRadians(
                 "backendTuning.sphericalSearchFovDeg",

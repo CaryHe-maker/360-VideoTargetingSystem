@@ -38,6 +38,7 @@ backendTuning:
   alignedMinFovDeg: 2.0
   sphericalSearch: true
   sphericalSearchFovDeg: 120.0
+  predictiveSearch: true
   useMotionScore: false
   templateFovScale: 2.5
   onlineTemplate: true

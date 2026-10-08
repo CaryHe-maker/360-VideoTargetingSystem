@@ -250,7 +250,12 @@ class TrackControllerImpl(TrackControllerProtocol):
         # Size the view from the predicted target; before the estimator exposes an
         # angular scale, the last committed BFoV is the basis.
         targetBfov = self._currentBfov
-        if prediction.horizontalSizeRad > 0.0 and prediction.verticalSizeRad > 0.0:
+        viewCenter = prediction.center
+        if not self._backendTuning.predictiveSearch:
+            # The view follows the last committed target, as the tracker's own loop does;
+            # the motion estimate is left to the backend's trajectory input.
+            viewCenter = self._currentBfov.center
+        elif prediction.horizontalSizeRad > 0.0 and prediction.verticalSizeRad > 0.0:
             # Extrapolating a growing target can leave the range a BFoV can express.
             targetBfov = BFoV(
                 prediction.center,
@@ -262,7 +267,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             frameIndex=frame.frameIndex,
             stateRevision=self._stateRevision + 1,
             view=self._planner.searchView(
-                prediction.center,
+                viewCenter,
                 targetBfov.horizontalFovRad,
                 targetBfov.verticalFovRad,
                 tuple(self._trajectory),
