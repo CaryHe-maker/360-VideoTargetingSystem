@@ -52,9 +52,9 @@ backendTuning:
   suspectScore: 0.50
   lostAfterFrames: 4
   scanViewsPerFrame: 4
-  reacquireSimilarity: 0.50
+  reacquireSimilarity: 0.45
   reacquireMargin: 0.15
-  reacquireScore: 0.50
+  reacquireScore: 0.70
 reproducibility:
   seed: 0
   deterministic: true

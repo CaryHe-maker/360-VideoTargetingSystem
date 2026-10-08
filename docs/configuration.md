@@ -46,7 +46,8 @@
 | `suspectSimilarity` / `suspectScore` | `0.30` / `0.50` | 外观相似度或跟踪器分数低于它就算可疑。tune 集上这组阈值误判 5% 的好帧、抓到 49% 的丢失帧（E016） |
 | `lostAfterFrames` | `4` | 连续多少帧可疑后开始扫描 |
 | `scanViewsPerFrame` | `4` | 扫描时每帧多取几个视图，每个多一次前向 |
-| `reacquireSimilarity` / `reacquireMargin` / `reacquireScore` | `0.50` / `0.15` / `0.50` | 扫描候选被采纳的条件：相似度的下限、比当前框高出的幅度、分数的下限 |
+| `verifierMemoryRate` / `verifierTrustSimilarity` | `0.05` / `0.40` | 外观相似度除了对第 0 帧模板，还对“可信帧的滑动平均”计算，取较大的。前者是滑动平均的更新率，后者是一帧进入平均所需的相似度（分数还要不低于 `suspectScore`）。更新率为 0 时只对模板 |
+| `reacquireSimilarity` / `reacquireMargin` / `reacquireScore` | `0.45` / `0.15` / `0.70` | 扫描候选被采纳的条件：相似度的下限、比当前框高出的幅度、无状态前向分数的下限。分数是区分真假候选的主要信号（E017） |
 | `holdWeakBox` | `true` | 测量未被接受且目标面积 ≥ 画面的 10% 时，保持上一帧的框 |
 
 `core/config.py::BackendTuningConfig` 的 dataclass 默认值与 `configs/default.yaml` 相同，有测试保证两者不会不一致。因此不传配置、直接构造 `TrackControllerImpl` / `StateEvaluator` / `TemplatePolicy` / `ViewPlanner` 时，得到的也是默认配置的行为。

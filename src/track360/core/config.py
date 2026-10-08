@@ -143,9 +143,9 @@ class BackendTuningConfig:
     suspectScore: float = 0.50
     lostAfterFrames: int = 4
     scanViewsPerFrame: int = 4
-    reacquireSimilarity: float = 0.50
+    reacquireSimilarity: float = 0.45
     reacquireMargin: float = 0.15
-    reacquireScore: float = 0.50
+    reacquireScore: float = 0.70
 
     def __post_init__(self) -> None:
         for name in (
