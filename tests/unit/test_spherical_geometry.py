@@ -280,10 +280,14 @@ class GeometryTest(unittest.TestCase):
         )
         erpX, erpY = unitVectorsToErpPixels(vectors, frameWidthPx, frameHeightPx)
 
+        # The BFoV holds longitude and latitude spans while its ERP envelope is built
+        # from a tangent-plane rectangle, so the two agree to a small fraction of a
+        # pixel, not exactly.
+        tolerancePx = 0.05
         for xPx, yPx in zip(erpX, erpY, strict=True):
             self.assertTrue(containsCircularX(float(xPx), bbox, frameWidthPx))
-            self.assertGreaterEqual(float(yPx), bbox.yPx - 1e-6)
-            self.assertLessEqual(float(yPx), bbox.yPx + bbox.heightPx + 1e-6)
+            self.assertGreaterEqual(float(yPx), bbox.yPx - tolerancePx)
+            self.assertLessEqual(float(yPx), bbox.yPx + bbox.heightPx + tolerancePx)
 
     def testDirectLocalBoundaryProjectionAvoidsSecondEnvelope(self) -> None:
         frameWidthPx = 360

@@ -116,20 +116,20 @@ class SphericalGeometryImpl(SphericalGeometryProtocol):
         )
         vectors = viewPixelsToUnitVectors(sampleX, sampleY, spec)
         erpX, erpY = unitVectorsToErpPixels(vectors, frameWidthPx, frameHeightPx)
-        if spec.projection is ViewProjection.SPHERICAL:
-            bfov = _sphericalBoxBfov(localBox, spec)
-            # A box this large can contain a pole or wrap the whole frame, which its
-            # boundary alone does not show: the ERP envelope also covers the interior.
-            insideX, insideY = unitVectorsToErpPixels(
-                viewPixelsToUnitVectors(*_sampleBoxInterior(localBox), spec),
-                frameWidthPx,
-                frameHeightPx,
-            )
-            envelopeX = np.concatenate((erpX, insideX))
-            envelopeY = np.concatenate((erpY, insideY))
-        else:
-            bfov = _fitBfovFromVectors(vectors)
-            envelopeX, envelopeY = erpX, erpY
+        bfov = (
+            _sphericalBoxBfov(localBox, spec)
+            if spec.projection is ViewProjection.SPHERICAL
+            else _fitBfovFromVectors(vectors)
+        )
+        # A box can contain a pole or wrap the whole frame, which its boundary alone
+        # does not show: the ERP envelope also covers the interior.
+        insideX, insideY = unitVectorsToErpPixels(
+            viewPixelsToUnitVectors(*_sampleBoxInterior(localBox), spec),
+            frameWidthPx,
+            frameHeightPx,
+        )
+        envelopeX = np.concatenate((erpX, insideX))
+        envelopeY = np.concatenate((erpY, insideY))
         xPx, widthPx = minimalCircularInterval(envelopeX, frameWidthPx)
         yMin = float(np.min(envelopeY))
         yMax = float(np.max(envelopeY))
@@ -223,7 +223,11 @@ def _sampleBoxInterior(
 
 
 def fitBfovToVectors(vectors: NDArray[np.float64]) -> BFoV:
-    """Fit the tightest unrotated BFoV around a set of unit directions."""
+    """Fit the tightest unrotated BFoV around a set of unit directions.
+
+    The extents are the longitude and latitude spans on the sphere rotated to the
+    fitted center, the definition the 360VOT toolkit uses.
+    """
     return _fitBfovFromVectors(np.asarray(vectors, dtype=np.float64))
 
 
@@ -246,7 +250,7 @@ def _fitBfovFromVectors(vectors: NDArray[np.float64]) -> BFoV:
         )
         forwardDots = vectors @ forward
         horizontalAngles = np.arctan2(vectors @ right, forwardDots)
-        verticalAngles = np.arctan2(vectors @ up, forwardDots)
+        verticalAngles = np.arcsin(np.clip(vectors @ up, -1.0, 1.0))
         horizontalOffset, _ = _minimalCircularAngleInterval(horizontalAngles)
         verticalOffset, _ = _linearAngleInterval(verticalAngles)
         if max(abs(horizontalOffset), abs(verticalOffset)) < 1e-10:
@@ -263,7 +267,7 @@ def _fitBfovFromVectors(vectors: NDArray[np.float64]) -> BFoV:
     )
     forwardDots = vectors @ forward
     horizontalAngles = np.arctan2(vectors @ right, forwardDots)
-    verticalAngles = np.arctan2(vectors @ up, forwardDots)
+    verticalAngles = np.arcsin(np.clip(vectors @ up, -1.0, 1.0))
     horizontalOffset, horizontalFovRad = _minimalCircularAngleInterval(horizontalAngles)
     verticalOffset, verticalFovRad = _linearAngleInterval(verticalAngles)
     if max(abs(horizontalOffset), abs(verticalOffset)) >= 1e-8:
@@ -278,7 +282,7 @@ def _fitBfovFromVectors(vectors: NDArray[np.float64]) -> BFoV:
         )
         forwardDots = vectors @ forward
         horizontalAngles = np.arctan2(vectors @ right, forwardDots)
-        verticalAngles = np.arctan2(vectors @ up, forwardDots)
+        verticalAngles = np.arcsin(np.clip(vectors @ up, -1.0, 1.0))
         _, horizontalFovRad = _minimalCircularAngleInterval(horizontalAngles)
         _, verticalFovRad = _linearAngleInterval(verticalAngles)
     # A perspective boundary can straddle the camera's rear hemisphere.  Its minimal
