@@ -137,9 +137,6 @@ class BackendTuningConfig:
     # Loss handling: doubt a frame, search for the target elsewhere, jump back to it.
     lossHandling: bool = False
     verifierModel: str = "dinov2"
-    verifierMemoryRate: float = 0.05
-    verifierTrustSimilarity: float = 0.40
-    verifierTrustScore: float = 0.50
     # State score: a weighted mean of the backend score, the appearance similarity
     # and the motion score; a frame below ``uncertainScore`` is not trusted.
     stateBackendWeight: float = 0.40
@@ -147,16 +144,32 @@ class BackendTuningConfig:
     stateMotionWeight: float = 0.05
     motionOffsetScale: float = 0.5
     motionSizeScale: float = 0.1
-    uncertainScore: float = 0.60
+    uncertainScore: float = 0.42
     lostAfterFrames: int = 4
     scanViewsPerFrame: int = 4
     reacquireSimilarity: float = 0.45
     reacquireMargin: float = 0.15
     reacquireScore: float = 0.70
+    # How the state is decided (fused / split) and what a lost track does about it
+    # (none: only judge; jump: scan and jump; probation: a jump must prove itself).
+    stateRule: str = "fused"
+    lossActions: str = "jump"
+    stateLatch: bool = False
+    latchReleaseMargin: float = 0.20
+    releaseFrames: int = 3
+    backendEnterScore: float = 0.54
+    motionEnterScore: float = 0.0001
+    appearanceEnterScore: float = 0.21
+    backendReleaseScore: float = 0.72
+    appearanceReleaseScore: float = 0.38
+    appearanceLostScore: float = 0.26
+    probationFrames: int = 10
+    distractorRadius: float = 1.0
 
     def __post_init__(self) -> None:
         for name in (
             "lossHandling",
+            "stateLatch",
             "sequenceModel",
             "acceptAnyCandidate",
             "fullViewSearch",
@@ -177,9 +190,29 @@ class BackendTuningConfig:
             raise ConfigError(
                 "backendTuning.alignedSearch and fullViewSearch cannot both be enabled"
             )
+        if self.stateRule not in ("fused", "split"):
+            raise ConfigError("backendTuning.stateRule must be fused or split")
+        if self.lossActions not in ("none", "jump", "probation"):
+            raise ConfigError("backendTuning.lossActions must be none, jump or probation")
+        if self.stateRule == "split" and not self.lossHandling:
+            raise ConfigError("backendTuning.stateRule split needs lossHandling")
+        if self.lossActions == "probation" and self.stateRule != "split":
+            raise ConfigError("backendTuning.lossActions probation needs stateRule split")
+        if self.releaseFrames < 1 or self.probationFrames < 1:
+            raise ConfigError(
+                "backendTuning.releaseFrames and probationFrames must be positive"
+            )
+        if self.latchReleaseMargin < 0.0 or self.distractorRadius < 0.0:
+            raise ConfigError(
+                "backendTuning.latchReleaseMargin and distractorRadius must be non-negative"
+            )
         for name in (
-            "verifierTrustSimilarity",
-            "verifierTrustScore",
+            "backendEnterScore",
+            "motionEnterScore",
+            "appearanceEnterScore",
+            "backendReleaseScore",
+            "appearanceReleaseScore",
+            "appearanceLostScore",
             "uncertainScore",
             "reacquireSimilarity",
             "reacquireMargin",
@@ -199,8 +232,6 @@ class BackendTuningConfig:
             )
         if self.motionOffsetScale <= 0.0 or self.motionSizeScale <= 0.0:
             raise ConfigError("backendTuning motion scales must be positive")
-        if not 0.0 <= self.verifierMemoryRate <= 1.0:
-            raise ConfigError("backendTuning.verifierMemoryRate must be in [0, 1]")
         if self.lostAfterFrames < 1 or self.scanViewsPerFrame < 0:
             raise ConfigError(
                 "backendTuning.lostAfterFrames must be positive and scanViewsPerFrame "
@@ -358,9 +389,6 @@ def loadConfig(path: str | Path) -> AppConfig:
             "holdWeakBox",
             "lossHandling",
             "verifierModel",
-            "verifierMemoryRate",
-            "verifierTrustSimilarity",
-            "verifierTrustScore",
             "stateBackendWeight",
             "stateAppearanceWeight",
             "stateMotionWeight",
@@ -372,6 +400,19 @@ def loadConfig(path: str | Path) -> AppConfig:
             "reacquireSimilarity",
             "reacquireMargin",
             "reacquireScore",
+            "stateRule",
+            "lossActions",
+            "stateLatch",
+            "latchReleaseMargin",
+            "releaseFrames",
+            "backendEnterScore",
+            "motionEnterScore",
+            "appearanceEnterScore",
+            "backendReleaseScore",
+            "appearanceReleaseScore",
+            "appearanceLostScore",
+            "probationFrames",
+            "distractorRadius",
         },
     )
     reproducibilityRaw = _section(root, "reproducibility", {"seed", "deterministic"})
@@ -516,16 +557,9 @@ def loadConfig(path: str | Path) -> AppConfig:
             verifierModel=_requireStr(
                 "backendTuning.verifierModel", tuningRaw["verifierModel"]
             ),
-            verifierMemoryRate=_requireFloat(
-                "backendTuning.verifierMemoryRate", tuningRaw["verifierMemoryRate"]
-            ),
-            verifierTrustSimilarity=_requireFloat(
-                "backendTuning.verifierTrustSimilarity", tuningRaw["verifierTrustSimilarity"]
-            ),
             **{
                 name: _requireFloat(f"backendTuning.{name}", tuningRaw[name])
                 for name in (
-                    "verifierTrustScore",
                     "stateBackendWeight",
                     "stateAppearanceWeight",
                     "stateMotionWeight",
@@ -549,6 +583,28 @@ def loadConfig(path: str | Path) -> AppConfig:
             reacquireScore=_requireFloat(
                 "backendTuning.reacquireScore", tuningRaw["reacquireScore"]
             ),
+            stateRule=_requireStr("backendTuning.stateRule", tuningRaw["stateRule"]),
+            lossActions=_requireStr("backendTuning.lossActions", tuningRaw["lossActions"]),
+            stateLatch=_requireBool("backendTuning.stateLatch", tuningRaw["stateLatch"]),
+            releaseFrames=_requireInt(
+                "backendTuning.releaseFrames", tuningRaw["releaseFrames"]
+            ),
+            probationFrames=_requireInt(
+                "backendTuning.probationFrames", tuningRaw["probationFrames"]
+            ),
+            **{
+                name: _requireFloat(f"backendTuning.{name}", tuningRaw[name])
+                for name in (
+                    "latchReleaseMargin",
+                    "backendEnterScore",
+                    "motionEnterScore",
+                    "appearanceEnterScore",
+                    "backendReleaseScore",
+                    "appearanceReleaseScore",
+                    "appearanceLostScore",
+                    "distractorRadius",
+                )
+            },
         ),
         reproducibility=ReproducibilityConfig(
             seed=_requireInt("reproducibility.seed", reproducibilityRaw["seed"]),

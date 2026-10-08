@@ -208,11 +208,7 @@ def buildRuntime(
         from track360.backends.appearance import AppearanceVerifier
 
         verifier = AppearanceVerifier(
-            tuning.verifierModel,
-            Path(config.model.weights).parent / "hub",
-            memoryRate=tuning.verifierMemoryRate,
-            trustSimilarity=tuning.verifierTrustSimilarity,
-            trustScore=tuning.verifierTrustScore,
+            tuning.verifierModel, Path(config.model.weights).parent / "hub"
         )
     return RuntimeBundle(
         geometry=geometry,
@@ -243,6 +239,7 @@ def runTracking(
     useMotionScore: bool,
     probe: Any | None = None,
     verifier: Any | None = None,
+    trace: list[dict[str, object]] | None = None,
 ) -> int:
     """Run the sequential tracking pipeline and publish one result per frame.
 
@@ -279,6 +276,8 @@ def runTracking(
         if recorder is not None:
             recorder.recordLocalRgb(frame0, [templateView])
 
+        # The tracker's memory from before a jump on probation.
+        probationState = None
         pipelineReader = _PrefetchReader(source)
         pipelineReader.start()
         try:
@@ -321,6 +320,7 @@ def runTracking(
                             resultCount += 1
                             continue
                         forwardCount = 0
+                        memory = ""
                         probed = None
                         visualization: (
                             tuple[LocalView, LocalObservation, ProjectedObservation | None] | None
@@ -374,9 +374,7 @@ def runTracking(
                                     projected = replace(
                                         projected,
                                         appearanceSimilarity=verifier.similarity(
-                                            view,
-                                            observation.bbox,
-                                            float(projected.singleScore or 0.0),
+                                            view, observation.bbox
                                         ),
                                     )
                                 if plan.scanViews:
@@ -396,9 +394,24 @@ def runTracking(
                                 # A doubted frame must not shape the tracker's appearance
                                 # memory; a jump to a candidate starts it afresh.
                                 if controller.lastFrameReacquired:
+                                    probationState = savedState
                                     backend.resetState()  # type: ignore[attr-defined]
+                                    memory = "reset"
+                                elif controller.lastFrameReverted:
+                                    if probationState is not None:
+                                        backend.restoreState(probationState)  # type: ignore[attr-defined]
+                                    memory = "reverted"
                                 elif controller.lastFrameSuspect and savedState is not None:
                                     backend.restoreState(savedState)  # type: ignore[attr-defined]
+                                    memory = "frozen"
+                            if trace is not None:
+                                trace.append(
+                                    {
+                                        **controller.lastFrameTrace,
+                                        "forwards": forwardCount,
+                                        "memory": memory,
+                                    }
+                                )
                         except Exception as error:
                             # A failed frame (including an OOM converted by the backend)
                             # must not keep its CUDA view alive until the next frame.

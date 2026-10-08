@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from math import asin, atan2, pi
+from math import acos, asin, atan2, degrees, pi, sqrt
 from typing import TYPE_CHECKING
 
 from track360.controller.motion_estimator import SphericalMotionEstimator
@@ -16,6 +16,7 @@ from track360.controller.state_model import (
     StateObservation,
     TrackMode,
     TransitionDecision,
+    TransitionReason,
 )
 from track360.controller.template_policy import TemplateDecision, TemplatePolicy
 from track360.controller.view_planner import TRAJECTORY_LENGTH, ViewPlanner
@@ -57,6 +58,8 @@ if TYPE_CHECKING:
 
 _MAX_HORIZONTAL_SIZE_RAD = 2.0 * pi - 1e-6
 _MAX_VERTICAL_SIZE_RAD = pi - 1e-6
+# Places where a jump turned out wrong; older ones are forgotten.
+_MAX_DISTRACTORS = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,9 +139,17 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._scanCursor = 0
         self._lastFrameSuspect = False
         self._lastFrameReacquired = False
+        self._lastFrameReverted = False
         self._suspectFrameCount = 0
         self._scanFrameCount = 0
         self._reacquiredFrames: list[int] = []
+        self._revertedFrames: list[int] = []
+        # What a lost track does: nothing, jump to a candidate, or jump on probation.
+        self._actions = backendTuning.lossActions if backendTuning.lossHandling else "none"
+        # The target state from before a jump on probation, and wrong jump targets.
+        self._probationSnapshot: tuple[BFoV, BBoxXYWH, int] | None = None
+        self._distractors: deque[BFoV] = deque(maxlen=_MAX_DISTRACTORS)
+        self._lastFrameTrace: dict[str, object] = {}
 
     @property
     def lossStatistics(self) -> dict[str, object]:
@@ -147,7 +158,18 @@ class TrackControllerImpl(TrackControllerProtocol):
             "suspectFrames": self._suspectFrameCount,
             "scanFrames": self._scanFrameCount,
             "reacquiredAt": list(self._reacquiredFrames),
+            "revertedAt": list(self._revertedFrames),
         }
+
+    @property
+    def lastFrameTrace(self) -> dict[str, object]:
+        """Scores, state and decisions of the last frame, for the state trace."""
+        return dict(self._lastFrameTrace)
+
+    @property
+    def lastFrameReverted(self) -> bool:
+        """The last frame ended a failed probation: the tracker returns to before the jump."""
+        return self._lastFrameReverted
 
     @property
     def lastFrameSuspect(self) -> bool:
@@ -299,7 +321,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             )
         scanViews: tuple[ViewSpec, ...] = ()
         if (
-            self._backendTuning.lossHandling
+            self._actions != "none"
             and self._mode is TrackMode.LOST
             and self._lastGoodBfov is not None
         ):
@@ -355,11 +377,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             raise ProtocolError("search response does not match the pending plan")
         self._lastFrameSuspect = False
         self._lastFrameReacquired = False
-        if self._backendTuning.lossHandling:
-            chosen = self._reacquisitionCandidate(observation, candidates)
-            if chosen is not None:
-                return self._reacquire(pending, chosen)
-        self._backendRevision = plan.templateCommand.expectedRevision
+        self._lastFrameReverted = False
         evaluation = self._evaluator.evaluate(
             mode=pending.mode,
             plan=plan,
@@ -370,12 +388,35 @@ class TrackControllerImpl(TrackControllerProtocol):
             frameWidthPx=pending.frame.rgb.shape[1],
             frameHeightPx=pending.frame.rgb.shape[0],
         )
+        trace = self._traceOf(pending, evaluation)
+        if self._actions != "none":
+            chosen, trace["candidates"] = self._reacquisitionCandidate(
+                observation, candidates
+            )
+            if chosen is not None:
+                result = self._reacquire(pending, chosen)
+                trace.update(
+                    modeAfter=self._mode.name, reason="JUMP", action="jump", **_place(result.bfov)
+                )
+                self._lastFrameTrace = trace
+                return result
+        self._backendRevision = plan.templateCommand.expectedRevision
         decision = self._stateMachine.transition(
             pending.mode,
             evaluation.stateScore,
             measurementAccepted=evaluation.measurementAccepted,
+            backendScore=evaluation.backendScore if evaluation.hasCandidate else None,
+            appearanceScore=evaluation.appearanceScore,
+            motionScore=evaluation.motionScore,
         )
         result = self._commit(pending, evaluation, decision)
+        trace.update(
+            modeAfter=decision.nextMode.name,
+            reason=decision.reason.name,
+            untrusted=self._stateMachine.untrustedFrames,
+            calm=self._stateMachine.calmFrames,
+            **_place(result.bfov),
+        )
         self._lastPipelineProfile = {
             "frameIndex": int(plan.frameIndex),
             "finalMeasurementAccepted": bool(decision.acceptMeasurement),
@@ -387,33 +428,121 @@ class TrackControllerImpl(TrackControllerProtocol):
             if decision.nextMode is TrackMode.TRACKING:
                 self._scanCursor = 0
                 self._lastGoodBfov = self._currentBfov
-            else:
+                self._probationSnapshot = None
+                if decision.reason is TransitionReason.PROBATION_PASSED:
+                    trace["action"] = "confirm"
+            elif decision.nextMode is not TrackMode.PROBATION:
                 self._suspectFrameCount += 1
-                self._lastFrameSuspect = True
+                # Without actions the run must stay what it is without loss handling.
+                self._lastFrameSuspect = self._actions != "none"
+            if decision.reason is TransitionReason.PROBATION_FAILED:
+                self._revert(pending)
+                trace["action"] = "revert"
+        self._lastFrameTrace = trace
         return result
+
+    def _traceOf(self, pending: _PendingFrame, evaluation: StateObservation) -> dict[str, object]:
+        return {
+            "frame": int(pending.frame.frameIndex),
+            "modeBefore": pending.mode.name,
+            "modeAfter": pending.mode.name,
+            "reason": "",
+            "action": "",
+            "hasBox": int(evaluation.hasCandidate),
+            "backend": evaluation.backendScore,
+            "appearance": evaluation.appearanceScore,
+            "motion": evaluation.motionScore,
+            "motionOffset": evaluation.motionOffset,
+            "motionLogScale": evaluation.motionLogScale,
+            "stateScore": evaluation.stateScore,
+            "untrusted": self._stateMachine.untrustedFrames,
+            "calm": self._stateMachine.calmFrames,
+            "scanViews": len(pending.plan.scanViews),
+            "candidates": [],
+        }
+
+    def _revert(self, pending: _PendingFrame) -> None:
+        """Undo a jump that failed its probation and remember where it led."""
+        assert self._currentBfov is not None
+        self._distractors.append(self._currentBfov)
+        self._revertedFrames.append(int(pending.frame.frameIndex))
+        self._lastFrameReverted = True
+        if self._probationSnapshot is None:
+            return
+        bfov, box, self._scanCursor = self._probationSnapshot
+        self._probationSnapshot = None
+        self._currentBfov, self._currentBox = bfov, box
+        self._restartMotion(bfov, pending.frame)
+        self._trajectory.clear()
+        self._trajectory.extend([bfov] * TRAJECTORY_LENGTH)
+
+    def _restartMotion(self, bfov: BFoV, frame: FramePacket) -> None:
+        if hasattr(self._motion, "resetFromMeasurement"):
+            self._motion.resetFromMeasurement(  # type: ignore[attr-defined]
+                bfov.center,
+                frame.timestampNs,
+                int(frame.frameIndex),
+                1.0,
+                bfov.horizontalFovRad,
+                bfov.verticalFovRad,
+            )
+        else:
+            self._motion.initialize(bfov.center, frame.timestampNs)
 
     def _reacquisitionCandidate(
         self,
         observation: ProjectedObservation | None,
         candidates: Sequence[ProjectedObservation],
-    ) -> ProjectedObservation | None:
+    ) -> tuple[ProjectedObservation | None, list[dict[str, object]]]:
+        """The scan candidate to jump to, if any, and why each one was or was not it."""
         tuning = self._backendTuning
         current = -1.0
         if observation is not None and observation.appearanceSimilarity is not None:
             current = observation.appearanceSimilarity
         best: ProjectedObservation | None = None
+        records: list[dict[str, object]] = []
+        bestRecord: dict[str, object] | None = None
         for candidate in candidates:
             similarity = candidate.appearanceSimilarity
-            if (
-                similarity is None
-                or similarity < tuning.reacquireSimilarity
-                or similarity < current + tuning.reacquireMargin
-                or _observationScore(candidate) < tuning.reacquireScore
+            score = _observationScore(candidate)
+            if similarity is None or similarity < tuning.reacquireSimilarity:
+                verdict = "low_similarity"
+            elif similarity < current + tuning.reacquireMargin:
+                verdict = "low_margin"
+            elif score < tuning.reacquireScore:
+                verdict = "low_score"
+            elif self._isDistractor(candidate.bfov):
+                verdict = "distractor"
+            else:
+                verdict = "not_best"
+            record: dict[str, object] = {
+                "view": int(candidate.viewId),
+                "similarity": None if similarity is None else round(float(similarity), 4),
+                "score": round(score, 4),
+                "verdict": verdict,
+                **_place(candidate.bfov),
+            }
+            records.append(record)
+            if verdict == "not_best" and (
+                best is None or similarity > (best.appearanceSimilarity or -1.0)
             ):
-                continue
-            if best is None or similarity > (best.appearanceSimilarity or -1.0):
-                best = candidate
-        return best
+                best, bestRecord = candidate, record
+        if bestRecord is not None:
+            bestRecord["verdict"] = "accepted"
+        return best, records
+
+    def _isDistractor(self, bfov: BFoV) -> bool:
+        radius = self._backendTuning.distractorRadius
+        for known in self._distractors:
+            cosine = (
+                bfov.center.x * known.center.x
+                + bfov.center.y * known.center.y
+                + bfov.center.z * known.center.z
+            )
+            reach = radius * max(_angularSize(bfov), _angularSize(known))
+            if acos(max(-1.0, min(1.0, cosine))) < reach:
+                return True
+        return False
 
     def _reacquire(
         self, pending: _PendingFrame, candidate: ProjectedObservation
@@ -422,27 +551,25 @@ class TrackControllerImpl(TrackControllerProtocol):
         plan, frame = pending.plan, pending.frame
         score = _observationScore(candidate)
         self._backendRevision = plan.templateCommand.expectedRevision
-        if hasattr(self._motion, "resetFromMeasurement"):
-            self._motion.resetFromMeasurement(  # type: ignore[attr-defined]
-                candidate.bfov.center,
-                frame.timestampNs,
-                int(frame.frameIndex),
-                1.0,
-                candidate.bfov.horizontalFovRad,
-                candidate.bfov.verticalFovRad,
-            )
+        onProbation = self._actions == "probation"
+        if onProbation:
+            assert self._currentBfov is not None and self._currentBox is not None
+            # The candidate is trusted only after its probation: keep what a failed
+            # one returns to, and keep scanning from where the target was last trusted.
+            self._probationSnapshot = (self._currentBfov, self._currentBox, self._scanCursor)
+            self._stateMachine.startProbation()
         else:
-            self._motion.initialize(candidate.bfov.center, frame.timestampNs)
+            self._lastGoodBfov = candidate.bfov
+            self._stateMachine.reset()
+            self._scanCursor = 0
+        self._restartMotion(candidate.bfov, frame)
         self._currentBfov = candidate.bfov
         self._currentBox = candidate.bbox
         self._trajectory.clear()
         self._trajectory.extend([candidate.bfov] * TRAJECTORY_LENGTH)
-        self._lastGoodBfov = candidate.bfov
-        self._stateMachine.reset()
-        self._scanCursor = 0
         self._lastFrameReacquired = True
         self._reacquiredFrames.append(int(frame.frameIndex))
-        self._mode = TrackMode.TRACKING
+        self._mode = TrackMode.PROBATION if onProbation else TrackMode.TRACKING
         self._stableFrames = 0
         self._pendingTemplate = TemplateDecision(TemplateCommandKind.KEEP)
         self._stateRevision = plan.stateRevision
@@ -462,7 +589,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             bbox=candidate.bbox,
             bfov=candidate.bfov,
             confidence=score,
-            status=TrackStatus.TRACKING,
+            status=_publicStatus(self._mode),
             valid=True,
             resultSource=ResultSource.OBSERVED_CONFIRMED,
         )
@@ -670,8 +797,23 @@ def _motionCenter(motion: MotionState3D):
     return makeSphericalPoint(atan2(x, z), asin(max(-1.0, min(1.0, y))))
 
 
+def _angularSize(bfov: BFoV) -> float:
+    return sqrt(bfov.horizontalFovRad * bfov.verticalFovRad)
+
+
+def _place(bfov: BFoV) -> dict[str, float]:
+    """Where a box is and how large, in degrees, for the state trace."""
+    center = bfov.center
+    return {
+        "yawDeg": round(degrees(atan2(center.x, center.z)), 3),
+        "pitchDeg": round(degrees(asin(max(-1.0, min(1.0, center.y)))), 3),
+        "sizeDeg": round(degrees(_angularSize(bfov)), 3),
+    }
+
+
 def _publicStatus(mode: TrackMode) -> TrackStatus:
-    if mode is TrackMode.UNCERTAIN:
+    # A track on probation is not trusted yet.
+    if mode in (TrackMode.UNCERTAIN, TrackMode.PROBATION):
         return TrackStatus.UNCERTAIN
     if mode is TrackMode.LOST:
         return TrackStatus.LOST

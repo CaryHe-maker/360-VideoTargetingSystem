@@ -46,20 +46,30 @@ backendTuning:
   holdWeakBox: true
   lossHandling: false
   verifierModel: dinov2
-  verifierMemoryRate: 0.05
-  verifierTrustSimilarity: 0.40
-  verifierTrustScore: 0.50
   stateBackendWeight: 0.40
   stateAppearanceWeight: 0.55
   stateMotionWeight: 0.05
   motionOffsetScale: 0.5
   motionSizeScale: 0.1
-  uncertainScore: 0.60
+  uncertainScore: 0.42
   lostAfterFrames: 4
   scanViewsPerFrame: 4
   reacquireSimilarity: 0.45
   reacquireMargin: 0.15
   reacquireScore: 0.70
+  stateRule: fused
+  lossActions: jump
+  stateLatch: false
+  latchReleaseMargin: 0.20
+  releaseFrames: 3
+  backendEnterScore: 0.54
+  motionEnterScore: 0.0001
+  appearanceEnterScore: 0.21
+  backendReleaseScore: 0.72
+  appearanceReleaseScore: 0.38
+  appearanceLostScore: 0.26
+  probationFrames: 10
+  distractorRadius: 1.0
 reproducibility:
   seed: 0
   deterministic: true

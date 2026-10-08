@@ -60,6 +60,7 @@ class StateEvaluator:
         if observation.viewId != plan.view.viewId:
             raise ProtocolError("projected observation does not belong to the planned view")
         backendScore = _singleScore(observation)
+        motionOffset, motionLogScale = motionResiduals(observation.bfov, prediction)
         motionScore = motionAgreement(
             observation.bfov,
             prediction,
@@ -90,17 +91,18 @@ class StateEvaluator:
             measuredBbox=observation.bbox,
             proposedOutputBfov=observation.bfov,
             proposedOutputBbox=observation.bbox,
-            backendScore=float(
-                observation.backendFusedScore
-                if observation.backendFusedScore is not None
-                else observation.fusedScore
-            ),
+            # The same number the state score is built from.  It also weights the frame
+            # in the motion model, so its source must not change between versions: the
+            # raw backend score differs from it in the last digits.
+            backendScore=backendScore,
             motionScore=motionScore,
             scaleScore=observation.scaleScore,
             stateScore=stateScore,
             measurementAccepted=accepted,
             appearanceScore=appearanceScore,
             uncertainThreshold=self._tuning.uncertainScore,
+            motionOffset=motionOffset,
+            motionLogScale=motionLogScale,
         )
 
 
@@ -114,6 +116,14 @@ def motionAgreement(
     ratio of their sizes; ``offsetScale`` and ``sizeScale`` are the widths of the
     two fall-offs.  Without a predicted size only the position counts.
     """
+    offset, logScale = motionResiduals(measured, prediction)
+    return float(
+        np.exp(-0.5 * (offset / offsetScale) ** 2) * np.exp(-0.5 * (logScale / sizeScale) ** 2)
+    )
+
+
+def motionResiduals(measured: BFoV, prediction: MotionPrediction) -> tuple[float, float]:
+    """Distance from the predicted position, in target sizes, and log size ratio."""
     cosine = (
         measured.center.x * prediction.center.x
         + measured.center.y * prediction.center.y
@@ -123,15 +133,12 @@ def motionAgreement(
     horizontal, vertical = prediction.horizontalSizeRad, prediction.verticalSizeRad
     if horizontal <= 0.0 or vertical <= 0.0:
         size = float(np.sqrt(measured.horizontalFovRad * measured.verticalFovRad))
-        return float(np.exp(-0.5 * (angle / size / offsetScale) ** 2))
+        return angle / size, 0.0
     size = float(np.sqrt(horizontal * vertical))
     logScale = 0.5 * float(
         np.log(measured.horizontalFovRad * measured.verticalFovRad / (horizontal * vertical))
     )
-    return float(
-        np.exp(-0.5 * (angle / size / offsetScale) ** 2)
-        * np.exp(-0.5 * (logScale / sizeScale) ** 2)
-    )
+    return angle / size, logScale
 
 
 def fuseStateScore(
@@ -161,4 +168,4 @@ def _singleScore(observation: ProjectedObservation) -> float:
     )
 
 
-__all__ = ["StateEvaluator", "fuseStateScore", "motionAgreement"]
+__all__ = ["StateEvaluator", "fuseStateScore", "motionAgreement", "motionResiduals"]

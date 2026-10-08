@@ -45,10 +45,14 @@
 | `verifierModel` | `dinov2` | 计算外观相似度的模型：`dinov2`（ViT-S/14）、`dino`（ViT-S/16）或 `resnet18` |
 | `stateBackendWeight` / `stateAppearanceWeight` / `stateMotionWeight` | `0.40` / `0.55` / `0.05` | 状态分数里后端分、外观分、运动分的权重，见 [Controller](modules/controller.md#状态机)。没有外观分时另外两个按比例归一。数值来自 E018 |
 | `motionOffsetScale` / `motionSizeScale` | `0.5` / `0.1` | 运动分的两个衰减宽度：框离预测位置的距离（以目标尺寸为单位）和尺寸比的对数 |
-| `uncertainScore` | `0.60` | 状态分数低于它的帧不可信（`UNCERTAIN`）。自由运行时约误判 0.8% 的好帧、抓到 30%–40% 的丢失帧（E018） |
+| `uncertainScore` | `0.42` | 状态分数低于它的帧不可信（`UNCERTAIN`）。外观分只对第 0 帧模板计算；这个值在自由运行的数据上约误判 0.8% 的好帧、抓到 28% 的丢失帧（E019、E020） |
 | `lostAfterFrames` | `4` | 连续多少帧不可信后状态变为 `LOST`（丢失处理开启时开始扫描） |
 | `scanViewsPerFrame` | `4` | 扫描时每帧多取几个视图，每个多一次前向 |
-| `verifierMemoryRate` / `verifierTrustSimilarity` | `0.05` / `0.40` | 外观相似度除了对第 0 帧模板，还对“可信帧的滑动平均”计算，取较大的。前者是滑动平均的更新率，后者是一帧进入平均所需的相似度（分数还要不低于 `verifierTrustScore`，默认 0.50）。更新率为 0 时只对模板 |
+| `stateRule` | `fused` | 状态怎么判：`fused` 用上面的融合分；`split` 让三个分数各管各的决定（后端分、运动分触发可疑，模板相似度确认丢失、解除可疑、判定试用），需要 `lossHandling`。见 [Controller](modules/controller.md#状态机) 和评测记录 E022 |
+| `stateLatch` / `latchReleaseMargin` / `releaseFrames` | `false` / `0.20` / `3` | 融合规则下，进入不可信后是否锁住：状态分数要回到 `uncertainScore + latchReleaseMargin` 以上并保持 `releaseFrames` 帧才解除。`releaseFrames` 也是分开规则解除可疑所需的帧数 |
+| `lossActions` | `jump` | 丢失后做什么：`none` 只判定和记录；`jump` 扫描并跳转；`probation` 跳转后先试用 `probationFrames`（10）帧，不通过就退回并记住这个位置（只能和 `split` 一起用）。`distractorRadius`（1.0）是“记住的位置”的半径，以目标尺寸为单位 |
+| `backendEnterScore` / `motionEnterScore` / `appearanceEnterScore` | `0.54` / `0.0001` / `0.21` | 分开规则进入可疑的三个门槛；模板相似度看最近 5 帧的均值 |
+| `backendReleaseScore` / `appearanceReleaseScore` / `appearanceLostScore` | `0.72` / `0.38` / `0.26` | 分开规则解除可疑的两个门槛，和确认丢失时可疑期间模板相似度均值的上限 |
 | `reacquireSimilarity` / `reacquireMargin` / `reacquireScore` | `0.45` / `0.15` / `0.70` | 扫描候选被采纳的条件：相似度的下限、比当前框高出的幅度、无状态前向分数的下限。分数是区分真假候选的主要信号（E017） |
 | `holdWeakBox` | `true` | 测量未被接受且目标面积 ≥ 画面的 10% 时，保持上一帧的框 |
 

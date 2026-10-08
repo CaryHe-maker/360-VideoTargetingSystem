@@ -84,7 +84,7 @@ Controller 决定“看哪里、是否接受这一帧的框、下一帧处于什
 
 `backendTuning.lossHandling: true` 时启用（默认关闭，实验结果见 [评测记录](../evaluation-log.md) E017 起）。它在正常的逐帧跟踪之外加了三件事：
 
-**一、判断这一帧可不可信。** 用下面“状态机”一节的状态分数：后端分数、外观相似度和运动一致性的加权平均。低于 `uncertainScore`（0.60）的帧不可信，状态是 UNCERTAIN；连续 `lostAfterFrames`（4）帧不可信，状态是 LOST。外观相似度由一个冻结的小模型（`verifierModel`，默认 DINOv2 ViT-S/14）计算，见 [Backends](backends.md#外观验证器)。
+**一、判断这一帧可不可信。** 用下面“状态机”一节的状态分数：后端分数、外观相似度和运动一致性的加权平均。低于 `uncertainScore`（0.42）的帧不可信，状态是 UNCERTAIN；连续 `lostAfterFrames`（4）帧不可信，状态是 LOST。外观相似度由一个冻结的小模型（`verifierModel`，默认 DINOv2 ViT-S/14）计算，见 [Backends](backends.md#外观验证器)。
 
 三个分数是互补的：后端分数和运动一致性在刚离开目标的头几帧最灵敏，但跟错一段时间后它们会被跟踪器自己的输出带偏；外观相似度以第 0 帧模板为参照，是长时间丢失后唯一没有被污染的信号（E016、E018）。
 
@@ -120,11 +120,15 @@ Controller 决定“看哪里、是否接受这一帧的框、下一帧处于什
 
 | 状态 | 条件 | 行为（丢失处理开启时） |
 |---|---|---|
-| `TRACKING` | 状态分数 ≥ `uncertainScore`（0.60） | 正常 |
+| `TRACKING` | 状态分数 ≥ `uncertainScore`（0.42） | 正常 |
 | `UNCERTAIN` | 低于它，连续不到 `lostAfterFrames`（4）帧 | 框照常输出，位置和轨迹照常更新，不更新外观记忆 |
 | `LOST` | 连续 4 帧及以上低于它 | 同上，并且每帧扫描 |
 
-一帧达标就回到 `TRACKING`；没有框的帧状态分数为 0。丢失处理关闭时状态照样计算，但只作为结果里的状态标签，不改变跟踪行为。对外发布的置信度（`score/` 文件）是后端自己的分数，不是状态分数。
+一帧达标就回到 `TRACKING`；没有框的帧状态分数为 0。`stateLatch: true` 时改成“锁住”：状态分数要回到 `uncertainScore + latchReleaseMargin` 以上并保持 `releaseFrames` 帧才回到 `TRACKING`。
+
+另有一条实验用的**分开规则**（`stateRule: split`），不用融合分，让三个分数各管各的决定：后端分、运动分或模板相似度最近 5 帧的均值过低时进入 `UNCERTAIN`；后端分和模板相似度都回到解除门槛并保持 `releaseFrames` 帧才回到 `TRACKING`；可疑满 `lostAfterFrames` 帧且这几帧的模板相似度偏低才是 `LOST`。`lossActions: probation` 时，跳转后的 `probationFrames` 帧是 `PROBATION`（对外是 `UNCERTAIN`）：通过才算找回，不通过就退回跳转前的位置和外观记忆，并记住这个位置。两者默认都不启用，门槛和实验结果见 [评测记录](../evaluation-log.md) E022，配置项见 [配置](../configuration.md)。
+
+开启丢失处理的运行会在 `trace/<方法>/<序列>.csv` 里写逐帧记录（三个分数、状态、转移原因、动作、扫描候选），`tools/state_trace.py` 把它和真值接起来。丢失处理关闭时状态照样计算，但只作为结果里的状态标签，不改变跟踪行为。对外发布的置信度（`score/` 文件）是后端自己的分数，不是状态分数。
 
 ## 模板策略
 

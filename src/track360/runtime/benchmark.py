@@ -8,6 +8,7 @@ Output layout under one root, ready for the official toolkit as well::
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
 from collections import deque
@@ -394,7 +395,12 @@ def _runOne(
         if method == "b0":
             _trackErpDirect(source, session, config, collector)
         else:
-            loss = _trackSpherical(source, session, config, collector, probe)
+            trace: list[dict[str, object]] | None = (
+                [] if config.backendTuning.lossHandling else None
+            )
+            loss = _trackSpherical(source, session, config, collector, probe, trace)
+            if trace is not None:
+                writeStateTrace(outputRoot, method, name, trace)
         seconds = perf_counter() - started
         collector.finalize(frameCount)
         frameWidthPx = source.sequence.frameSize[0]
@@ -425,12 +431,60 @@ def _runOne(
         source.close()
 
 
+TRACE_COLUMNS = (
+    "frame",
+    "modeBefore",
+    "modeAfter",
+    "reason",
+    "action",
+    "memory",
+    "hasBox",
+    "backend",
+    "appearance",
+    "motion",
+    "motionOffset",
+    "motionLogScale",
+    "stateScore",
+    "untrusted",
+    "calm",
+    "yawDeg",
+    "pitchDeg",
+    "sizeDeg",
+    "forwards",
+    "scanViews",
+    "candidates",
+)
+
+
+def writeStateTrace(
+    outputRoot: Path, method: str, name: str, trace: Sequence[dict[str, object]]
+) -> Path:
+    """One row per frame: the scores, the state before and after, what was done.
+
+    ``candidates`` is a JSON list with one entry per scan candidate of the frame.
+    """
+    path = outputRoot / "trace" / method / f"{name}.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=TRACE_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        for row in trace:
+            record = dict(row)
+            for key, value in record.items():
+                if isinstance(value, float):
+                    record[key] = round(value, 6)
+            record["candidates"] = json.dumps(record.get("candidates") or [])
+            writer.writerow(record)
+    return path
+
+
 def _trackSpherical(
     source: Vot360DataSource,
     session: ARTrackSession,
     config: AppConfig,
     collector: ResultCollector,
     probe: Any | None = None,
+    trace: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     shared = _SharedSession(session)
     runtime = buildRuntime(config, artrackSessionFactory=lambda _: shared)
@@ -446,6 +500,7 @@ def _trackSpherical(
             useMotionScore=runtime.useMotionScore,
             probe=probe,
             verifier=runtime.verifier,
+            trace=trace,
         )
         return runtime.controller.lossStatistics
     finally:
