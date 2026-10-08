@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
-from math import asin, atan, atan2, cos, floor, pi, sqrt, tan
+from math import asin, atan, atan2, ceil, cos, floor, pi, sin, sqrt, tan
 
 from track360.core.config import BackendTuningConfig, GeometryConfig, TrackingConfig
 from track360.core.types import BBoxXYWH, BFoV, SphericalPoint, ViewProjection, ViewSpec
-from track360.geometry.projection_math import cameraBasis, fovToFocalLengthPx, viewAxes
+from track360.geometry.projection_math import (
+    cameraBasis,
+    fovToFocalLengthPx,
+    makeSphericalPoint,
+    unitVectorToYawPitch,
+    viewAxes,
+)
 
 # The search view spans this many times the predicted target extent on each axis.
 SEARCH_FOV_SCALE = 3.0
@@ -27,6 +33,10 @@ _MAX_VERTICAL_SPAN_RAD = pi - 1e-6
 # Directions closer than this to the image plane's horizon project to its far edge.
 _MIN_DEPTH = 0.05
 SEARCH_VIEW_ID = 0
+# Scan views get the ids after the search view's.
+SCAN_VIEW_ID_BASE = 1
+# Neighbouring scan views are this fraction of a view apart, so they overlap by half.
+SCAN_STEP_RATIO = 0.5
 # Previous target boxes handed to the backend with every view (ARTrackV2 reads seven).
 TRAJECTORY_LENGTH = 7
 
@@ -43,6 +53,61 @@ class ViewPlanner:
         self._geometry = geometryConfig
         self._tracking = trackingConfig
         self._tuning = backendTuning or BackendTuningConfig()
+        self._scanOffsets: dict[int, list[tuple[float, float, float]]] = {}
+
+    def scanViews(
+        self, lastSeen: BFoV, cursor: int, count: int
+    ) -> tuple[tuple[ViewSpec, ...], int]:
+        """Views to look for a lost target in, and the cursor for the next frame.
+
+        The sphere is covered with views the size of the target's normal search
+        view, half a view apart, ordered by distance from where the target was
+        last seen.  Each call hands out the next ``count`` of them; the cursor
+        wraps around once the whole sphere has been visited.
+        """
+        if count <= 0 or not self._tuning.alignedSearch:
+            return (), cursor
+        horizontal = min(lastSeen.horizontalFovRad, _MAX_HORIZONTAL_SPAN_RAD)
+        vertical = min(lastSeen.verticalFovRad, _MAX_VERTICAL_SPAN_RAD)
+        span = ALIGNED_SEARCH_FACTOR * sqrt(horizontal * vertical)
+        span = min(pi, max(self._tuning.alignedMinFovRad, span))
+        offsets = self._offsetsFor(SCAN_STEP_RATIO * span)
+        forward, right, up = viewAxes(lastSeen.center)
+        views = []
+        for index in range(min(count, len(offsets))):
+            along, across, upward = offsets[(cursor + index) % len(offsets)]
+            direction = along * forward + across * right + upward * up
+            center = makeSphericalPoint(*unitVectorToYawPitch(tuple(direction)))
+            views.append(
+                replace(
+                    self._searchView(center, horizontal, vertical),
+                    viewId=SCAN_VIEW_ID_BASE + index,
+                )
+            )
+        return tuple(views), (cursor + len(views)) % len(offsets)
+
+    def _offsetsFor(self, stepRad: float) -> list[tuple[float, float, float]]:
+        """Directions covering the sphere ``stepRad`` apart, nearest to straight ahead first."""
+        key = max(1, round(stepRad * 1000.0))
+        if key not in self._scanOffsets:
+            step = key / 1000.0
+            rows = max(1, ceil(pi / step))
+            offsets = []
+            for row in range(rows):
+                latitude = -pi / 2.0 + (row + 0.5) * pi / rows
+                columns = max(1, ceil(2.0 * pi * cos(latitude) / step))
+                for column in range(columns):
+                    longitude = -pi + (column + 0.5) * 2.0 * pi / columns
+                    offsets.append(
+                        (
+                            cos(latitude) * cos(longitude),
+                            cos(latitude) * sin(longitude),
+                            sin(latitude),
+                        )
+                    )
+            offsets.sort(key=lambda offset: -offset[0])
+            self._scanOffsets[key] = offsets
+        return self._scanOffsets[key]
 
     def searchView(
         self,
@@ -320,6 +385,7 @@ def clampFov(value: float, geometry: GeometryConfig) -> float:
 
 __all__ = [
     "ALIGNED_SEARCH_FACTOR",
+    "SCAN_VIEW_ID_BASE",
     "SEARCH_FOV_SCALE",
     "SEARCH_VIEW_ID",
     "TRAJECTORY_LENGTH",

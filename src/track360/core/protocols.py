@@ -125,6 +125,7 @@ class TrackController(Protocol):
         self,
         plan: SearchPlan,
         observation: ProjectedObservation | None,
+        candidates: Sequence[ProjectedObservation] = (),
     ) -> TrackResult: ...
 
 

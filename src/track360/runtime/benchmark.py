@@ -171,6 +171,7 @@ def runBenchmark(
     resume: bool = True,
     shard: tuple[int, int] = (0, 1),
     sessionFactory: SessionFactory | None = None,
+    probe: bool = False,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -205,10 +206,17 @@ def runBenchmark(
         if sessionFactory is not None
         else createArtrackSession(config)
     )
+    probeModels = None
+    if probe:
+        from track360.evaluation.appearance_probe import AppearanceModels
+
+        probeModels = AppearanceModels(Path(config.model.weights).parent / "hub")
     reports: list[SequenceReport] = []
     try:
         for position, name in enumerate(names, start=1):
-            report = _runOne(dataset, output, method, config, name, session, maxFrames, resume)
+            report = _runOne(
+                dataset, output, method, config, name, session, maxFrames, resume, probeModels
+            )
             reports.append(report)
             # A skipped sequence keeps the report of the run that tracked it.
             if report.status != "skipped" or not (reportRoot / f"{name}.json").is_file():
@@ -348,6 +356,7 @@ def _runOne(
     session: _CountingSession,
     maxFrames: int | None,
     resume: bool,
+    probeModels: Any | None = None,
 ) -> SequenceReport:
     source = Vot360DataSource(maxFrames=maxFrames, labelRoot=dataset.labelRoot)
     try:
@@ -358,14 +367,21 @@ def _runOne(
         collector = _TimedCollector()
         session.forwards = 0
         started = perf_counter()
+        probe = None
+        if probeModels is not None and method != "b0":
+            from track360.evaluation.appearance_probe import AppearanceProbe
+
+            probe = AppearanceProbe(probeModels, session)
         if method == "b0":
             _trackErpDirect(source, session, config, collector)
         else:
-            _trackSpherical(source, session, config, collector)
+            _trackSpherical(source, session, config, collector, probe)
         seconds = perf_counter() - started
         collector.finalize(frameCount)
         frameWidthPx = source.sequence.frameSize[0]
         writeSequenceResults(outputRoot, method, name, collector.results, frameWidthPx)
+        if probe is not None:
+            probe.write(outputRoot, method, name, frameCount)
         latencies = np.diff(collector.writeTimes) * 1000.0
         return SequenceReport(
             sequence=name,
@@ -392,6 +408,7 @@ def _trackSpherical(
     session: ARTrackSession,
     config: AppConfig,
     collector: ResultCollector,
+    probe: Any | None = None,
 ) -> None:
     shared = _SharedSession(session)
     runtime = buildRuntime(config, artrackSessionFactory=lambda _: shared)
@@ -405,6 +422,8 @@ def _trackSpherical(
             sink=collector,
             scoreCalibration=runtime.scoreCalibration,
             useMotionScore=runtime.useMotionScore,
+            probe=probe,
+            verifier=runtime.verifier,
         )
     finally:
         closeRuntime(runtime)

@@ -8,7 +8,7 @@ from time import perf_counter_ns
 from track360.backends.artrack_model import ARTrackBackend
 from track360.backends.observation import buildRgbObservation
 from track360.backends.template_cache import TemplateCache
-from track360.core.errors import ProtocolError
+from track360.core.errors import ModelError, ProtocolError
 from track360.core.protocols import TrackerBackend as TrackerBackendProtocol
 from track360.core.types import (
     BBoxXYWH,
@@ -48,6 +48,9 @@ class TrackerBackendImpl(TrackerBackendProtocol):
         if self._initialized:
             raise ProtocolError("tracker backend is already initialized")
         self._templates.initialize(self._artrackBackend, template, templateBox)
+        # Stateless passes use their own encoding of the template, made on first use.
+        self._detachedSource = (_copyView(template), templateBox)
+        self._detachedTemplate = None
         self._initialized = True
         self._previousViews = {template.spec.viewId: _copyView(template)}
         self._previousViewsFrameIndex = 0
@@ -130,6 +133,60 @@ class TrackerBackendImpl(TrackerBackendProtocol):
             buildRgbObservation(view, prediction, sharedInferenceNs)
             for view, prediction in zip(views, predictions, strict=True)
         )
+
+    def inferDetached(self, views: Sequence[LocalView]) -> tuple[LocalObservation, ...]:
+        """Locate the target in views without using or changing the tracker's state.
+
+        The pass sees the frame-0 template only: its appearance feature starts from
+        the template and no trajectory is given.  Used to look for a lost target.
+        Each view needs a prior box; a view whose box falls outside it yields no
+        observation.
+        """
+        if self._closed or not self._initialized:
+            raise ProtocolError("tracker backend is not ready")
+        if any(view.spec.priorBox is None for view in views):
+            raise ProtocolError("detached inference needs a prior box in every view")
+        if self._detachedTemplate is None:
+            self._detachedTemplate = self._artrackBackend.encodeTemplateView(
+                *self._detachedSource
+            )
+        memory = getattr(self._detachedTemplate, "memory", None)
+        observations = []
+        for view in views:
+            if memory is not None:
+                memory.clear()
+            started = perf_counter_ns()
+            prediction = self._artrackBackend.inferBatch(
+                (view.rgb,),
+                (self._detachedTemplate,),
+                ((view.spec.bfov.horizontalFovRad, view.spec.bfov.verticalFovRad),),
+                priorBoxes=(view.spec.priorBox,),
+            )[0]
+            try:
+                observations.append(
+                    buildRgbObservation(view, prediction, perf_counter_ns() - started)
+                )
+            except ModelError:
+                # The box left the view: this view holds no candidate.
+                continue
+        if memory is not None:
+            memory.clear()
+        return tuple(observations)
+
+    def saveState(self) -> dict[str, object]:
+        """The tracker's per-sequence state, to undo the effect of a frame."""
+        memory = getattr(self._templates.snapshot().anchor.features, "memory", None)
+        return {} if memory is None else dict(memory)
+
+    def restoreState(self, state: dict[str, object]) -> None:
+        memory = getattr(self._templates.snapshot().anchor.features, "memory", None)
+        if memory is not None:
+            memory.clear()
+            memory.update(state)
+
+    def resetState(self) -> None:
+        """Forget what the tracker accumulated; it starts from the template again."""
+        self.restoreState({})
 
     def _rememberViews(self, views: Sequence[LocalView], frameIndex: int) -> None:
         if not views:

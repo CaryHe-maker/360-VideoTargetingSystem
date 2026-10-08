@@ -44,6 +44,15 @@ backendTuning:
   onlineTemplate: true
   templateMinConfidence: 0.515
   holdWeakBox: true
+  lossHandling: false
+  verifierModel: dinov2
+  suspectSimilarity: 0.30
+  suspectScore: 0.50
+  lostAfterFrames: 4
+  scanViewsPerFrame: 4
+  reacquireSimilarity: 0.50
+  reacquireMargin: 0.15
+  reacquireScore: 0.50
 reproducibility:
   seed: 0
   deterministic: true

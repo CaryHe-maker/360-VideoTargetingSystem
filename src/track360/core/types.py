@@ -417,6 +417,8 @@ class SearchPlan:
     view: ViewSpec
     templateCommand: TemplateCommand
     predictedMotion: MotionState3D | None
+    # Extra views searched without tracker state while the target is considered lost.
+    scanViews: tuple[ViewSpec, ...] = ()
 
     def __post_init__(self) -> None:
         if not str(self.sequenceId) or int(self.frameIndex) < 0 or self.stateRevision < 0:
@@ -461,6 +463,8 @@ class ProjectedObservation:
     envelopeInflation: float = 1.0
     normalizedRadius: float = 0.0
     edgeMargin: float = 0.0
+    # Feature similarity of the box to the frame-0 template; None: not measured.
+    appearanceSimilarity: float | None = None
 
     def __post_init__(self) -> None:
         if self.viewId < 0:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from math import asin, atan2, pi
 from typing import TYPE_CHECKING
@@ -44,6 +45,7 @@ from track360.core.types import (
     TemplateCommandKind,
     TrackResult,
     TrackStatus,
+    ViewSpec,
 )
 from track360.geometry.projection_math import (
     makeSphericalPoint,
@@ -128,6 +130,27 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._lastStateObservation: StateObservation | None = None
         self._lastTransition: TransitionDecision | None = None
         self._lastPipelineProfile: dict[str, object] = {}
+        # Loss handling: consecutive doubtful frames, where the target was last
+        # trusted, and how far the scan around that place has got.
+        self._suspectFrames = 0
+        self._lastGoodBfov: BFoV | None = None
+        self._scanCursor = 0
+        self._lastFrameSuspect = False
+        self._lastFrameReacquired = False
+
+    @property
+    def lastFrameSuspect(self) -> bool:
+        """The last frame's box was doubted: the tracker should not learn from it."""
+        return self._lastFrameSuspect
+
+    @property
+    def lastFrameReacquired(self) -> bool:
+        """The last frame jumped to a scan candidate: the tracker restarts from it."""
+        return self._lastFrameReacquired
+
+    @property
+    def suspectFrames(self) -> int:
+        return self._suspectFrames
 
     @property
     def status(self) -> TrackStatus | None:
@@ -214,6 +237,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._stateMachine.initialize()
         self._trajectory.clear()
         self._trajectory.extend([self._currentBfov] * TRAJECTORY_LENGTH)
+        self._lastGoodBfov = self._currentBfov
         self._initialized = True
         self._initialPlan = None
         self._stateRevision = 0
@@ -262,6 +286,15 @@ class TrackControllerImpl(TrackControllerProtocol):
                 min(prediction.horizontalSizeRad, _MAX_HORIZONTAL_SIZE_RAD),
                 min(prediction.verticalSizeRad, _MAX_VERTICAL_SIZE_RAD),
             )
+        scanViews: tuple[ViewSpec, ...] = ()
+        if (
+            self._backendTuning.lossHandling
+            and self._suspectFrames >= self._backendTuning.lostAfterFrames
+            and self._lastGoodBfov is not None
+        ):
+            scanViews, self._scanCursor = self._planner.scanViews(
+                self._lastGoodBfov, self._scanCursor, self._backendTuning.scanViewsPerFrame
+            )
         plan = SearchPlan(
             sequenceId=frame.sequenceId,
             frameIndex=frame.frameIndex,
@@ -280,6 +313,7 @@ class TrackControllerImpl(TrackControllerProtocol):
                 expectedRevision=self._backendRevision + 1,
             ),
             predictedMotion=prediction.motionState,
+            scanViews=scanViews,
         )
         self._pending = _PendingFrame(
             frame=frame,
@@ -295,12 +329,24 @@ class TrackControllerImpl(TrackControllerProtocol):
         self,
         plan: SearchPlan,
         observation: ProjectedObservation | None,
+        candidates: Sequence[ProjectedObservation] = (),
     ) -> TrackResult:
-        """Commit the frame from the observation of its search view (``None``: no box)."""
+        """Commit the frame from the observation of its search view (``None``: no box).
+
+        ``candidates`` are the boxes found in the plan's scan views.  When one of
+        them looks like the template clearly more than the tracked box does, the
+        track jumps to it.
+        """
         self._requireInitialized()
         pending = self._pending
         if pending is None or pending.plan != plan:
             raise ProtocolError("search response does not match the pending plan")
+        self._lastFrameSuspect = False
+        self._lastFrameReacquired = False
+        if self._backendTuning.lossHandling:
+            chosen = self._reacquisitionCandidate(observation, candidates)
+            if chosen is not None:
+                return self._reacquire(pending, chosen)
         self._backendRevision = plan.templateCommand.expectedRevision
         evaluation = self._evaluator.evaluate(
             mode=pending.mode,
@@ -333,7 +379,98 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._stateMachine.recordScore(evaluation.stateScore)
         self._lastStateObservation = evaluation
         self._lastTransition = decision
+        if self._backendTuning.lossHandling:
+            if observation is None or self._isSuspect(observation):
+                self._suspectFrames += 1
+                self._lastFrameSuspect = True
+            else:
+                self._suspectFrames = 0
+                self._scanCursor = 0
+                self._lastGoodBfov = self._currentBfov
         return result
+
+    def _isSuspect(self, observation: ProjectedObservation) -> bool:
+        """Whether the box may not be the target: a low score or an unlike appearance."""
+        tuning = self._backendTuning
+        if _observationScore(observation) < tuning.suspectScore:
+            return True
+        similarity = observation.appearanceSimilarity
+        return similarity is not None and similarity < tuning.suspectSimilarity
+
+    def _reacquisitionCandidate(
+        self,
+        observation: ProjectedObservation | None,
+        candidates: Sequence[ProjectedObservation],
+    ) -> ProjectedObservation | None:
+        tuning = self._backendTuning
+        current = -1.0
+        if observation is not None and observation.appearanceSimilarity is not None:
+            current = observation.appearanceSimilarity
+        best: ProjectedObservation | None = None
+        for candidate in candidates:
+            similarity = candidate.appearanceSimilarity
+            if (
+                similarity is None
+                or similarity < tuning.reacquireSimilarity
+                or similarity < current + tuning.reacquireMargin
+                or _observationScore(candidate) < tuning.reacquireScore
+            ):
+                continue
+            if best is None or similarity > (best.appearanceSimilarity or -1.0):
+                best = candidate
+        return best
+
+    def _reacquire(
+        self, pending: _PendingFrame, candidate: ProjectedObservation
+    ) -> TrackResult:
+        """Restart the track from a scan candidate."""
+        plan, frame = pending.plan, pending.frame
+        score = _observationScore(candidate)
+        self._backendRevision = plan.templateCommand.expectedRevision
+        if hasattr(self._motion, "resetFromMeasurement"):
+            self._motion.resetFromMeasurement(  # type: ignore[attr-defined]
+                candidate.bfov.center,
+                frame.timestampNs,
+                int(frame.frameIndex),
+                1.0,
+                candidate.bfov.horizontalFovRad,
+                candidate.bfov.verticalFovRad,
+            )
+        else:
+            self._motion.initialize(candidate.bfov.center, frame.timestampNs)
+        self._currentBfov = candidate.bfov
+        self._currentBox = candidate.bbox
+        self._trajectory.clear()
+        self._trajectory.extend([candidate.bfov] * TRAJECTORY_LENGTH)
+        self._lastGoodBfov = candidate.bfov
+        self._suspectFrames = 0
+        self._scanCursor = 0
+        self._lastFrameReacquired = True
+        self._mode = TrackMode.TRACKING
+        self._stableFrames = 0
+        self._pendingTemplate = TemplateDecision(TemplateCommandKind.KEEP)
+        self._stateMachine.recordScore(score)
+        self._stateRevision = plan.stateRevision
+        self._lastFrameIndex = int(frame.frameIndex)
+        self._lastFrame = frame
+        self._pending = None
+        self._lastStateObservation = None
+        self._lastTransition = None
+        self._lastPipelineProfile = {
+            "frameIndex": int(frame.frameIndex),
+            "reacquired": True,
+            "finalStateRevision": int(plan.stateRevision),
+        }
+        return TrackResult(
+            sequenceId=frame.sequenceId,
+            frameIndex=frame.frameIndex,
+            bbox=candidate.bbox,
+            bfov=candidate.bfov,
+            confidence=score,
+            status=TrackStatus.TRACKING,
+            valid=True,
+            resultSource=ResultSource.OBSERVED_CONFIRMED,
+        )
 
     def commitFallback(
         self,
@@ -518,6 +655,15 @@ class TrackControllerImpl(TrackControllerProtocol):
             raise ProtocolError(
                 f"frame index must be {self._lastFrameIndex + 1}, actual={frame.frameIndex}"
             )
+
+
+def _observationScore(observation: ProjectedObservation) -> float:
+    value = (
+        observation.singleScore
+        if observation.singleScore is not None
+        else observation.fusedScore
+    )
+    return float(min(1.0, max(0.0, value)))
 
 
 def _motionCenter(motion: MotionState3D):

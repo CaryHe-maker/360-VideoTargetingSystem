@@ -134,9 +134,20 @@ class BackendTuningConfig:
     onlineTemplate: bool = True
     templateMinConfidence: float = 0.515
     holdWeakBox: bool = True
+    # Loss handling: doubt a frame, search for the target elsewhere, jump back to it.
+    lossHandling: bool = False
+    verifierModel: str = "dinov2"
+    suspectSimilarity: float = 0.30
+    suspectScore: float = 0.50
+    lostAfterFrames: int = 4
+    scanViewsPerFrame: int = 4
+    reacquireSimilarity: float = 0.50
+    reacquireMargin: float = 0.15
+    reacquireScore: float = 0.50
 
     def __post_init__(self) -> None:
         for name in (
+            "lossHandling",
             "sequenceModel",
             "acceptAnyCandidate",
             "fullViewSearch",
@@ -156,6 +167,20 @@ class BackendTuningConfig:
         if self.alignedSearch and self.fullViewSearch:
             raise ConfigError(
                 "backendTuning.alignedSearch and fullViewSearch cannot both be enabled"
+            )
+        for name in (
+            "suspectSimilarity",
+            "suspectScore",
+            "reacquireSimilarity",
+            "reacquireMargin",
+            "reacquireScore",
+        ):
+            if not -1.0 <= getattr(self, name) <= 1.0:
+                raise ConfigError(f"backendTuning.{name} must be in [-1, 1]")
+        if self.lostAfterFrames < 1 or self.scanViewsPerFrame < 0:
+            raise ConfigError(
+                "backendTuning.lostAfterFrames must be positive and scanViewsPerFrame "
+                "non-negative"
             )
         if not 0.0 < self.sphericalSearchFovRad < 2.0 * pi:
             raise ConfigError("backendTuning.sphericalSearchFovDeg must be in (0, 360)")
@@ -307,6 +332,15 @@ def loadConfig(path: str | Path) -> AppConfig:
             "onlineTemplate",
             "templateMinConfidence",
             "holdWeakBox",
+            "lossHandling",
+            "verifierModel",
+            "suspectSimilarity",
+            "suspectScore",
+            "lostAfterFrames",
+            "scanViewsPerFrame",
+            "reacquireSimilarity",
+            "reacquireMargin",
+            "reacquireScore",
         },
     )
     reproducibilityRaw = _section(root, "reproducibility", {"seed", "deterministic"})
@@ -445,6 +479,33 @@ def loadConfig(path: str | Path) -> AppConfig:
                 "backendTuning.templateMinConfidence", tuningRaw["templateMinConfidence"]
             ),
             holdWeakBox=_requireBool("backendTuning.holdWeakBox", tuningRaw["holdWeakBox"]),
+            lossHandling=_requireBool(
+                "backendTuning.lossHandling", tuningRaw["lossHandling"]
+            ),
+            verifierModel=_requireStr(
+                "backendTuning.verifierModel", tuningRaw["verifierModel"]
+            ),
+            suspectSimilarity=_requireFloat(
+                "backendTuning.suspectSimilarity", tuningRaw["suspectSimilarity"]
+            ),
+            suspectScore=_requireFloat(
+                "backendTuning.suspectScore", tuningRaw["suspectScore"]
+            ),
+            lostAfterFrames=_requireInt(
+                "backendTuning.lostAfterFrames", tuningRaw["lostAfterFrames"]
+            ),
+            scanViewsPerFrame=_requireInt(
+                "backendTuning.scanViewsPerFrame", tuningRaw["scanViewsPerFrame"]
+            ),
+            reacquireSimilarity=_requireFloat(
+                "backendTuning.reacquireSimilarity", tuningRaw["reacquireSimilarity"]
+            ),
+            reacquireMargin=_requireFloat(
+                "backendTuning.reacquireMargin", tuningRaw["reacquireMargin"]
+            ),
+            reacquireScore=_requireFloat(
+                "backendTuning.reacquireScore", tuningRaw["reacquireScore"]
+            ),
         ),
         reproducibility=ReproducibilityConfig(
             seed=_requireInt("reproducibility.seed", reproducibilityRaw["seed"]),
