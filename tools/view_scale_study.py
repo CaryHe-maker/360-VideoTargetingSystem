@@ -21,6 +21,11 @@ what it is told, since a lost track does not know where the target is:
 
 A hit is a returned box with a dual IoU of at least 0.5 with the ground truth.  One row
 per forward pass goes to ``<out>/forwards.csv``.
+
+With ``--refine`` every enlarged view is followed by a second pass: a view of the
+normal size centred on the box the first pass returned (rows ``4x>1x`` and so on).
+The second view is sized from the true target, standing in for the size the track had
+when it was last trusted.
 """
 
 from __future__ import annotations
@@ -98,6 +103,8 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
     session = createArtrackSession(config)
     planner = ViewPlanner(config.geometry, config.tracking, config.backendTuning)
     side = config.geometry.viewWidthPx
+    scales = tuple(float(item) for item in args.scales.split(","))
+    wanted = tuple(args.priors.split(","))
     rng = np.random.default_rng(args.seed)
     rows: list[dict[str, object]] = []
     try:
@@ -130,7 +137,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                     )
                     size = sqrt(target.horizontalFovRad * target.verticalFovRad)
                     share, bearing = rng.uniform(0.0, MAX_SHIFT), rng.uniform(0.0, 2 * pi)
-                    for scale in SCALES:
+                    for scale in scales:
                         # A view for a target ``factor`` times as large is that much wider.
                         factor = scale or 2 * pi / (ALIGNED_SEARCH_FACTOR * size)
                         wide = factor * target.horizontalFovRad
@@ -158,6 +165,8 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                         view = runtime.geometry.cropViews(frame, [spec])[0]
                         targetPx = localBoxOfBfov(spec, target)
                         for prior, trajectory in priors.items():
+                            if prior not in wanted:
+                                continue
                             asked = replace(view, spec=replace(spec, trajectory=trajectory))
                             found = runtime.backend.inferDetached((asked,))
                             row = {
@@ -180,6 +189,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                                 "centreErrorSizes": "",
                                 "score": "",
                             }
+                            projected = None
                             if found:
                                 try:
                                     projected = runtime.geometry.projectLocalBoxBoundary(
@@ -187,6 +197,10 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                                     )
                                 except Exception:
                                     projected = None
+                                if projected is None:
+                                    row["found"] = 0
+                                else:
+                                    row["found"] = 1
                                 if projected is not None:
                                     box = projected.bbox
                                     iou = float(
@@ -211,6 +225,40 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                                         score=round(float(found[0].fusedScore), 4),
                                     )
                             rows.append(row)
+                            if not (args.refine and scale != 1.0 and prior == "view"):
+                                continue
+                            # Second pass: the normal view around what the first found.
+                            again = dict(row, scale=f"{_label(scale)}>1x", found=0, iou=0.0)
+                            again.update(centreErrorSizes="", score="", firstScore=row["score"])
+                            if row["found"]:
+                                fine = planner._searchView(
+                                    projected.bfov.center,
+                                    target.horizontalFovRad,
+                                    target.verticalFovRad,
+                                )
+                                second = runtime.backend.inferDetached(
+                                    (runtime.geometry.cropViews(frame, [fine])[0],)
+                                )
+                                again.update(
+                                    viewWidthDeg=round(
+                                        float(np.degrees(fine.bfov.horizontalFovRad)), 2
+                                    ),
+                                    projection=fine.projection.name,
+                                    targetPx="",
+                                )
+                                if second:
+                                    try:
+                                        refined = runtime.geometry.projectLocalBoxBoundary(
+                                            second[0].bbox, fine, width, height
+                                        )
+                                    except Exception:
+                                        refined = None
+                                    if refined is not None:
+                                        again.update(
+                                            _judged(refined, truthBox[index], target, size, width),
+                                            score=round(float(second[0].fusedScore), 4),
+                                        )
+                            rows.append(again)
                     releaseFrame = getattr(runtime.geometry, "releaseFrame", None)
                     if callable(releaseFrame):
                         releaseFrame()
@@ -223,6 +271,25 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
     return rows
 
 
+def _judged(projected, truth: np.ndarray, target: BFoV, size: float, width: int) -> dict:
+    box = projected.bbox
+    iou = float(
+        dualIou(
+            truth[None, :], np.asarray([[box.xPx, box.yPx, box.widthPx, box.heightPx]]), width
+        )[0]
+    )
+    cosine = (
+        projected.bfov.center.x * target.center.x
+        + projected.bfov.center.y * target.center.y
+        + projected.bfov.center.z * target.center.z
+    )
+    return {
+        "found": 1,
+        "iou": round(iou, 4),
+        "centreErrorSizes": round(float(np.arccos(np.clip(cosine, -1.0, 1.0))) / size, 3),
+    }
+
+
 def report(rows: list[dict[str, object]]) -> dict[str, object]:
     payload: dict[str, object] = {}
 
@@ -233,7 +300,7 @@ def report(rows: list[dict[str, object]]) -> dict[str, object]:
             f"{'score hit':>11}{'score miss':>12}"
         )
         payload[title] = {}
-        for scale in map(_label, SCALES):
+        for scale in dict.fromkeys(r["scale"] for r in chosen):
             for prior in PRIORS:
                 part = [r for r in chosen if r["scale"] == scale and r["prior"] == prior]
                 if not part:
@@ -247,7 +314,9 @@ def report(rows: list[dict[str, object]]) -> dict[str, object]:
                     "n": len(part),
                     "hit": float(hit.mean()),
                     "loose": float((iou >= 0.1).mean()),
-                    "targetPx": float(np.median([r["targetPx"] for r in part])),
+                    "targetPx": float(
+                        np.median([r["targetPx"] for r in part if r["targetPx"] != ""] or [0.0])
+                    ),
                     "scoreHit": float(np.nanmedian(scores[hit])) if hit.any() else None,
                     "scoreMiss": float(np.nanmedian(scores[~hit])) if (~hit).any() else None,
                 }
@@ -283,6 +352,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--start", type=int, default=5)
     parser.add_argument("--step", type=int, default=15)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--scales", default=",".join(f"{scale:g}" for scale in SCALES))
+    parser.add_argument("--priors", default=",".join(PRIORS))
+    parser.add_argument("--refine", action="store_true")
     args = parser.parse_args(argv)
     warnings.filterwarnings("ignore")
     rows = run(args)
@@ -291,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     args.out.mkdir(parents=True, exist_ok=True)
     with (args.out / "forwards.csv").open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=COLUMNS)
+        writer = csv.DictWriter(stream, fieldnames=(*COLUMNS, "firstScore"), restval="")
         writer.writeheader()
         writer.writerows(rows)
     payload = report(rows)
