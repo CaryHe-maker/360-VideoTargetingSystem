@@ -149,6 +149,8 @@ class TrackControllerImpl(TrackControllerProtocol):
         # The target state from before a jump on probation, and wrong jump targets.
         self._probationSnapshot: tuple[BFoV, BBoxXYWH, int] | None = None
         self._distractors: deque[BFoV] = deque(maxlen=_MAX_DISTRACTORS)
+        # Scan views that may still be spent; starts full.
+        self._scanTokens = backendTuning.scanBudgetBurst
         self._lastFrameTrace: dict[str, object] = {}
 
     @property
@@ -320,14 +322,25 @@ class TrackControllerImpl(TrackControllerProtocol):
                 min(prediction.verticalSizeRad, _MAX_VERTICAL_SIZE_RAD),
             )
         scanViews: tuple[ViewSpec, ...] = ()
+        scanCount = self._backendTuning.scanViewsPerFrame
+        if self._backendTuning.scanBudgetPerFrame > 0.0:
+            # Every frame earns a share of a scan view; a lost track spends the whole
+            # ones it has saved, so the average cost per frame stays bounded.
+            self._scanTokens = min(
+                self._backendTuning.scanBudgetBurst,
+                self._scanTokens + self._backendTuning.scanBudgetPerFrame,
+            )
+            scanCount = min(scanCount, int(self._scanTokens))
         if (
             self._actions != "none"
             and self._mode is TrackMode.LOST
             and self._lastGoodBfov is not None
+            and scanCount > 0
         ):
             scanViews, self._scanCursor = self._planner.scanViews(
-                self._lastGoodBfov, self._scanCursor, self._backendTuning.scanViewsPerFrame
+                self._lastGoodBfov, self._scanCursor, scanCount
             )
+            self._scanTokens -= len(scanViews)
             self._scanFrameCount += 1
         plan = SearchPlan(
             sequenceId=frame.sequenceId,

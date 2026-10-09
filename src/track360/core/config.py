@@ -147,6 +147,10 @@ class BackendTuningConfig:
     uncertainScore: float = 0.42
     lostAfterFrames: int = 4
     scanViewsPerFrame: int = 4
+    # Scan views a sequence may spend: this many are earned per frame and at most
+    # ``scanBudgetBurst`` are saved up.  0 per frame: no limit.
+    scanBudgetPerFrame: float = 0.0
+    scanBudgetBurst: float = 40.0
     reacquireSimilarity: float = 0.45
     reacquireMargin: float = 0.15
     reacquireScore: float = 0.70
@@ -232,6 +236,8 @@ class BackendTuningConfig:
             )
         if self.motionOffsetScale <= 0.0 or self.motionSizeScale <= 0.0:
             raise ConfigError("backendTuning motion scales must be positive")
+        if self.scanBudgetPerFrame < 0.0 or self.scanBudgetBurst < 0.0:
+            raise ConfigError("backendTuning scan budget values must be non-negative")
         if self.lostAfterFrames < 1 or self.scanViewsPerFrame < 0:
             raise ConfigError(
                 "backendTuning.lostAfterFrames must be positive and scanViewsPerFrame "
@@ -397,6 +403,8 @@ def loadConfig(path: str | Path) -> AppConfig:
             "uncertainScore",
             "lostAfterFrames",
             "scanViewsPerFrame",
+            "scanBudgetPerFrame",
+            "scanBudgetBurst",
             "reacquireSimilarity",
             "reacquireMargin",
             "reacquireScore",
@@ -573,6 +581,12 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
             scanViewsPerFrame=_requireInt(
                 "backendTuning.scanViewsPerFrame", tuningRaw["scanViewsPerFrame"]
+            ),
+            scanBudgetPerFrame=_requireFloat(
+                "backendTuning.scanBudgetPerFrame", tuningRaw["scanBudgetPerFrame"]
+            ),
+            scanBudgetBurst=_requireFloat(
+                "backendTuning.scanBudgetBurst", tuningRaw["scanBudgetBurst"]
             ),
             reacquireSimilarity=_requireFloat(
                 "backendTuning.reacquireSimilarity", tuningRaw["reacquireSimilarity"]

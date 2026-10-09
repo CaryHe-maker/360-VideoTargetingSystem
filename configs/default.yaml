@@ -54,6 +54,8 @@ backendTuning:
   uncertainScore: 0.42
   lostAfterFrames: 4
   scanViewsPerFrame: 4
+  scanBudgetPerFrame: 0.0
+  scanBudgetBurst: 40.0
   reacquireSimilarity: 0.45
   reacquireMargin: 0.15
   reacquireScore: 0.70
