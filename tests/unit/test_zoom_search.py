@@ -236,6 +236,43 @@ class ZoomSearchTest(unittest.TestCase):
         self.assertTrue(controller.lastFrameReacquired)
         self.assertAlmostEqual(result.bfov.center.yawRad, 1.0)
 
+    def testACandidateOnTheTrackedBoxIsNotJumpedTo(self) -> None:
+        controller = self._controller(zoomInPlace=False)
+        index = self._lose(controller)
+        plan = controller.beginFrame(_frame(index))
+        self.assertTrue(plan.scanRefine)
+        # The enlarged search came back to the box the tracker already has.
+        same = _observation(0.9, 0.5, yaw=0.3, viewId=REFINE_VIEW_ID_BASE)
+        controller.consume(plan, _observation(0.2, 0.1, yaw=0.3), (same,))
+        self.assertFalse(controller.lastFrameReacquired)
+        self.assertEqual(controller.lastFrameTrace["candidates"][0]["verdict"], "same_place")
+        # The track stays lost and the tracker is still told not to learn the frame.
+        self.assertEqual(controller.lastFrameTrace["modeAfter"], "LOST")
+        self.assertTrue(controller.lastFrameSuspect)
+
+    def testTheLookInPlaceConfirmsTheTrackedBoxWithoutAJump(self) -> None:
+        controller = self._controller()
+        index = self._lose(controller)
+        plan = controller.beginFrame(_frame(index))
+        self.assertFalse(plan.scanRefine)
+        same = _observation(0.9, 0.5, yaw=0.3, viewId=SCAN_VIEW_ID_BASE)
+        result = controller.consume(plan, _observation(0.2, 0.1, yaw=0.3), (same,))
+        # No jump, no reset of the tracker's memory: the doubt simply ends.
+        self.assertFalse(controller.lastFrameReacquired)
+        self.assertFalse(controller.lastFrameSuspect)
+        self.assertEqual(controller.lastFrameTrace["action"], "confirm")
+        self.assertEqual(controller.lastFrameTrace["reason"], "CONFIRMED")
+        self.assertEqual(result.status.name, "TRACKING")
+        # Lost again right away: the same look is not repeated, the view grows instead.
+        index += 1
+        for _ in range(3):
+            plan = controller.beginFrame(_frame(index))
+            self.assertEqual(plan.scanViews, ())
+            controller.consume(plan, _observation(0.2, 0.1, yaw=0.3))
+            index += 1
+        plan = controller.beginFrame(_frame(index))
+        self.assertTrue(plan.scanRefine)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from math import asin, atan2, degrees, pi, sqrt
+from math import acos, asin, atan2, degrees, pi, sqrt
 from typing import TYPE_CHECKING
 
 from track360.controller.motion_estimator import SphericalMotionEstimator
@@ -16,6 +16,7 @@ from track360.controller.state_model import (
     StateObservation,
     TrackMode,
     TransitionDecision,
+    TransitionReason,
 )
 from track360.controller.view_planner import (
     REFINE_VIEW_ID_BASE,
@@ -60,6 +61,15 @@ if TYPE_CHECKING:
 
 _MAX_HORIZONTAL_SIZE_RAD = 2.0 * pi - 1e-6
 _MAX_VERTICAL_SIZE_RAD = pi - 1e-6
+# A scan candidate this close to the tracked box, in target sizes, and no more than
+# this many times larger or smaller, is the tracked box found again (81 of the 139
+# jumps of evaluation log E030 were such).
+_SAME_PLACE_OFFSET = 0.5
+_SAME_PLACE_SIZE_RATIO = 1.5
+# After the in-place look confirmed the tracked box, a track lost again within this
+# many frames goes straight to the enlarged views: asking the same question again
+# would give the same answer.
+_CONFIRM_COOLDOWN_FRAMES = 30
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +155,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         # plan's scan was (for the state trace).
         self._lostFrames = 0
         self._lastScan = ""
+        self._lastConfirmedFrame: int | None = None
         self._lastFrameTrace: dict[str, object] = {}
 
     @property
@@ -328,7 +339,9 @@ class TrackControllerImpl(TrackControllerProtocol):
             scanCount = min(scanCount, int(self._scanTokens))
         searching = self._actions != "none" and lost and self._lastGoodBfov is not None
         if searching and self._backendTuning.scanMode == "zoom":
-            scanViews, scanRefine = self._zoomScan(mainView, lostFrames, scanCount)
+            scanViews, scanRefine = self._zoomScan(
+                mainView, lostFrames, scanCount, int(frame.frameIndex)
+            )
             if scanViews:
                 self._scanTokens -= 2 if scanRefine else 1
                 self._scanFrameCount += 1
@@ -363,7 +376,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         return plan
 
     def _zoomScan(
-        self, mainView: ViewSpec, lostFrames: int, budget: int
+        self, mainView: ViewSpec, lostFrames: int, budget: int, frameIndex: int
     ) -> tuple[tuple[ViewSpec, ...], bool]:
         """The scan of a lost frame under ``scanMode: zoom``, and whether it is refined.
 
@@ -375,7 +388,11 @@ class TrackControllerImpl(TrackControllerProtocol):
         tuning = self._backendTuning
         trusted = self._lastGoodBfov
         assert trusted is not None and self._currentBfov is not None
-        if lostFrames == 0 and tuning.zoomInPlace:
+        confirmedLately = (
+            self._lastConfirmedFrame is not None
+            and frameIndex - self._lastConfirmedFrame <= _CONFIRM_COOLDOWN_FRAMES
+        )
+        if lostFrames == 0 and tuning.zoomInPlace and not confirmedLately:
             if budget < 1:
                 return (), False
             self._lastScan = "1x"
@@ -440,9 +457,10 @@ class TrackControllerImpl(TrackControllerProtocol):
             frameHeightPx=pending.frame.rgb.shape[0],
         )
         trace = self._traceOf(pending, evaluation)
+        confirmed = False
         if self._actions != "none":
-            chosen, trace["candidates"] = self._reacquisitionCandidate(
-                observation, candidates
+            chosen, confirmed, trace["candidates"] = self._reacquisitionCandidate(
+                observation, candidates, inPlace=self._lastScan == "1x"
             )
             if chosen is not None:
                 result = self._reacquire(pending, chosen)
@@ -458,6 +476,15 @@ class TrackControllerImpl(TrackControllerProtocol):
             backendScore=evaluation.backendScore if evaluation.hasCandidate else None,
             appearanceScore=evaluation.appearanceScore,
         )
+        if confirmed:
+            # The look without memory found the box the tracker has: the doubt ends
+            # and the tracker keeps what it learnt.
+            self._stateMachine.reset()
+            decision = replace(
+                decision, nextMode=TrackMode.TRACKING, reason=TransitionReason.CONFIRMED
+            )
+            self._lastConfirmedFrame = int(pending.frame.frameIndex)
+            trace["action"] = "confirm"
         result = self._commit(pending, evaluation, decision)
         trace.update(
             modeAfter=decision.nextMode.name,
@@ -523,8 +550,15 @@ class TrackControllerImpl(TrackControllerProtocol):
         self,
         observation: ProjectedObservation | None,
         candidates: Sequence[ProjectedObservation],
-    ) -> tuple[ProjectedObservation | None, list[dict[str, object]]]:
-        """The scan candidate to jump to, if any, and why each one was or was not it."""
+        *,
+        inPlace: bool = False,
+    ) -> tuple[ProjectedObservation | None, bool, list[dict[str, object]]]:
+        """The scan candidate to jump to, if any, and why each one was or was not it.
+
+        A candidate that is the tracked box found again is never jumped to: the
+        jump would change nothing but the tracker's memory.  When it came from the
+        look in place it confirms the tracked box instead (the second value).
+        """
         tuning = self._backendTuning
         current = -1.0
         if observation is not None and observation.appearanceSimilarity is not None:
@@ -532,6 +566,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         best: ProjectedObservation | None = None
         records: list[dict[str, object]] = []
         bestRecord: dict[str, object] | None = None
+        confirmed = False
         for candidate in candidates:
             similarity = candidate.appearanceSimilarity
             score = _observationScore(candidate)
@@ -541,6 +576,9 @@ class TrackControllerImpl(TrackControllerProtocol):
                 verdict = "low_margin"
             elif score < tuning.reacquireScore:
                 verdict = "low_score"
+            elif observation is not None and _samePlace(candidate.bfov, observation.bfov):
+                verdict = "same_place"
+                confirmed = confirmed or inPlace
             else:
                 verdict = "not_best"
             record: dict[str, object] = {
@@ -557,7 +595,7 @@ class TrackControllerImpl(TrackControllerProtocol):
                 best, bestRecord = candidate, record
         if bestRecord is not None:
             bestRecord["verdict"] = "accepted"
-        return best, records
+        return best, confirmed and best is None, records
 
     def _reacquire(
         self, pending: _PendingFrame, candidate: ProjectedObservation
@@ -783,6 +821,20 @@ def _observationScore(observation: ProjectedObservation) -> float:
 def _motionCenter(motion: MotionState3D):
     x, y, z = motion.position
     return makeSphericalPoint(atan2(x, z), asin(max(-1.0, min(1.0, y))))
+
+
+def _samePlace(first: BFoV, second: BFoV) -> bool:
+    """Whether two boxes are the same box up to a small shift and change of size."""
+    cosine = (
+        first.center.x * second.center.x
+        + first.center.y * second.center.y
+        + first.center.z * second.center.z
+    )
+    sizes = _angularSize(first), _angularSize(second)
+    return (
+        acos(max(-1.0, min(1.0, cosine))) < _SAME_PLACE_OFFSET * max(sizes)
+        and max(sizes) < _SAME_PLACE_SIZE_RATIO * min(sizes)
+    )
 
 
 def _angularSize(bfov: BFoV) -> float:

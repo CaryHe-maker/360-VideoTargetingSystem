@@ -28,6 +28,7 @@ class TransitionReason(Enum):
     WEAK_MEASUREMENT = auto()
     HARD_MISS = auto()
     RELEASED = auto()
+    CONFIRMED = auto()
 
 
 @dataclass(frozen=True, slots=True)
