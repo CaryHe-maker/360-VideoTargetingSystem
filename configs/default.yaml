@@ -23,26 +23,20 @@ motion:
   maxLogScaleRatePerSec: 1.0
 tracking:
   candidateMinScore: 0.597262
-  stableFramesBeforeUpdate: 8
   windowLength: 5
   contextScale: 2.0
   contextMarginRatio: 0.15
   maxPredictionHorizon: 3
 backendTuning:
-  sequenceModel: true
   acceptAnyCandidate: true
   viewHorizontalFovCapDeg: 90.0
   viewVerticalFovCapDeg: 90.0
-  fullViewSearch: false
-  alignedSearch: true
   alignedMinFovDeg: 2.0
   sphericalSearch: true
   sphericalSearchFovDeg: 120.0
   predictiveSearch: true
   useMotionScore: false
   templateFovScale: 2.5
-  onlineTemplate: true
-  templateMinConfidence: 0.515
   holdWeakBox: true
   lossHandling: false
   verifierModel: dinov2

@@ -31,7 +31,7 @@ from track360.controller import (
     scoreViewCenterMotion,
 )
 from track360.core.config import AppConfig, ModelConfig
-from track360.core.errors import ConfigError, DecodeError, GeometryError
+from track360.core.errors import DecodeError, GeometryError
 from track360.core.protocols import FrameSource as FrameSourceProtocol
 from track360.core.protocols import ResultSink as ResultSinkProtocol
 from track360.core.protocols import SphericalGeometry, TrackerBackend
@@ -46,7 +46,7 @@ from track360.core.types import (
     SearchPlan,
     ViewSpec,
 )
-from track360.geometry import GpuGeometryImpl, SphericalGeometryImpl
+from track360.geometry import SphericalGeometryImpl
 from track360.io.result_sink import FileResultSink
 from track360.runtime.reproducibility import seedEverything
 
@@ -161,17 +161,8 @@ def buildRuntime(
 ) -> RuntimeBundle:
     tuning = config.backendTuning
     seedEverything(config.reproducibility)
-    if tuning.alignedSearch and config.geometry.resampler == "cuda":
-        raise ConfigError(
-            "backendTuning.alignedSearch is not implemented for geometry.resampler: cuda"
-        )
     if geometryFactory is not None:
         geometry = geometryFactory(config.geometry.boundarySamplesPerEdge)
-    elif config.geometry.resampler == "cuda":
-        geometry = GpuGeometryImpl(
-            boundarySamplesPerEdge=config.geometry.boundarySamplesPerEdge,
-            profileEnabled=profile,
-        )
     else:
         geometry = SphericalGeometryImpl(
             boundarySamplesPerEdge=config.geometry.boundarySamplesPerEdge,
@@ -301,7 +292,6 @@ def runTracking(
                                 controller,
                                 frame,
                                 error,
-                                backendRevision=getattr(backend, "templateRevision", None),
                             )
                             _finishProfileFrame(
                                 profiler,
@@ -335,13 +325,8 @@ def runTracking(
                                 else None
                             )
                             with _profile(profiler, "backend"):
-                                rawObservation = backend.infer((view,), plan.templateCommand)[0]
+                                rawObservation = backend.infer((view,))[0]
                             probed = (view, rawObservation)
-                            if recorder is not None and hasattr(recorder, "setActiveTemplateFrame"):
-                                recorder.setActiveTemplateFrame(  # type: ignore[attr-defined]
-                                    int(frame.frameIndex),
-                                    getattr(backend, "activeTemplateFrameIndex", 0),
-                                )
                             _recordBackendProfile(profiler, backend)
                             with _profile(profiler, "calibration"):
                                 observation = calibrateLocalAppearanceProbabilities(
@@ -363,7 +348,7 @@ def runTracking(
                             # metadata.  Never retain CUDA tensors after this frame.
                             if recorder is not None:
                                 visualization = (
-                                    LocalView(spec=view.spec, rgb=view.rgb, deviceRgb=None),
+                                    LocalView(spec=view.spec, rgb=view.rgb),
                                     observation,
                                     projected,
                                 )
@@ -419,7 +404,6 @@ def runTracking(
                                 controller,
                                 frame,
                                 error,
-                                backendRevision=getattr(backend, "templateRevision", None),
                             )
                         if probe is not None and probed is not None:
                             # Observation only: a failing probe must not touch the run.
@@ -504,8 +488,6 @@ def _fallbackFrameResult(
     controller: TrackControllerImpl,
     frame: FramePacket,
     error: BaseException,
-    *,
-    backendRevision: int | None = None,
 ):
     """Convert any expected runtime failure into one invalid frame result."""
     print(
@@ -515,7 +497,6 @@ def _fallbackFrameResult(
     )
     return controller.commitFallback(
         frame,
-        backendRevision=backendRevision,
         reason=type(error).__name__,
     )
 

@@ -18,7 +18,6 @@ from track360.core.types import (
     ProjectedObservation,
     SearchPlan,
     SphericalPoint,
-    TemplateCommand,
     TrackResult,
     ViewSpec,
 )
@@ -93,11 +92,7 @@ class TrackerBackend(Protocol):
         templateBox: BBoxXYWH,
     ) -> None: ...
 
-    def infer(
-        self,
-        views: Sequence[LocalView],
-        command: TemplateCommand,
-    ) -> Sequence[LocalObservation]: ...
+    def infer(self, views: Sequence[LocalView]) -> Sequence[LocalObservation]: ...
 
     def close(self) -> None: ...
 

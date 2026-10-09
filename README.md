@@ -75,7 +75,7 @@ src/track360/
 ├── cli.py          统一命令行入口
 ├── core/           数据类型、协议、配置 schema、错误类型
 ├── geometry/       球面数学、BFoV 投影、跨缝区间、CUDA 重采样
-├── controller/     视图规划、测量判定、运动预测、状态机、模板策略
+├── controller/     视图规划、测量判定、运动预测、状态机、丢失处理
 ├── backends/       ARTrackV2 推理会话与批量适配
 ├── runtime/        组件装配与逐帧循环
 ├── datasets/       360VOT / AirSim360 / 视频 / 图像序列读取

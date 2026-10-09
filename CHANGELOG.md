@@ -4,6 +4,24 @@
 
 ## [未发布]
 
+### 清理旧版本的代码路径
+
+#### 移除
+
+- 帧级模型的会话（`PyTorchARTrackV2Session`）和上游的帧级模型代码；`backendTuning.sequenceModel`。现在只有序列级模型。
+- 模板更新：模板命令、模板策略、模板缓存；`backendTuning.onlineTemplate`、`templateMinConfidence`、`tracking.stableFramesBeforeUpdate`。后端的 `infer` 不再接收模板命令。
+- 显卡取视图（`GpuGeometryImpl`、`geometry.resampler: cuda`）和后端里接收显卡张量的路径；`LocalView.deviceRgb`。
+- 旧的搜索视图取法和整视图搜索；`backendTuning.alignedSearch`、`fullViewSearch`。
+- 分开规则、试用期、干扰物记忆（E022 的结论是没有收益）；对应的 8 个配置项。`stateRule` 只有 `fused` 和 `relative`，`lossActions` 只有 `none` 和 `jump`。
+- 没有调用方的函数：`startTimingNs`、`requireDestination`、`lastTransition`。
+
+默认配置的结果不变：068、006 两条序列的框和分数与 E015 逐字节相同，基线 `b0` 在 068 上与 E011 的结果相同。
+
+#### 新增
+
+- `backendTuning.stateRule: relative`：相对量的丢失判定（E027）。
+- `backendTuning.scanMode: zoom`：先放大定位、再正常视图细看的搜索（E029、E030）；`scanBudgetPerFrame` / `scanBudgetBurst` 限制搜索的前向次数（E023）。
+
 ### 状态机的分开规则、锁、试用期和逐帧记录（实验用，默认不启用）
 
 #### 新增

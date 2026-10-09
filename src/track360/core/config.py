@@ -11,7 +11,7 @@ from track360.core.errors import ConfigError
 
 SUPPORTED_SCHEMA_VERSION = 1
 VISUALIZATION_STAGES = frozenset({"local_rgb", "backend_box", "geometry_box"})
-GEOMETRY_RESAMPLERS = frozenset({"cpu", "opencv", "cuda"})
+GEOMETRY_RESAMPLERS = frozenset({"cpu", "opencv"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +90,6 @@ class MotionConfig:
 @dataclass(frozen=True, slots=True)
 class TrackingConfig:
     candidateMinScore: float
-    stableFramesBeforeUpdate: int
     windowLength: int
     contextScale: float = 2.0
     contextMarginRatio: float = 0.15
@@ -98,8 +97,6 @@ class TrackingConfig:
 
     def __post_init__(self) -> None:
         _requireProbability("tracking.candidateMinScore", self.candidateMinScore)
-        if self.stableFramesBeforeUpdate <= 0:
-            raise ConfigError("tracking.stableFramesBeforeUpdate must be positive")
         if self.windowLength < 2:
             raise ConfigError("tracking.windowLength must be at least 2")
         if not isfinite(self.contextScale) or self.contextScale < 2.0:
@@ -119,20 +116,15 @@ class BackendTuningConfig:
     applies.
     """
 
-    sequenceModel: bool = True
     acceptAnyCandidate: bool = True
     viewHorizontalFovCapRad: float | None = pi / 2.0
     viewVerticalFovCapRad: float | None = pi / 2.0
-    fullViewSearch: bool = False
-    alignedSearch: bool = True
     alignedMinFovRad: float = pi / 90.0
     sphericalSearch: bool = True
     sphericalSearchFovRad: float = 2.0 * pi / 3.0
     predictiveSearch: bool = True
     useMotionScore: bool = False
     templateFovScale: float = 2.5
-    onlineTemplate: bool = True
-    templateMinConfidence: float = 0.515
     holdWeakBox: bool = True
     # Loss handling: doubt a frame, search for the target elsewhere, jump back to it.
     lossHandling: bool = False
@@ -182,14 +174,10 @@ class BackendTuningConfig:
             "lossHandling",
             "stateLatch",
             "zoomInPlace",
-            "sequenceModel",
             "acceptAnyCandidate",
-            "fullViewSearch",
-            "alignedSearch",
             "sphericalSearch",
             "predictiveSearch",
             "useMotionScore",
-            "onlineTemplate",
             "holdWeakBox",
         ):
             if not isinstance(getattr(self, name), bool):
@@ -198,10 +186,6 @@ class BackendTuningConfig:
             value = getattr(self, name)
             if value is not None and not 0.0 < value < pi:
                 raise ConfigError(f"backendTuning.{name} must be in (0, pi)")
-        if self.alignedSearch and self.fullViewSearch:
-            raise ConfigError(
-                "backendTuning.alignedSearch and fullViewSearch cannot both be enabled"
-            )
         if self.stateRule not in ("fused", "relative"):
             raise ConfigError("backendTuning.stateRule must be fused or relative")
         if self.scanMode not in ("tiles", "zoom"):
@@ -258,7 +242,6 @@ class BackendTuningConfig:
             raise ConfigError("backendTuning.alignedMinFovDeg must be in (0, 180)")
         if not isfinite(self.templateFovScale) or self.templateFovScale < 1.0:
             raise ConfigError("backendTuning.templateFovScale must be at least 1")
-        _requireProbability("backendTuning.templateMinConfidence", self.templateMinConfidence)
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,7 +359,6 @@ def loadConfig(path: str | Path) -> AppConfig:
         "tracking",
         {
             "candidateMinScore",
-            "stableFramesBeforeUpdate",
             "windowLength",
             "contextScale",
             "contextMarginRatio",
@@ -387,20 +369,15 @@ def loadConfig(path: str | Path) -> AppConfig:
         root,
         "backendTuning",
         {
-            "sequenceModel",
             "acceptAnyCandidate",
             "viewHorizontalFovCapDeg",
             "viewVerticalFovCapDeg",
-            "fullViewSearch",
-            "alignedSearch",
             "alignedMinFovDeg",
             "sphericalSearch",
             "sphericalSearchFovDeg",
             "predictiveSearch",
             "useMotionScore",
             "templateFovScale",
-            "onlineTemplate",
-            "templateMinConfidence",
             "holdWeakBox",
             "lossHandling",
             "verifierModel",
@@ -508,9 +485,6 @@ def loadConfig(path: str | Path) -> AppConfig:
             candidateMinScore=_requireFloat(
                 "tracking.candidateMinScore", trackingRaw["candidateMinScore"]
             ),
-            stableFramesBeforeUpdate=_requireInt(
-                "tracking.stableFramesBeforeUpdate", trackingRaw["stableFramesBeforeUpdate"]
-            ),
             windowLength=_requireInt("tracking.windowLength", trackingRaw["windowLength"]),
             contextScale=_requireFloat("tracking.contextScale", trackingRaw["contextScale"]),
             contextMarginRatio=_requireFloat(
@@ -521,9 +495,6 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
         ),
         backendTuning=BackendTuningConfig(
-            sequenceModel=_requireBool(
-                "backendTuning.sequenceModel", tuningRaw["sequenceModel"]
-            ),
             acceptAnyCandidate=_requireBool(
                 "backendTuning.acceptAnyCandidate", tuningRaw["acceptAnyCandidate"]
             ),
@@ -534,12 +505,6 @@ def loadConfig(path: str | Path) -> AppConfig:
             viewVerticalFovCapRad=_optionalDegreesToRadians(
                 "backendTuning.viewVerticalFovCapDeg",
                 tuningRaw["viewVerticalFovCapDeg"],
-            ),
-            fullViewSearch=_requireBool(
-                "backendTuning.fullViewSearch", tuningRaw["fullViewSearch"]
-            ),
-            alignedSearch=_requireBool(
-                "backendTuning.alignedSearch", tuningRaw["alignedSearch"]
             ),
             sphericalSearch=_requireBool(
                 "backendTuning.sphericalSearch", tuningRaw["sphericalSearch"]
@@ -562,12 +527,6 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
             templateFovScale=_requireFloat(
                 "backendTuning.templateFovScale", tuningRaw["templateFovScale"]
-            ),
-            onlineTemplate=_requireBool(
-                "backendTuning.onlineTemplate", tuningRaw["onlineTemplate"]
-            ),
-            templateMinConfidence=_requireFloat(
-                "backendTuning.templateMinConfidence", tuningRaw["templateMinConfidence"]
             ),
             holdWeakBox=_requireBool("backendTuning.holdWeakBox", tuningRaw["holdWeakBox"]),
             lossHandling=_requireBool(

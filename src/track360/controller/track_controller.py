@@ -17,7 +17,6 @@ from track360.controller.state_model import (
     TrackMode,
     TransitionDecision,
 )
-from track360.controller.template_policy import TemplateDecision, TemplatePolicy
 from track360.controller.view_planner import (
     REFINE_VIEW_ID_BASE,
     SCAN_VIEW_ID_BASE,
@@ -47,8 +46,6 @@ from track360.core.types import (
     ResultSource,
     SearchPlan,
     SphericalPoint,
-    TemplateCommand,
-    TemplateCommandKind,
     TrackResult,
     TrackStatus,
     ViewSpec,
@@ -115,22 +112,18 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._evaluator = StateEvaluator(trackingConfig, backendTuning)
         self._planner = ViewPlanner(geometryConfig, trackingConfig, backendTuning)
         self._stateMachine = TrackStateMachine(backendTuning)
-        self._templatePolicy = TemplatePolicy(trackingConfig, backendTuning)
 
         self._initialized = False
         self._sequenceId: str | None = None
         self._lastFrameIndex = -1
         self._stateRevision = -1
-        self._backendRevision = 0
         self._mode = TrackMode.INIT
-        self._stableFrames = 0
         self._lastFrame: FramePacket | None = None
         self._initialBox: BBoxXYWH | None = None
         self._currentBox: BBoxXYWH | None = None
         self._currentBfov: BFoV | None = None
         # The target's BFoV after each of the last frames, oldest first.
         self._trajectory: deque[BFoV] = deque(maxlen=TRAJECTORY_LENGTH)
-        self._pendingTemplate = TemplateDecision(TemplateCommandKind.KEEP)
         self._pending: _PendingFrame | None = None
         self._initialPlan: InitializationPlan | None = None
         self._lastStateObservation: StateObservation | None = None
@@ -356,13 +349,6 @@ class TrackControllerImpl(TrackControllerProtocol):
             frameIndex=frame.frameIndex,
             stateRevision=self._stateRevision + 1,
             view=mainView,
-            templateCommand=TemplateCommand(
-                kind=self._pendingTemplate.kind,
-                frameIndex=frame.frameIndex,
-                viewId=self._pendingTemplate.viewId,
-                localBox=self._pendingTemplate.localBox,
-                expectedRevision=self._backendRevision + 1,
-            ),
             predictedMotion=prediction.motionState,
             scanViews=scanViews,
             scanRefine=scanRefine,
@@ -374,7 +360,6 @@ class TrackControllerImpl(TrackControllerProtocol):
             predictedBfov=predictedBfov,
             mode=self._mode,
         )
-        self._pendingTemplate = TemplateDecision(TemplateCommandKind.KEEP)
         return plan
 
     def _zoomScan(
@@ -466,7 +451,6 @@ class TrackControllerImpl(TrackControllerProtocol):
                 )
                 self._lastFrameTrace = trace
                 return result
-        self._backendRevision = plan.templateCommand.expectedRevision
         decision = self._stateMachine.transition(
             pending.mode,
             evaluation.stateScore,
@@ -581,7 +565,6 @@ class TrackControllerImpl(TrackControllerProtocol):
         """Restart the track from a scan candidate."""
         plan, frame = pending.plan, pending.frame
         score = _observationScore(candidate)
-        self._backendRevision = plan.templateCommand.expectedRevision
         self._lastGoodBfov = candidate.bfov
         self._stateMachine.reset()
         self._scanCursor = 0
@@ -593,8 +576,6 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._lastFrameReacquired = True
         self._reacquiredFrames.append(int(frame.frameIndex))
         self._mode = TrackMode.TRACKING
-        self._stableFrames = 0
-        self._pendingTemplate = TemplateDecision(TemplateCommandKind.KEEP)
         self._stateRevision = plan.stateRevision
         self._lastFrameIndex = int(frame.frameIndex)
         self._lastFrame = frame
@@ -620,7 +601,6 @@ class TrackControllerImpl(TrackControllerProtocol):
         self,
         frame: FramePacket,
         *,
-        backendRevision: int | None = None,
         reason: str = "frame_error",
     ) -> TrackResult:
         """Advance past one failed frame and emit an invalid, zero-scored result.
@@ -647,13 +627,9 @@ class TrackControllerImpl(TrackControllerProtocol):
             else self._stateRevision + 1
         )
         self._stateRevision = max(self._stateRevision + 1, plannedRevision)
-        if backendRevision is not None:
-            self._backendRevision = max(self._backendRevision, int(backendRevision))
         self._lastFrameIndex = int(frame.frameIndex)
         self._lastFrame = frame
         self._pending = None
-        self._pendingTemplate = TemplateDecision(TemplateCommandKind.KEEP)
-        self._stableFrames = 0
         self._lastStateObservation = None
         self._lastPipelineProfile = {
             "pipelineFrameFallback": True,
@@ -721,15 +697,6 @@ class TrackControllerImpl(TrackControllerProtocol):
                     max(self._trackingConfig.candidateMinScore, evaluation.backendScore),
                 )
         self._mode = decision.nextMode
-        if accepted and self._mode is TrackMode.TRACKING:
-            self._stableFrames += 1
-        else:
-            self._stableFrames = 0
-        self._pendingTemplate = self._templatePolicy.decide(
-            _publicStatus(self._mode),
-            self._stableFrames,
-            evaluation,
-        )
         assert self._currentBfov is not None
         self._trajectory.append(self._currentBfov)
         self._stateRevision = pending.plan.stateRevision

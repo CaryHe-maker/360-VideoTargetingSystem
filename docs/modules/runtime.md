@@ -15,7 +15,7 @@ Runtime 是组合根和执行器，本身不实现状态判定或模型算法。
 `buildRuntime(config)` 按配置创建并返回 `RuntimeBundle`：
 
 1. 固定随机种子并按 `reproducibility.deterministic` 设置 cuDNN；
-2. Geometry：`geometry.resampler` 为 `cpu` 时使用 `SphericalGeometryImpl`（默认），为 `cuda` 时使用 `GpuGeometryImpl`；
+2. Geometry：`SphericalGeometryImpl`，`geometry.resampler` 选择取色方式（`opencv` 默认，`cpu` 是参考实现）；
 3. 后端：`PyTorchARTrackV2Session` → `ARTrackBackend` → `TrackerBackendImpl`；
 4. 控制器：`TrackControllerImpl(geometry, config)`；
 5. 结果输出：`FileResultSink`；

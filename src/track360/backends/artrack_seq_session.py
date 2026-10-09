@@ -31,7 +31,6 @@ from track360.backends.artrack_model import (
     ARTrackPrediction,
     ARTrackSession,
     ARTrackTemplate,
-    PyTorchARTrackV2Session,
     _activateVendorTree,
     _centeredPrior,
     _clipBox,
@@ -53,7 +52,6 @@ _COORDINATE_MAX = 1.5
 class PyTorchARTrackV2SeqSession:
     """Official ARTrackV2-B-256 run as a sequence-level tracker."""
 
-    supportsOnlineTemplates = False
 
     def __init__(self, config: ModelConfig, *, artrackRoot: str | Path | None = None) -> None:
         if config.backend != "pytorch":
@@ -299,12 +297,9 @@ def trajectoryTokens(
 
 
 def createArtrackSession(config: AppConfig) -> ARTrackSession:
-    """Load the ARTrackV2 session the configuration asks for."""
-    if config.backendTuning.sequenceModel:
-        return PyTorchARTrackV2SeqSession(config.model)
-    return PyTorchARTrackV2Session(
-        config.model, fullViewSearch=config.backendTuning.fullViewSearch
-    )
+    """Load the ARTrackV2 session of the configured model."""
+    return PyTorchARTrackV2SeqSession(config.model)
+
 
 
 __all__ = [

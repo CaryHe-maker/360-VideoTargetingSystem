@@ -4,11 +4,11 @@
 
 | 文件 | 职责 |
 |---|---|
-| `backends/artrack_model.py` | `PyTorchARTrackV2Session`：加载官方网络、模板 / 搜索裁剪、坐标解码；`ARTrackBackend`：批量输入输出校验 |
+| `backends/artrack_model.py` | 模板和预测的数据类型、裁剪与坐标的公共函数；`ARTrackBackend`：批量输入输出校验 |
 | `backends/artrack_backend.py` | `TrackerBackendImpl`：实现 `core.protocols.TrackerBackend`，把模板 revision、局部框和控制器的模板命令串起来 |
 | `backends/template_cache.py` | 模板缓存：anchor 模板与 recent 模板、revision 管理 |
 | `backends/observation.py` | 把模型预测转换为 `LocalObservation` |
-| `third_party/artrackv2/` | 上游模型代码的推理子集：帧级模型（`lib/models/artrackv2`）、序列级模型（`lib/models/artrackv2_seq`）、外观解码器、配置 |
+| `third_party/artrackv2/` | 上游模型代码的推理子集：序列级模型（`lib/models/artrackv2_seq`）、外观解码器、配置 |
 
 ## 这份权重是序列级模型
 
@@ -17,12 +17,11 @@
 - **轨迹提示**：前 7 帧的目标框，换算成当前搜索图里的坐标，作为输入序列的一部分；
 - **外观特征**：第二个模板位不是一张图，而是模型自己每帧重写的一组特征（由一个 8 层的解码器生成）。
 
-2026-10-07 之前，本项目用帧级的模型代码加载这份权重：权重里的 106 组参数（轨迹位置嵌入、外观解码器）因为模型里没有对应的位置被悄悄丢掉，推理时也没有喂轨迹。模型在它没有被训练过的输入形式下运行，分数头的输出因此和 IoU 无关（[评测记录](../evaluation-log.md) E008）。现在默认用序列级的模型代码（`backendTuning.sequenceModel: true`），权重严格加载，一个参数都不多、不少。
+2026-10-07 之前，本项目用帧级的模型代码加载这份权重：权重里的 106 组参数（轨迹位置嵌入、外观解码器）因为模型里没有对应的位置被悄悄丢掉，推理时也没有喂轨迹。模型在它没有被训练过的输入形式下运行，分数头的输出因此和 IoU 无关（[评测记录](../evaluation-log.md) E008）。现在只用序列级的模型代码，权重严格加载，一个参数都不多、不少；帧级的模型代码已经删除。
 
 | 文件 | 职责 |
 |---|---|
 | `backends/artrack_seq_session.py` | `PyTorchARTrackV2SeqSession`：序列级推理；`createArtrackSession()` 按配置选择会话 |
-| `backends/artrack_model.py` | `PyTorchARTrackV2Session`：帧级推理，只在 `sequenceModel: false` 时使用，保留用于对照 |
 
 ## 推理流程（序列级）
 
@@ -39,7 +38,7 @@
 
 轨迹由 Controller 提供，因为只有它知道之前的框在球面上的位置：它保存最近 7 帧提交的 BFoV，规划视图时把它们投影到新视图里（见 [Controller](controller.md#视图规划)）。直接在 ERP 上跟踪的基线 `b0` 坐标系不变，直接用前 7 帧的 ERP 框。
 
-序列级模型自己管理外观，不接受框架的模板更新：`sequenceModel: true` 时 `onlineTemplate` 不起作用。
+序列级模型自己管理外观，不接受框架的模板更新；框架只在第 0 帧编码一次模板。
 
 ## 权重加载
 
@@ -68,7 +67,6 @@
 
 - 推理始终是 FP32，`model.precision` 只接受 `fp32`。FP16 / TensorRT 是 [V2Plan](../V2Plan.md) Phase 5 的工作；
 - 后端由 `createArtrackSession()` 按配置创建，还没有注册表机制；
-- 序列级会话只有 CPU 重采样的输入路径，不支持 `geometry.resampler: cuda`。
 
 ## 接入新后端
 

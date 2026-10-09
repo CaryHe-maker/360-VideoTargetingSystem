@@ -27,8 +27,6 @@ SCENARIOS = ("seam", "large")
 class FakeARTrackSession:
     """Locate the saturated-red target in each view and score it by its coverage."""
 
-    supportsOnlineTemplates = True
-
     def __init__(self, config: ModelConfig) -> None:
         del config
         self.calls: list[dict[str, Any]] = []

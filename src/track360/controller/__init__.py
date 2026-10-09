@@ -17,7 +17,6 @@ from track360.controller.score_calibration import (
 from track360.controller.state_evaluator import StateEvaluator
 from track360.controller.state_machine import TrackStateMachine
 from track360.controller.state_model import MotionPrediction, StateObservation, TrackMode
-from track360.controller.template_policy import TemplateDecision, TemplatePolicy
 from track360.controller.track_controller import TrackControllerImpl
 from track360.controller.view_planner import ViewPlanner
 
@@ -36,8 +35,6 @@ __all__ = [
     "SphericalMotionEstimator",
     "scoreViewCenterMotion",
     "loadScoreCalibration",
-    "TemplateDecision",
-    "TemplatePolicy",
     "TrackStateMachine",
     "TrackMode",
     "TrackControllerImpl",

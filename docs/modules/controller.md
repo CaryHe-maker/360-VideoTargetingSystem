@@ -12,11 +12,10 @@ Controller 决定“看哪里、是否接受这一帧的框、下一帧处于什
 | `fused_score.py` | 外观分校准、视图运动先验、SingleScore 合成 |
 | `score_calibration.py` | 可选的、与权重绑定的分数校准产物加载 |
 | `state_machine.py` | 跨帧的纯状态转移 |
-| `template_policy.py` | 模板策略：固定第 0 帧 anchor，可选 recent / stable 模板更新 |
 
 ## 视图规划
 
-每帧的视图就是 ARTrackV2 训练时见到的那种搜索区域（`backendTuning.alignedSearch: true`，默认）。`ViewPlanner.searchView(center, width, height)` 返回的视图：
+每帧的视图就是 ARTrackV2 训练时见到的那种搜索区域。`ViewPlanner.searchView(center, width, height)` 返回的视图：
 
 - 中心是运动模型预测的目标方向；
 - 是正方形，两个方向的角分辨率相同，目标保持原来的长宽比；
@@ -42,15 +41,7 @@ Controller 决定“看哪里、是否接受这一帧的框、下一帧处于什
 
 `sphericalSearch: false` 是之前的行为：透视视场封顶在 `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg`，超出部分补黑边。
 
-`TRACKING` 和 `UNCERTAIN` 两种状态使用相同的规划，没有“丢失后全局搜索”的路径。这种取法不支持 `geometry.resampler: cuda`，同时配置会直接报错。
-
-### 旧的取法
-
-`alignedSearch: false` 保留了 2026-10-07 之前的默认行为，只用于对照：
-
-- 视图的水平、垂直视场分别是目标宽、高的 3 倍，限制在 `geometry.minFovDeg`（20°）到上限之间。两个方向各自确定，所以目标会被拉成接近正方形；
-- 后端在视图里再按目标的 4 倍裁一次搜索区域（`fullViewSearch: true` 时不裁，整个视图就是搜索区域）；
-- 模板视图的两个方向各取目标的 `templateFovScale` 倍。
+`TRACKING` 和 `UNCERTAIN` 两种状态使用相同的规划，丢失后的搜索见下面“丢失处理”一节。
 
 换成现在的取法后，66 条可用训练序列上的 S<sub>dual</sub> 从 0.278 升到 0.473（[评测记录](../evaluation-log.md) E005、E007）。
 
@@ -126,15 +117,9 @@ Controller 决定“看哪里、是否接受这一帧的框、下一帧处于什
 
 一帧达标就回到 `TRACKING`；没有框的帧状态分数为 0。`stateLatch: true` 时改成“锁住”：状态分数要回到 `uncertainScore + latchReleaseMargin` 以上并保持 `releaseFrames` 帧才回到 `TRACKING`。
 
-另有一条实验用的**分开规则**（`stateRule: split`），不用融合分，让三个分数各管各的决定：后端分、运动分或模板相似度最近 5 帧的均值过低时进入 `UNCERTAIN`；后端分和模板相似度都回到解除门槛并保持 `releaseFrames` 帧才回到 `TRACKING`；可疑满 `lostAfterFrames` 帧且这几帧的模板相似度偏低才是 `LOST`。`lossActions: probation` 时，跳转后的 `probationFrames` 帧是 `PROBATION`（对外是 `UNCERTAIN`）：通过才算找回，不通过就退回跳转前的位置和外观记忆，并记住这个位置。两者默认都不启用，门槛和实验结果见 [评测记录](../evaluation-log.md) E022，配置项见 [配置](../configuration.md)。
+另一条规则是**相对量**（`stateRule: relative`）：后端分和模板相似度各自除以本序列到目前为止可信帧的中位数再减 1，取两者的平均；一帧比基线低不超过 `relativeGate` 才算可信、才进入基线。平均偏离低于 `relativeEnterDeviation` 就不可信并锁住，回到这个门槛的一半以内并保持 `releaseFrames` 帧才解除。它没有权重，也不依赖分数的绝对水平（[评测记录](../evaluation-log.md) E027）。
 
 开启丢失处理的运行会在 `trace/<方法>/<序列>.csv` 里写逐帧记录（三个分数、状态、转移原因、动作、扫描候选），`tools/state_trace.py` 把它和真值接起来。丢失处理关闭时状态照样计算，但只作为结果里的状态标签，不改变跟踪行为。对外发布的置信度（`score/` 文件）是后端自己的分数，不是状态分数。
-
-## 模板策略
-
-默认的序列级模型自己每帧更新外观特征，框架不做模板更新，本节只适用于 `sequenceModel: false`。
-
-模板固定使用第 0 帧初始化时的 anchor。`onlineTemplate: true` 时，分数不低于 `templateMinConfidence` 的观测可以刷新 recent 模板（大约每两帧一次），连续稳定 `stableFramesBeforeUpdate` 帧后刷新 stable 模板；anchor 始终保留，防止目标漂移后模板被完全污染。
 
 ## 逐帧协议
 

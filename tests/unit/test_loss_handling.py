@@ -19,8 +19,6 @@ from track360.core.types import (
     LocalView,
     ProjectedObservation,
     SequenceId,
-    TemplateCommand,
-    TemplateCommandKind,
     ViewProjection,
     ViewSpec,
 )
@@ -198,7 +196,6 @@ class ScanViewsTest(unittest.TestCase):
 class _StatefulSession:
     """A session stand-in whose template carries a per-sequence memory."""
 
-    supportsOnlineTemplates = False
     trajectoryLength = 7
 
     def __init__(self) -> None:
@@ -236,9 +233,8 @@ class BackendStateTest(unittest.TestCase):
         self.backend.initialize(self.view, BBoxXYWH(20.0, 20.0, 16.0, 16.0))
 
     def _infer(self, revision: int):
-        return self.backend.infer(
-            (self.view,), TemplateCommand(TemplateCommandKind.KEEP, revision, None, None, revision)
-        )
+        del revision
+        return self.backend.infer((self.view,))
 
     def testAFrameCanBeUndoneAndTheTrackerCanStartOver(self) -> None:
         self._infer(1)

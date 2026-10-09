@@ -7,101 +7,60 @@ from time import perf_counter_ns
 
 from track360.backends.artrack_model import ARTrackBackend
 from track360.backends.observation import buildRgbObservation
-from track360.backends.template_cache import TemplateCache
 from track360.core.errors import ModelError, ProtocolError
 from track360.core.protocols import TrackerBackend as TrackerBackendProtocol
 from track360.core.types import (
     BBoxXYWH,
     LocalObservation,
     LocalView,
-    TemplateCommand,
 )
 
 
 class TrackerBackendImpl(TrackerBackendProtocol):
-    """Own one RGB ARTrackV2 session, its template cache, and observations."""
+    """Own one RGB ARTrackV2 session, its frame-0 template, and observations."""
 
     def __init__(self, artrackBackend: ARTrackBackend) -> None:
         self._artrackBackend = artrackBackend
         self._usesTrajectory = artrackBackend.trajectoryLength > 0
-        self._templates = TemplateCache()
-        self._previousViews: dict[int, LocalView] = {}
-        self._previousViewsFrameIndex: int | None = None
+        self._template: object | None = None
         self._initialized = False
         self._closed = False
 
     @property
-    def templateRevision(self) -> int:
-        return self._templates.revision
-
-    @property
     def lastProfile(self) -> dict[str, int | float | bool | str]:
         return self._artrackBackend.lastProfile
-
-    @property
-    def activeTemplateFrameIndex(self) -> int:
-        return self._templates.activeTemplateFrameIndex
 
     def initialize(self, template: LocalView, templateBox: BBoxXYWH) -> None:
         if self._closed:
             raise ProtocolError("tracker backend is closed")
         if self._initialized:
             raise ProtocolError("tracker backend is already initialized")
-        self._templates.initialize(self._artrackBackend, template, templateBox)
+        self._template = self._artrackBackend.encodeTemplateView(template, templateBox)
         # Stateless passes use their own encoding of the template, made on first use.
         self._detachedSource = (_copyView(template), templateBox)
         self._detachedTemplate = None
         self._initialized = True
-        self._previousViews = {template.spec.viewId: _copyView(template)}
-        self._previousViewsFrameIndex = 0
 
-    def infer(
-        self,
-        views: Sequence[LocalView],
-        command: TemplateCommand,
-    ) -> Sequence[LocalObservation]:
+    def infer(self, views: Sequence[LocalView]) -> Sequence[LocalObservation]:
         _validateViewSequence(views)
-        observations = self._inferViews(views, command)
-        self._rememberViews(views, int(command.frameIndex))
-        return observations
+        return self._inferViews(views)
 
-    def _inferViews(
-        self,
-        views: Sequence[LocalView],
-        command: TemplateCommand,
-    ) -> tuple[LocalObservation, ...]:
+    def _inferViews(self, views: Sequence[LocalView]) -> tuple[LocalObservation, ...]:
         if self._closed:
             raise ProtocolError("tracker backend is closed")
         if not self._initialized:
             raise ProtocolError("tracker backend has not been initialized")
-        self._templates.apply(self._artrackBackend, command, self._previousViews)
-        snapshot = self._templates.snapshot()
-        # Preserve the cache ordering so ARTrackV2 can use the anchor together
-        # with recent/stable online templates.  Passing only the anchor makes
-        # every UPDATE_RECENT/UPDATE_STABLE command a no-op for the model.
-        templateFeatures = snapshot.features
-        self._activeTemplateFrameIndex = (
-            int(snapshot.stable.frameIndex)
-            if snapshot.stable is not None
-            else int(snapshot.recent.frameIndex)
-            if snapshot.recent is not None
-            else int(snapshot.anchor.frameIndex)
-        )
+        templateFeatures = (self._template,)
         inferenceStartedNs = perf_counter_ns()
-        deviceViews = tuple(getattr(view, "deviceRgb", None) for view in views)
         priorBoxes = tuple(view.spec.priorBox for view in views)
+        fovs = tuple(
+            (view.spec.bfov.horizontalFovRad, view.spec.bfov.verticalFovRad) for view in views
+        )
         if views and all(box is not None for box in priorBoxes):
-            if any(item is not None for item in deviceViews):
-                raise ProtocolError(
-                    "search priors are not supported with CUDA-resampled views"
-                )
             predictions = self._artrackBackend.inferBatch(
                 tuple(view.rgb for view in views),
                 templateFeatures,
-                tuple(
-                    (view.spec.bfov.horizontalFovRad, view.spec.bfov.verticalFovRad)
-                    for view in views
-                ),
+                fovs,
                 priorBoxes=priorBoxes,
                 trajectories=(
                     tuple(view.spec.trajectory for view in views)
@@ -109,24 +68,9 @@ class TrackerBackendImpl(TrackerBackendProtocol):
                     else None
                 ),
             )
-        elif all(item is not None for item in deviceViews):
-            predictions = self._artrackBackend.inferDeviceBatch(
-                tuple(deviceViews),
-                tuple((view.spec.outputWidthPx, view.spec.outputHeightPx) for view in views),
-                templateFeatures,
-                tuple(
-                    (view.spec.bfov.horizontalFovRad, view.spec.bfov.verticalFovRad)
-                    for view in views
-                ),
-            )
         else:
             predictions = self._artrackBackend.inferBatch(
-                tuple(view.rgb for view in views),
-                templateFeatures,
-                tuple(
-                    (view.spec.bfov.horizontalFovRad, view.spec.bfov.verticalFovRad)
-                    for view in views
-                ),
+                tuple(view.rgb for view in views), templateFeatures, fovs
             )
         sharedInferenceNs = (perf_counter_ns() - inferenceStartedNs) // len(views) if views else 0
         return tuple(
@@ -177,11 +121,11 @@ class TrackerBackendImpl(TrackerBackendProtocol):
 
     def saveState(self) -> dict[str, object]:
         """The tracker's per-sequence state, to undo the effect of a frame."""
-        memory = getattr(self._templates.snapshot().anchor.features, "memory", None)
+        memory = getattr(self._template, "memory", None)
         return {} if memory is None else dict(memory)
 
     def restoreState(self, state: dict[str, object]) -> None:
-        memory = getattr(self._templates.snapshot().anchor.features, "memory", None)
+        memory = getattr(self._template, "memory", None)
         if memory is not None:
             memory.clear()
             memory.update(state)
@@ -190,23 +134,11 @@ class TrackerBackendImpl(TrackerBackendProtocol):
         """Forget what the tracker accumulated; it starts from the template again."""
         self.restoreState({})
 
-    def _rememberViews(self, views: Sequence[LocalView], frameIndex: int) -> None:
-        if not views:
-            return
-        currentViews = {view.spec.viewId: _copyView(view) for view in views}
-        if self._previousViewsFrameIndex == frameIndex:
-            self._previousViews.update(currentViews)
-        else:
-            self._previousViews = currentViews
-        self._previousViewsFrameIndex = frameIndex
-
     def close(self) -> None:
         if self._closed:
             return
         self._artrackBackend.close()
-        self._templates.clear()
-        self._previousViews.clear()
-        self._previousViewsFrameIndex = None
+        self._template = None
         self._closed = True
 
 
@@ -219,14 +151,7 @@ def _validateViewSequence(views: Sequence[LocalView]) -> None:
 def _copyView(view: LocalView) -> LocalView:
     rgb = view.rgb.copy()
     rgb.setflags(write=False)
-    return LocalView(
-        spec=view.spec,
-        rgb=rgb,
-        # Keep the normalized crop alive for a possible online-template
-        # command.  GPU Geometry's host RGB is only a placeholder, so dropping
-        # this tensor would make a later update encode black pixels.
-        deviceRgb=view.deviceRgb,
-    )
+    return LocalView(spec=view.spec, rgb=rgb)
 
 
 TrackerBackend = TrackerBackendImpl

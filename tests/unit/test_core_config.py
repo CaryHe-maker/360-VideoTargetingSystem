@@ -68,7 +68,7 @@ class CoreConfigTest(unittest.TestCase):
             ("motion:\n", "evaluator:\n  fusionBoxMode: best_source\n"),
             ("backendTuning:\n", "recovery:\n  maxViewsPerFrame: 12\n"),
             ("  windowLength: 5\n", "  maxAttemptsPerFrame: 2\n"),
-            ("  fullViewSearch: false\n", "  singleView: true\n"),
+            ("  sphericalSearch: true\n", "  singleView: true\n"),
         ):
             self._assertRejected(old, addition + old)
 
@@ -92,7 +92,6 @@ class CoreConfigTest(unittest.TestCase):
     def testLoadConfigRejectsInvalidBackendTuning(self) -> None:
         self._assertRejected("  templateFovScale: 2.5", "  templateFovScale: 0.5")
         self._assertRejected("  viewHorizontalFovCapDeg: 90.0", "  viewHorizontalFovCapDeg: 200.0")
-        self._assertRejected("  templateMinConfidence: 0.515", "  templateMinConfidence: 1.5")
         self._assertRejected("  holdWeakBox: true", "  holdWeakBox: 1")
         self._assertRejected("  resampler: opencv", "  resampler: gpu")
 

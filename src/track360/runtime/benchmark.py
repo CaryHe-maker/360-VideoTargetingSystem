@@ -113,10 +113,6 @@ class _CountingSession:
         self._session = session
         self.forwards = 0
 
-    @property
-    def supportsOnlineTemplates(self) -> bool:
-        return bool(self._session.supportsOnlineTemplates)
-
     def encodeTemplate(self, rgb: Any, bbox: BBoxXYWH) -> Any:
         return self._session.encodeTemplate(rgb, bbox)
 
@@ -147,10 +143,6 @@ class _SharedSession:
 
     # The protocol members are spelled out because runtime protocol checks do not
     # look through ``__getattr__``; optional batch methods are forwarded by it.
-    @property
-    def supportsOnlineTemplates(self) -> bool:
-        return bool(self._session.supportsOnlineTemplates)
-
     def encodeTemplate(self, rgb: Any, bbox: BBoxXYWH) -> Any:
         return self._session.encodeTemplate(rgb, bbox)
 

@@ -16,10 +16,8 @@ from track360.geometry.projection_math import (
     viewAxes,
 )
 
-# The search view spans this many times the predicted target extent on each axis.
-SEARCH_FOV_SCALE = 3.0
-# With ``alignedSearch`` the view is this many times the mean target size: the search
-# factor the tracker was trained with, which is also the crop the backend takes.
+# The search view is this many times the mean target size: the search factor the
+# tracker was trained with, which is also the crop the backend takes.
 ALIGNED_SEARCH_FACTOR = 4.0
 # Targets larger than this are sized as if they were this large when the backend's
 # search crop is laid out.  A perspective view cannot hold such targets anyway.
@@ -67,7 +65,7 @@ class ViewPlanner:
         last seen.  Each call hands out the next ``count`` of them; the cursor
         wraps around once the whole sphere has been visited.
         """
-        if count <= 0 or not self._tuning.alignedSearch:
+        if count <= 0:
             return (), cursor
         horizontal = min(lastSeen.horizontalFovRad, _MAX_HORIZONTAL_SPAN_RAD)
         vertical = min(lastSeen.verticalFovRad, _MAX_VERTICAL_SPAN_RAD)
@@ -164,51 +162,38 @@ class ViewPlanner:
                 ALIGNED_SEARCH_FACTOR,
                 self._geometry.viewWidthPx,
             )
-        if self._tuning.alignedSearch:
-            # A square view with isotropic pixels whose side is
-            # ``ALIGNED_SEARCH_FACTOR`` times the geometric-mean target size, as in
-            # the tracker's training crops.
-            fov = _squareFov(horizontalSizeRad, verticalSizeRad, ALIGNED_SEARCH_FACTOR)
-            fov = min(self._geometry.maxFovRad, max(self._tuning.alignedMinFovRad, fov))
-            for cap in (self._tuning.viewHorizontalFovCapRad, self._tuning.viewVerticalFovCapRad):
-                if cap is not None:
-                    fov = min(fov, cap)
-            # The backend crops its search region around this box.  With an unclamped
-            # FOV that crop is the whole view; when the FOV limit cut the view short
-            # (large targets) the crop extends past the view and is padded, so the
-            # target still fills the usual share of the search region.
-            # The tangent extent of a target grows without bound towards 180 degrees;
-            # PRIOR_MAX_SIZE_RAD keeps the padded crop finite.
-            scale = (1.0 - 1e-9) / tan(fov / 2.0)
-            widthPx = self._geometry.viewWidthPx * scale * _halfTangent(
-                min(horizontalSizeRad, PRIOR_MAX_SIZE_RAD)
-            )
-            heightPx = self._geometry.viewHeightPx * scale * _halfTangent(
-                min(verticalSizeRad, PRIOR_MAX_SIZE_RAD)
-            )
-            return ViewSpec(
-                viewId=SEARCH_VIEW_ID,
-                bfov=BFoV(center=center, horizontalFovRad=fov, verticalFovRad=fov),
-                outputWidthPx=self._geometry.viewWidthPx,
-                outputHeightPx=self._geometry.viewHeightPx,
-                priorBox=BBoxXYWH(
-                    xPx=(self._geometry.viewWidthPx - widthPx) / 2.0,
-                    yPx=(self._geometry.viewHeightPx - heightPx) / 2.0,
-                    widthPx=widthPx,
-                    heightPx=heightPx,
-                ),
-            )
-        horizontalFov = clampFov(SEARCH_FOV_SCALE * horizontalSizeRad, self._geometry)
-        verticalFov = clampFov(SEARCH_FOV_SCALE * verticalSizeRad, self._geometry)
-        if self._tuning.viewHorizontalFovCapRad is not None:
-            horizontalFov = min(horizontalFov, self._tuning.viewHorizontalFovCapRad)
-        if self._tuning.viewVerticalFovCapRad is not None:
-            verticalFov = min(verticalFov, self._tuning.viewVerticalFovCapRad)
+        # A square view with isotropic pixels whose side is
+        # ``ALIGNED_SEARCH_FACTOR`` times the geometric-mean target size, as in
+        # the tracker's training crops.
+        fov = _squareFov(horizontalSizeRad, verticalSizeRad, ALIGNED_SEARCH_FACTOR)
+        fov = min(self._geometry.maxFovRad, max(self._tuning.alignedMinFovRad, fov))
+        for cap in (self._tuning.viewHorizontalFovCapRad, self._tuning.viewVerticalFovCapRad):
+            if cap is not None:
+                fov = min(fov, cap)
+        # The backend crops its search region around this box.  With an unclamped
+        # FOV that crop is the whole view; when the FOV limit cut the view short
+        # (large targets) the crop extends past the view and is padded, so the
+        # target still fills the usual share of the search region.
+        # The tangent extent of a target grows without bound towards 180 degrees;
+        # PRIOR_MAX_SIZE_RAD keeps the padded crop finite.
+        scale = (1.0 - 1e-9) / tan(fov / 2.0)
+        widthPx = self._geometry.viewWidthPx * scale * _halfTangent(
+            min(horizontalSizeRad, PRIOR_MAX_SIZE_RAD)
+        )
+        heightPx = self._geometry.viewHeightPx * scale * _halfTangent(
+            min(verticalSizeRad, PRIOR_MAX_SIZE_RAD)
+        )
         return ViewSpec(
             viewId=SEARCH_VIEW_ID,
-            bfov=BFoV(center=center, horizontalFovRad=horizontalFov, verticalFovRad=verticalFov),
+            bfov=BFoV(center=center, horizontalFovRad=fov, verticalFovRad=fov),
             outputWidthPx=self._geometry.viewWidthPx,
             outputHeightPx=self._geometry.viewHeightPx,
+            priorBox=BBoxXYWH(
+                xPx=(self._geometry.viewWidthPx - widthPx) / 2.0,
+                yPx=(self._geometry.viewHeightPx - heightPx) / 2.0,
+                widthPx=widthPx,
+                heightPx=heightPx,
+            ),
         )
 
     def templateView(self, target: BFoV) -> ViewSpec:
@@ -246,7 +231,7 @@ class ViewPlanner:
 
     def _usesSphericalView(self, horizontalSizeRad: float, verticalSizeRad: float) -> bool:
         """Whether the search region of this target is too wide for a tangent plane."""
-        if not (self._tuning.alignedSearch and self._tuning.sphericalSearch):
+        if not self._tuning.sphericalSearch:
             return False
         span = ALIGNED_SEARCH_FACTOR * sqrt(horizontalSizeRad * verticalSizeRad)
         return span >= self._tuning.sphericalSearchFovRad
@@ -297,15 +282,9 @@ class ViewPlanner:
     def templateBfov(self, target: BFoV) -> BFoV:
         """Return the view the frame-0 template is cropped from."""
         scale = self._tuning.templateFovScale
-        if self._tuning.alignedSearch:
-            fov = _squareFov(target.horizontalFovRad, target.verticalFovRad, scale)
-            fov = min(self._geometry.maxFovRad, max(self._tuning.alignedMinFovRad, fov))
-            return BFoV(center=target.center, horizontalFovRad=fov, verticalFovRad=fov)
-        return BFoV(
-            center=target.center,
-            horizontalFovRad=clampFov(scale * target.horizontalFovRad, self._geometry),
-            verticalFovRad=clampFov(scale * target.verticalFovRad, self._geometry),
-        )
+        fov = _squareFov(target.horizontalFovRad, target.verticalFovRad, scale)
+        fov = min(self._geometry.maxFovRad, max(self._tuning.alignedMinFovRad, fov))
+        return BFoV(center=target.center, horizontalFovRad=fov, verticalFovRad=fov)
 
     def contextBfov(
         self,
@@ -406,7 +385,6 @@ __all__ = [
     "ALIGNED_SEARCH_FACTOR",
     "REFINE_VIEW_ID_BASE",
     "SCAN_VIEW_ID_BASE",
-    "SEARCH_FOV_SCALE",
     "SEARCH_VIEW_ID",
     "TRAJECTORY_LENGTH",
     "ViewPlanner",
