@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from math import acos, asin, atan2, degrees, pi, sqrt
+from math import acos, asin, atan2, cos, degrees, pi, sin, sqrt
 from typing import TYPE_CHECKING
 
 from track360.controller.motion_estimator import SphericalMotionEstimator
@@ -70,6 +70,10 @@ _SAME_PLACE_SIZE_RATIO = 1.5
 # many frames goes straight to the enlarged views: asking the same question again
 # would give the same answer.
 _CONFIRM_COOLDOWN_FRAMES = 30
+# The extrapolated search centre: the motion over this many trusted frames,
+# continued for at most this many frames.
+_EXTRAPOLATE_SPAN_FRAMES = 5
+_EXTRAPOLATE_MAX_FRAMES = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +160,12 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._lostFrames = 0
         self._lastScan = ""
         self._lastConfirmedFrame: int | None = None
+        # Frame and centre of the last trusted frames, oldest first.
+        self._trustedPath: deque[tuple[int, SphericalPoint]] = deque(
+            maxlen=_EXTRAPOLATE_SPAN_FRAMES + 1
+        )
+        self._scanPrepaid = 0
+        self._spreadTurn = 0
         self._lastFrameTrace: dict[str, object] = {}
 
     @property
@@ -343,7 +353,8 @@ class TrackControllerImpl(TrackControllerProtocol):
                 mainView, lostFrames, scanCount, int(frame.frameIndex)
             )
             if scanViews:
-                self._scanTokens -= 2 if scanRefine else 1
+                self._scanPrepaid = len(scanViews) + (1 if scanRefine else 0)
+                self._scanTokens -= self._scanPrepaid
                 self._scanFrameCount += 1
         elif (
             self._actions != "none"
@@ -397,7 +408,9 @@ class TrackControllerImpl(TrackControllerProtocol):
                 return (), False
             self._lastScan = "1x"
             return (replace(mainView, viewId=SCAN_VIEW_ID_BASE, trajectory=()),), False
-        if budget < 2:
+        spread = tuning.zoomSpread if lostFrames >= tuning.zoomLastAfterFrames else 1
+        limited = tuning.scanBudgetPerFrame > 0.0
+        if budget < 1 or (limited and int(self._scanTokens) < spread + 1):
             return (), False
         if lostFrames >= tuning.zoomLastAfterFrames:
             scale = tuning.zoomLastScale
@@ -405,8 +418,13 @@ class TrackControllerImpl(TrackControllerProtocol):
             scale = tuning.zoomMidScale
         else:
             scale = tuning.zoomFirstScale
-        centre = trusted.center if tuning.zoomCentre == "trusted" else self._currentBfov.center
-        self._lastScan = f"{scale:g}x"
+        if tuning.zoomCentre == "trusted":
+            centre = trusted.center
+        elif tuning.zoomCentre == "extrapolated":
+            centre = self._extrapolatedCentre(frameIndex) or trusted.center
+        else:
+            centre = self._currentBfov.center
+        self._lastScan = f"{scale:g}x" if spread == 1 else f"{scale:g}x{spread}"
         view = self._planner.probeView(
             centre,
             trusted.horizontalFovRad,
@@ -414,7 +432,87 @@ class TrackControllerImpl(TrackControllerProtocol):
             scale,
             SCAN_VIEW_ID_BASE,
         )
-        return (view,), True
+        if spread == 1:
+            return (view,), True
+        # Views a quarter of their width off the centre: neighbours share half.
+        stepH = 0.25 * view.bfov.horizontalFovRad
+        stepV = 0.25 * view.bfov.verticalFovRad
+        if spread == 4:
+            shifts = ((-stepH, -stepV), (stepH, -stepV), (-stepH, stepV), (stepH, stepV))
+        elif self._spreadTurn % 2 == 0:
+            shifts = ((-stepH, 0.0), (stepH, 0.0))
+        else:
+            shifts = ((0.0, -stepV), (0.0, stepV))
+        self._spreadTurn += 1
+        views = tuple(
+            self._planner.probeView(
+                _shifted(centre, dYaw, dPitch),
+                trusted.horizontalFovRad,
+                trusted.verticalFovRad,
+                scale,
+                SCAN_VIEW_ID_BASE + index,
+            )
+            for index, (dYaw, dPitch) in enumerate(shifts)
+        )
+        return views, True
+
+    def _extrapolatedCentre(self, frameIndex: int) -> SphericalPoint | None:
+        """The last trusted centre moved on as the target moved before it."""
+        if len(self._trustedPath) < 2:
+            return None
+        (olderFrame, older), (newerFrame, newer) = self._trustedPath[0], self._trustedPath[-1]
+        span = newerFrame - olderFrame
+        if span <= 0 or span > 3 * _EXTRAPOLATE_SPAN_FRAMES:
+            return None
+        steps = min(frameIndex - newerFrame, _EXTRAPOLATE_MAX_FRAMES) / span
+        a = (older.x, older.y, older.z)
+        b = (newer.x, newer.y, newer.z)
+        axis = (
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        )
+        norm = sqrt(sum(value * value for value in axis))
+        if norm < 1e-9 or steps <= 0.0:
+            return None
+        axis = tuple(value / norm for value in axis)
+        angle = acos(max(-1.0, min(1.0, sum(p * q for p, q in zip(a, b, strict=True))))) * steps
+        cross = (
+            axis[1] * b[2] - axis[2] * b[1],
+            axis[2] * b[0] - axis[0] * b[2],
+            axis[0] * b[1] - axis[1] * b[0],
+        )
+        x, y, z = (b[i] * cos(angle) + cross[i] * sin(angle) for i in range(3))
+        return makeSphericalPoint(atan2(x, z), asin(max(-1.0, min(1.0, y))))
+
+    @property
+    def crossBand(self) -> tuple[float, float] | None:
+        """Scores between which a candidate is looked at once more, if at all."""
+        tuning = self._backendTuning
+        if not tuning.crossCheck or tuning.crossScore <= 0.0:
+            return None
+        return tuning.crossScore, tuning.reacquireScore
+
+    def shiftedView(self, center: SphericalPoint, index: int = 0) -> ViewSpec:
+        """A view of the normal size one target size beside ``center``."""
+        trusted = self._lastGoodBfov or self._currentBfov
+        assert trusted is not None
+        return self.refinementView(
+            _shifted(center, trusted.horizontalFovRad, 0.5 * trusted.verticalFovRad),
+            index,
+        )
+
+    def agreementRadiusRad(self) -> float:
+        """How far apart two views may point and still mean the same place."""
+        trusted = self._lastGoodBfov or self._currentBfov
+        assert trusted is not None
+        return _angularSize(trusted)
+
+    def settleScan(self, forwards: int) -> None:
+        """Charge the scan of the frame what it really cost."""
+        if self._backendTuning.scanBudgetPerFrame > 0.0 and self._scanPrepaid:
+            self._scanTokens -= forwards - self._scanPrepaid
+        self._scanPrepaid = 0
 
     def refinementView(self, center: SphericalPoint, index: int = 0) -> ViewSpec:
         """A view of the normal size around a place an enlarged scan view pointed at."""
@@ -504,6 +602,9 @@ class TrackControllerImpl(TrackControllerProtocol):
             if decision.nextMode is TrackMode.TRACKING:
                 self._scanCursor = 0
                 self._lastGoodBfov = self._currentBfov
+                self._trustedPath.append(
+                    (int(plan.frameIndex), self._currentBfov.center)
+                )
             else:
                 self._suspectFrameCount += 1
                 # Without actions the run must stay what it is without loss handling.
@@ -574,9 +675,17 @@ class TrackControllerImpl(TrackControllerProtocol):
                 verdict = "low_similarity"
             elif similarity < current + tuning.reacquireMargin:
                 verdict = "low_margin"
-            elif score < tuning.reacquireScore:
+            elif score < tuning.reacquireScore and not (
+                tuning.crossScore > 0.0
+                and candidate.support >= 2
+                and score >= tuning.crossScore
+            ):
                 verdict = "low_score"
-            elif observation is not None and _samePlace(candidate.bfov, observation.bfov):
+            elif (
+                tuning.samePlaceAction == "stay"
+                and observation is not None
+                and _samePlace(candidate.bfov, observation.bfov)
+            ):
                 verdict = "same_place"
                 confirmed = confirmed or inPlace
             else:
@@ -585,6 +694,7 @@ class TrackControllerImpl(TrackControllerProtocol):
                 "view": int(candidate.viewId),
                 "similarity": None if similarity is None else round(float(similarity), 4),
                 "score": round(score, 4),
+                "support": int(candidate.support),
                 "verdict": verdict,
                 **_place(candidate.bfov),
             }
@@ -604,6 +714,8 @@ class TrackControllerImpl(TrackControllerProtocol):
         plan, frame = pending.plan, pending.frame
         score = _observationScore(candidate)
         self._lastGoodBfov = candidate.bfov
+        self._trustedPath.clear()
+        self._trustedPath.append((int(frame.frameIndex), candidate.bfov.center))
         self._stateMachine.reset()
         self._scanCursor = 0
         self._restartMotion(candidate.bfov, frame)
@@ -835,6 +947,15 @@ def _samePlace(first: BFoV, second: BFoV) -> bool:
         acos(max(-1.0, min(1.0, cosine))) < _SAME_PLACE_OFFSET * max(sizes)
         and max(sizes) < _SAME_PLACE_SIZE_RATIO * min(sizes)
     )
+
+
+def _shifted(center: SphericalPoint, dYawRad: float, dPitchRad: float) -> SphericalPoint:
+    """``center`` moved by angles along the parallel and the meridian."""
+    pitch = asin(max(-1.0, min(1.0, center.y)))
+    yaw = atan2(center.x, center.z)
+    limit = pi / 2.0 - 0.02
+    newPitch = max(-limit, min(limit, pitch + dPitchRad))
+    return makeSphericalPoint(yaw + dYawRad / max(0.2, cos(pitch)), newPitch)
 
 
 def _angularSize(bfov: BFoV) -> float:

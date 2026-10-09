@@ -168,6 +168,17 @@ class BackendTuningConfig:
     zoomLastScale: float = 4.0
     zoomMidAfterFrames: int = 10
     zoomLastAfterFrames: int = 20
+    # Search options under trial (E033); optional in the file.
+    # A candidate on the tracked box: stay (no jump, a look in place confirms)
+    # or jump (restart the tracker on it).
+    samePlaceAction: str = "stay"
+    # Enlarged views of the last stage taken at once, half overlapping (1, 2, 4).
+    zoomSpread: int = 1
+    # A candidate that two views agree on is accepted from this score (0: off).
+    crossScore: float = 0.0
+    # Look at a candidate scoring between crossScore and reacquireScore once
+    # more from a shifted view of the normal size.
+    crossCheck: bool = False
 
     def __post_init__(self) -> None:
         for name in (
@@ -190,8 +201,16 @@ class BackendTuningConfig:
             raise ConfigError("backendTuning.stateRule must be fused or relative")
         if self.scanMode not in ("tiles", "zoom"):
             raise ConfigError("backendTuning.scanMode must be tiles or zoom")
-        if self.zoomCentre not in ("trusted", "current"):
-            raise ConfigError("backendTuning.zoomCentre must be trusted or current")
+        if self.zoomCentre not in ("trusted", "current", "extrapolated"):
+            raise ConfigError(
+                "backendTuning.zoomCentre must be trusted, current or extrapolated"
+            )
+        if self.samePlaceAction not in ("stay", "jump"):
+            raise ConfigError("backendTuning.samePlaceAction must be stay or jump")
+        if self.zoomSpread not in (1, 2, 4):
+            raise ConfigError("backendTuning.zoomSpread must be 1, 2 or 4")
+        if not 0.0 <= self.crossScore <= 1.0 or not isinstance(self.crossCheck, bool):
+            raise ConfigError("backendTuning.crossScore / crossCheck are invalid")
         if min(self.zoomFirstScale, self.zoomLastScale) < 1.0 or self.zoomMidScale < 0.0:
             raise ConfigError("backendTuning zoom scales must be at least 1 (mid: 0 or more)")
         if self.zoomMidAfterFrames < 0 or self.zoomLastAfterFrames < 0:
@@ -365,6 +384,11 @@ def loadConfig(path: str | Path) -> AppConfig:
             "maxPredictionHorizon",
         },
     )
+    trialRaw = {
+        name: _requireMapping("backendTuning", root["backendTuning"]).pop(name)
+        for name in ("samePlaceAction", "zoomSpread", "crossScore", "crossCheck")
+        if name in _requireMapping("backendTuning", root["backendTuning"])
+    }
     tuningRaw = _section(
         root,
         "backendTuning",
@@ -579,6 +603,7 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
             lossActions=_requireStr("backendTuning.lossActions", tuningRaw["lossActions"]),
             stateLatch=_requireBool("backendTuning.stateLatch", tuningRaw["stateLatch"]),
+            **trialRaw,
             releaseFrames=_requireInt(
                 "backendTuning.releaseFrames", tuningRaw["releaseFrames"]
             ),

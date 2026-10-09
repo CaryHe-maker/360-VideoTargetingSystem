@@ -4,6 +4,13 @@
 
 ## [未发布]
 
+### 丢失找回冻结，两条基线
+
+- 丢失找回冻结（2026-10-10）。基线 1 是默认配置（关闭）；基线 2 是新增的 `configs/loss_handling.yaml`（E030 A 组的配置）。说明见 [docs/baselines.md](docs/baselines.md)。
+- 新增可选的试验选项 `backendTuning.samePlaceAction`、`zoomSpread`、`crossScore`、`crossCheck` 和 `zoomCentre: extrapolated`（E033）；默认值不改变原有行为。基线 2 用 `samePlaceAction: jump`。
+- 新增工具：`tools/candidate_support.py`（搜索候选按分数和视图一致性的准确率）、`tools/frame_level_search.py`（帧级和序列级前向在同一批搜索上的三关对比，E034；需要先把帧级模型代码恢复到 vendor 目录）、`tools/oracle_restart.py`（丢失后用真值重置跟踪器的上限测试）。
+- DINOv2 优先从本地 `models/hub` 加载，启动不再需要联网。
+
 ### 清理旧版本的代码路径
 
 #### 移除

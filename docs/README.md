@@ -10,6 +10,7 @@
 | [360VOT 基准框架](benchmarkFramework.md) | 论文里的 360 跟踪框架做了什么、有哪些参数、各贡献多少，以及和本项目的逐项对照 |
 | [优化方向与可行性](optimization-options.md) | 当前可选的优化方向：依据、实现方式、工作量和风险 |
 | [评测记录](evaluation-log.md) | 每一轮评测结果与 benchmark 参考数据的长期记录 |
+| [冻结的两条基线](baselines.md) | 丢失找回关闭和开启两条对照基线的配置、数字和用法 |
 | [历史实验结论](experiments.md) | V1（比赛阶段）的 A/B 实验结果与经验 |
 
 ## 模块文档

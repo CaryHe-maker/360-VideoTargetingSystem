@@ -47,6 +47,7 @@
 | `stateLatch` / `latchReleaseMargin` / `releaseFrames` | `false` / `0.20` / `3` | 融合规则下，进入不可信后是否锁住：状态分数要回到 `uncertainScore + latchReleaseMargin` 以上并保持 `releaseFrames` 帧才解除。`releaseFrames` 也是分开规则解除可疑所需的帧数 |
 | `lossActions` | `jump` | 丢失后做什么：`none` 只判定和记录；`jump` 搜索并跳转 |
 | `scanMode` | `tiles` | 丢失后怎么搜索：`tiles` 用正常大小的视图由近到远分块扫描；`zoom` 先在原视图上做一次无状态前向，之后取一个放大的视图定位、再在它指的位置取正常大小的视图。`zoomCentre`（`trusted` / `current`）、`zoomFirstScale` / `zoomMidScale` / `zoomLastScale`（2 / 0 / 4）和 `zoomMidAfterFrames` / `zoomLastAfterFrames`（10 / 20）决定放大视图的中心和倍数，`zoomInPlace` 是否先原地重检（E029、E030） |
+| `samePlaceAction` / `zoomSpread` / `crossScore` / `crossCheck` | `stay` / `1` / `0` / `false` | 试验过的搜索选项，配置文件里可以不写（E033）。`samePlaceAction`：候选落在跟踪器原框上时不跳转（`stay`，原地重检一致时确认）还是照样跳转（`jump`，基线 2 用的）；`zoomSpread`：最后阶段一次取几个半重叠的放大视图（1、2、4）；`crossScore`：两个视图指向同一处的候选从这个分数起采纳（0 关闭）；`crossCheck`：分数在 `crossScore` 和 `reacquireScore` 之间的候选再取一个偏移的正常视图确认。`zoomCentre` 另有 `extrapolated`（从可信帧按运动外推）。后三项和外推中心都没有带来提升 |
 | `scanBudgetPerFrame` / `scanBudgetBurst` | `0.0` / `40.0` | 搜索的前向预算：每帧积攒的次数和最多存的次数；0 表示不限（E023） |
 | `reacquireSimilarity` / `reacquireMargin` / `reacquireScore` | `0.45` / `0.15` / `0.70` | 扫描候选被采纳的条件：相似度的下限、比当前框高出的幅度、无状态前向分数的下限。分数是区分真假候选的主要信号（E017） |
 | `holdWeakBox` | `true` | 测量未被接受且目标面积 ≥ 画面的 10% 时，保持上一帧的框 |
@@ -82,3 +83,5 @@
 `track360 track` 和 `track360 airsim360` 每次运行都会在结果文件旁写一个 `<结果文件名>.run.json`，内容包括：git commit 和工作区是否干净、配置哈希、最终生效的完整配置、权重文件的 SHA-256、Python / PyTorch / CUDA / cuDNN / NumPy / OpenCV 版本、GPU 型号和驱动版本。
 
 配置哈希只覆盖影响结果的参数，不包含因机器而异的路径（权重路径、可视化输出目录），所以同一份配置在不同机器上的哈希相同。配置字段变了，哈希也跟着变：删除多视图之前记录的哈希不能和之后的直接比较。
+
+丢失找回已冻结，两条基线的配置和数字见 [baselines.md](baselines.md)：默认配置是基线 1，`configs/loss_handling.yaml` 是基线 2。

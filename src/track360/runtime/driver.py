@@ -375,8 +375,10 @@ def runTracking(
                                             if plan.scanRefine
                                             else None
                                         ),
+                                        controller=controller,
                                     )
                                     forwardCount += scanForwards
+                                    controller.settleScan(scanForwards)
                             with _profile(profiler, "controller"):
                                 result = controller.consume(plan, projected, candidates)
                             if verifier is not None:
@@ -578,6 +580,7 @@ def _scanCandidates(
     scoreCalibration: ScoreCalibration,
     useMotionScore: bool,
     refinementView: Callable[..., ViewSpec] | None = None,
+    controller: Any = None,
 ) -> tuple[tuple[ProjectedObservation, ...], int]:
     """Boxes found in the plan's scan views with their similarity to the template,
     and the forward passes spent.
@@ -588,8 +591,10 @@ def _scanCandidates(
     views = {view.spec.viewId: view for view in geometry.cropViews(frame, plan.scanViews)}
     found = backend.inferDetached(tuple(views.values()))  # type: ignore[attr-defined]
     forwards = len(views)
+    support = 1
     if refinementView is not None:
         specs = []
+        pointedAt = []
         for local in found:
             try:
                 pointed = geometry.projectLocalBoxBoundary(
@@ -600,7 +605,21 @@ def _scanCandidates(
                 )
             except GeometryError:
                 continue
-            specs.append(refinementView(pointed.bfov.center, len(specs)))
+            pointedAt.append((pointed.bfov.center, float(local.fusedScore)))
+        if len(views) > 1 and pointedAt:
+            # Several enlarged views: follow the place most of them point at.
+            radius = controller.agreementRadiusRad()
+            counts = [
+                sum(_angleBetween(centre, other) < radius for other, _ in pointedAt)
+                for centre, _ in pointedAt
+            ]
+            chosen = max(
+                range(len(pointedAt)), key=lambda i: (counts[i], pointedAt[i][1])
+            )
+            support = counts[chosen]
+            pointedAt = [pointedAt[chosen]]
+        for centre, _ in pointedAt:
+            specs.append(refinementView(centre, len(specs)))
         views = (
             {view.spec.viewId: view for view in geometry.cropViews(frame, specs)}
             if specs
@@ -623,10 +642,42 @@ def _scanCandidates(
         if projected is not None:
             candidates.append(
                 replace(
-                    projected, appearanceSimilarity=verifier.similarity(view, local.bbox)
+                    projected,
+                    appearanceSimilarity=verifier.similarity(view, local.bbox),
+                    support=support,
                 )
             )
+    band = controller.crossBand if controller is not None else None
+    if band is not None and refinementView is not None:
+        for index, candidate in enumerate(candidates):
+            score = float(candidate.singleScore or 0.0)
+            if not band[0] <= score < band[1] or candidate.support >= 2:
+                continue
+            # A second look from a shifted view: the same box again counts as agreement.
+            spec = controller.shiftedView(candidate.bfov.center, 8 + index)
+            second = geometry.cropViews(frame, [spec])[0]
+            again = backend.inferDetached((second,))  # type: ignore[attr-defined]
+            forwards += 1
+            for local in again:
+                other = _projectValidObservation(
+                    frame=frame,
+                    view=second,
+                    observation=local,
+                    predictedMotion=None,
+                    geometry=geometry,
+                    scoreCalibration=scoreCalibration,
+                    useMotionScore=useMotionScore,
+                )
+                if other is not None and _angleBetween(
+                    other.bfov.center, candidate.bfov.center
+                ) < 0.5 * controller.agreementRadiusRad():
+                    candidates[index] = replace(candidate, support=2)
     return tuple(candidates), forwards
+
+
+def _angleBetween(first: Any, second: Any) -> float:
+    cosine = first.x * second.x + first.y * second.y + first.z * second.z
+    return math.acos(max(-1.0, min(1.0, cosine)))
 
 
 def _projectValidObservation(

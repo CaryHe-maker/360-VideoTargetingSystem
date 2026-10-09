@@ -69,9 +69,15 @@ class AppearanceModels:
         self._torch = torch
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         torch.hub.set_dir(str(hubDirectory))
+        localDinov2 = Path(hubDirectory) / "facebookresearch_dinov2_main"
         loaders = {
-            "dinov2": lambda: torch.hub.load(
-                "facebookresearch/dinov2", "dinov2_vits14", trust_repo=True, verbose=False
+            "dinov2": lambda: (
+                # The copy already in the hub directory needs no network.
+                torch.hub.load(str(localDinov2), "dinov2_vits14", source="local", verbose=False)
+                if localDinov2.is_dir()
+                else torch.hub.load(
+                    "facebookresearch/dinov2", "dinov2_vits14", trust_repo=True, verbose=False
+                )
             ),
             "dino": lambda: torch.hub.load(
                 "facebookresearch/dino:main", "dino_vits16", trust_repo=True, verbose=False
