@@ -154,21 +154,13 @@ class BackendTuningConfig:
     reacquireSimilarity: float = 0.45
     reacquireMargin: float = 0.15
     reacquireScore: float = 0.70
-    # How the state is decided (fused / split) and what a lost track does about it
-    # (none: only judge; jump: scan and jump; probation: a jump must prove itself).
+    # How the state is decided (fused / relative) and what a lost track does about it
+    # (none: only judge; jump: scan and jump).
     stateRule: str = "fused"
     lossActions: str = "jump"
     stateLatch: bool = False
     latchReleaseMargin: float = 0.20
     releaseFrames: int = 3
-    backendEnterScore: float = 0.54
-    motionEnterScore: float = 0.0001
-    appearanceEnterScore: float = 0.21
-    backendReleaseScore: float = 0.72
-    appearanceReleaseScore: float = 0.38
-    appearanceLostScore: float = 0.26
-    probationFrames: int = 10
-    distractorRadius: float = 1.0
     # The relative rule: each score against the median of the frames trusted so far
     # (a frame is trusted while it is no more than ``relativeGate`` below it); the mean
     # of the two deviations below ``relativeEnterDeviation`` raises a latched doubt.
@@ -210,8 +202,8 @@ class BackendTuningConfig:
             raise ConfigError(
                 "backendTuning.alignedSearch and fullViewSearch cannot both be enabled"
             )
-        if self.stateRule not in ("fused", "split", "relative"):
-            raise ConfigError("backendTuning.stateRule must be fused, split or relative")
+        if self.stateRule not in ("fused", "relative"):
+            raise ConfigError("backendTuning.stateRule must be fused or relative")
         if self.scanMode not in ("tiles", "zoom"):
             raise ConfigError("backendTuning.scanMode must be tiles or zoom")
         if self.zoomCentre not in ("trusted", "current"):
@@ -225,27 +217,15 @@ class BackendTuningConfig:
                 "backendTuning.relativeGate must be in [0, 1] and "
                 "relativeEnterDeviation in [-1, 0)"
             )
-        if self.lossActions not in ("none", "jump", "probation"):
-            raise ConfigError("backendTuning.lossActions must be none, jump or probation")
+        if self.lossActions not in ("none", "jump"):
+            raise ConfigError("backendTuning.lossActions must be none or jump")
         if self.stateRule != "fused" and not self.lossHandling:
             raise ConfigError(f"backendTuning.stateRule {self.stateRule} needs lossHandling")
-        if self.lossActions == "probation" and self.stateRule != "split":
-            raise ConfigError("backendTuning.lossActions probation needs stateRule split")
-        if self.releaseFrames < 1 or self.probationFrames < 1:
-            raise ConfigError(
-                "backendTuning.releaseFrames and probationFrames must be positive"
-            )
-        if self.latchReleaseMargin < 0.0 or self.distractorRadius < 0.0:
-            raise ConfigError(
-                "backendTuning.latchReleaseMargin and distractorRadius must be non-negative"
-            )
+        if self.releaseFrames < 1:
+            raise ConfigError("backendTuning.releaseFrames must be positive")
+        if self.latchReleaseMargin < 0.0:
+            raise ConfigError("backendTuning.latchReleaseMargin must be non-negative")
         for name in (
-            "backendEnterScore",
-            "motionEnterScore",
-            "appearanceEnterScore",
-            "backendReleaseScore",
-            "appearanceReleaseScore",
-            "appearanceLostScore",
             "uncertainScore",
             "reacquireSimilarity",
             "reacquireMargin",
@@ -442,14 +422,6 @@ def loadConfig(path: str | Path) -> AppConfig:
             "stateLatch",
             "latchReleaseMargin",
             "releaseFrames",
-            "backendEnterScore",
-            "motionEnterScore",
-            "appearanceEnterScore",
-            "backendReleaseScore",
-            "appearanceReleaseScore",
-            "appearanceLostScore",
-            "probationFrames",
-            "distractorRadius",
             "relativeGate",
             "relativeEnterDeviation",
             "scanMode",
@@ -651,20 +623,10 @@ def loadConfig(path: str | Path) -> AppConfig:
             releaseFrames=_requireInt(
                 "backendTuning.releaseFrames", tuningRaw["releaseFrames"]
             ),
-            probationFrames=_requireInt(
-                "backendTuning.probationFrames", tuningRaw["probationFrames"]
-            ),
             **{
                 name: _requireFloat(f"backendTuning.{name}", tuningRaw[name])
                 for name in (
                     "latchReleaseMargin",
-                    "backendEnterScore",
-                    "motionEnterScore",
-                    "appearanceEnterScore",
-                    "backendReleaseScore",
-                    "appearanceReleaseScore",
-                    "appearanceLostScore",
-                    "distractorRadius",
                     "relativeGate",
                     "relativeEnterDeviation",
                     "zoomFirstScale",

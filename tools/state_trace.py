@@ -32,7 +32,7 @@ from track360.datasets.vot360 import Vot360Dataset
 from track360.evaluation.loss_rate import dualIou, lostFrameMask
 from track360.evaluation.vot360_metrics import loadTrackerResults
 
-STATES = ("TRACKING", "UNCERTAIN", "LOST", "PROBATION")
+STATES = ("TRACKING", "UNCERTAIN", "LOST")
 GOOD_IOU, LOST_IOU = 0.5, 0.1
 # A jump is judged by the mean IoU of the frames right after it.
 AFTER_FRAMES = 10
@@ -109,12 +109,8 @@ def analyse(args: argparse.Namespace) -> tuple[list[dict[str, object]], dict[str
                         "iouAfter": float(after.mean()) if after.size else None,
                         "onTarget": bool(after.size and after.mean() >= LOST_IOU),
                         "leftGoodBox": bool(before.size and before.mean() >= GOOD_IOU),
-                        "outcome": "",
                     }
                 )
-            elif row["action"] in ("confirm", "revert") and jumps:
-                if jumps[-1]["sequence"] == name and not jumps[-1]["outcome"]:
-                    jumps[-1]["outcome"] = row["action"]
             frames.append(
                 {
                     "sequence": name,
@@ -155,14 +151,6 @@ def analyse(args: argparse.Namespace) -> tuple[list[dict[str, object]], dict[str
             "count": len(jumps),
             "onTarget": sum(1 for jump in jumps if jump["onTarget"]),
             "leftGoodBox": sum(1 for jump in jumps if jump["leftGoodBox"]),
-            "confirmed": sum(1 for jump in jumps if jump["outcome"] == "confirm"),
-            "reverted": sum(1 for jump in jumps if jump["outcome"] == "revert"),
-            "confirmedOnTarget": sum(
-                1 for jump in jumps if jump["outcome"] == "confirm" and jump["onTarget"]
-            ),
-            "revertedOnTarget": sum(
-                1 for jump in jumps if jump["outcome"] == "revert" and jump["onTarget"]
-            ),
             "events": jumps,
         },
         "candidates": {group: dict(counts) for group, counts in verdicts.items()},
@@ -196,9 +184,7 @@ def report(summary: dict[str, object]) -> None:
     jumps = summary["jumps"]
     print(
         f"jumps: {jumps['count']}, on target {jumps['onTarget']}, "
-        f"left a good box {jumps['leftGoodBox']}; confirmed {jumps['confirmed']} "
-        f"({jumps['confirmedOnTarget']} on target), reverted {jumps['reverted']} "
-        f"({jumps['revertedOnTarget']} on target)"
+        f"left a good box {jumps['leftGoodBox']}"
     )
     for group, counts in summary["candidates"].items():
         cells = ", ".join(f"{key} {value}" for key, value in sorted(counts.items()))

@@ -1,24 +1,18 @@
 """Replay the state machine over recorded per-frame scores, without the tracker.
 
     python tools/state_replay.py --table outputs/E018/tune_freerun.csv \\
-        --events outputs/E019/loss_events.csv --search --json outputs/E022/replay_tune.json
+        --events outputs/E019/loss_events.csv --rule relative
 
 Feeds the scores of a free-running table (``tools/fusion_freerun.py``) to the real
 ``TrackStateMachine`` frame by frame and reports in which state the good frames
 (IoU >= 0.5) and the lost frames ended up.  Nothing acts on the states, so this is what
-a run with ``lossActions: none`` gives.
-
-``--search`` tries a grid of split-rule thresholds and prints the best ones: the largest
-share of lost frames in LOST among the settings that keep the good frames in LOST below
-``--max-good-lost`` and the good frames outside TRACKING below ``--max-good-doubted``.
-Without it the thresholds of ``--config`` are replayed.
+a run with ``lossActions: none`` gives.  The thresholds are those of ``--config``.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import itertools
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -32,13 +26,6 @@ from track360.core.config import BackendTuningConfig, loadConfig
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
 EARLY_FRAMES = 5
-GRID = {
-    "backendEnterScore": (0.54, 0.61, 0.68),
-    "motionEnterScore": (0.0, 0.0001, 0.014),
-    "appearanceEnterScore": (0.21, 0.26, 0.32),
-    "release": ((0.61, 0.25), (0.68, 0.31), (0.72, 0.38)),
-    "appearanceLostScore": (0.26, 0.31, 0.38),
-}
 STATES = ("TRACKING", "UNCERTAIN", "LOST")
 
 
@@ -111,7 +98,6 @@ def replay(sequence: dict[str, np.ndarray], tuning: BackendTuningConfig) -> np.n
             measurementAccepted=True,
             backendScore=backend,
             appearanceScore=appearance,
-            motionScore=motion,
         ).nextMode
         states[index] = STATES.index(mode.name)
     return states
@@ -164,11 +150,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--table", type=Path, required=True)
     parser.add_argument("--events", type=Path, default=None)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--rule", choices=("fused", "split"), default="split")
+    parser.add_argument("--rule", choices=("fused", "relative"), default="relative")
     parser.add_argument("--latch", action="store_true", help="fused rule with the latch")
-    parser.add_argument("--search", action="store_true")
-    parser.add_argument("--max-good-lost", type=float, default=0.01)
-    parser.add_argument("--max-good-doubted", type=float, default=0.05)
     parser.add_argument("--json", type=Path, default=None)
     args = parser.parse_args(argv)
     tuning = replace(
@@ -180,31 +163,9 @@ def main(argv: list[str] | None = None) -> int:
     table = loadTable(args.table, tuning)
     parts = lossParts(table, args.events)
     payload: dict[str, object] = {}
-    if args.search:
-        rows = []
-        for values in itertools.product(*GRID.values()):
-            setting = dict(zip(GRID, values, strict=True))
-            backendRelease, appearanceRelease = setting.pop("release")
-            setting.update(
-                backendReleaseScore=backendRelease, appearanceReleaseScore=appearanceRelease
-            )
-            result = measure(table, parts, replace(tuning, stateRule="split", **setting))
-            rows.append({"setting": setting, **result})
-        payload["search"] = rows
-        allowed = [
-            row
-            for row in rows
-            if row["good"]["LOST"] <= args.max_good_lost
-            and 1.0 - row["good"]["TRACKING"] <= args.max_good_doubted
-        ]
-        allowed.sort(key=lambda row: -row["lost"]["LOST"])
-        print(f"{len(allowed)} of {len(rows)} settings within the limits; the best five:")
-        for row in allowed[:5]:
-            show(json.dumps(row["setting"]), row)
-    else:
-        payload["result"] = measure(table, parts, tuning)
-        label = f"{args.rule}{' + latch' if args.latch else ''}, thresholds of the config"
-        show(label, payload["result"])
+    payload["result"] = measure(table, parts, tuning)
+    label = f"{args.rule}{' + latch' if args.latch else ''}, thresholds of the config"
+    show(label, payload["result"])
     if args.json is not None:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")

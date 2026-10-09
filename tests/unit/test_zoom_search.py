@@ -72,7 +72,6 @@ class RelativeRuleTest(unittest.TestCase):
                 measurementAccepted=True,
                 backendScore=backend,
                 appearanceScore=appearance,
-                motionScore=1.0,
             )
             mode = decision.nextMode
             decisions.append(decision)

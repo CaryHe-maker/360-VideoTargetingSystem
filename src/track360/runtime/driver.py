@@ -277,8 +277,6 @@ def runTracking(
         if recorder is not None:
             recorder.recordLocalRgb(frame0, [templateView])
 
-        # The tracker's memory from before a jump on probation.
-        probationState = None
         pipelineReader = _PrefetchReader(source)
         pipelineReader.start()
         try:
@@ -400,13 +398,8 @@ def runTracking(
                                 # A doubted frame must not shape the tracker's appearance
                                 # memory; a jump to a candidate starts it afresh.
                                 if controller.lastFrameReacquired:
-                                    probationState = savedState
                                     backend.resetState()  # type: ignore[attr-defined]
                                     memory = "reset"
-                                elif controller.lastFrameReverted:
-                                    if probationState is not None:
-                                        backend.restoreState(probationState)  # type: ignore[attr-defined]
-                                    memory = "reverted"
                                 elif controller.lastFrameSuspect and savedState is not None:
                                     backend.restoreState(savedState)  # type: ignore[attr-defined]
                                     memory = "frozen"

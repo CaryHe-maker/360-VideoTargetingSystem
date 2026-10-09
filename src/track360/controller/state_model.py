@@ -20,8 +20,6 @@ class TrackMode(Enum):
     TRACKING = auto()
     UNCERTAIN = auto()
     LOST = auto()
-    # Right after a jump to a scan candidate, before it is confirmed.
-    PROBATION = auto()
 
 
 class TransitionReason(Enum):
@@ -30,14 +28,6 @@ class TransitionReason(Enum):
     WEAK_MEASUREMENT = auto()
     HARD_MISS = auto()
     RELEASED = auto()
-    BACKEND_LOW = auto()
-    MOTION_LOW = auto()
-    APPEARANCE_LOW = auto()
-    DOUBT_HELD = auto()
-    APPEARANCE_CONFIRMED_LOSS = auto()
-    ON_PROBATION = auto()
-    PROBATION_PASSED = auto()
-    PROBATION_FAILED = auto()
 
 
 @dataclass(frozen=True, slots=True)
