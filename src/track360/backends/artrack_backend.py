@@ -138,7 +138,8 @@ class TrackerBackendImpl(TrackerBackendProtocol):
         """Locate the target in views without using or changing the tracker's state.
 
         The pass sees the frame-0 template only: its appearance feature starts from
-        the template and no trajectory is given.  Used to look for a lost target.
+        the template.  A view's own trajectory is used when it has one; otherwise the
+        prior box stands in for it.  Used to look for a lost target.
         Each view needs a prior box; a view whose box falls outside it yields no
         observation.
         """
@@ -161,6 +162,7 @@ class TrackerBackendImpl(TrackerBackendProtocol):
                 (self._detachedTemplate,),
                 ((view.spec.bfov.horizontalFovRad, view.spec.bfov.verticalFovRad),),
                 priorBoxes=(view.spec.priorBox,),
+                trajectories=(view.spec.trajectory,) if view.spec.trajectory else None,
             )[0]
             try:
                 observations.append(
