@@ -44,6 +44,7 @@ from track360.core.types import (
     MotionState3D,
     ProjectedObservation,
     SearchPlan,
+    ViewSpec,
 )
 from track360.geometry import GpuGeometryImpl, SphericalGeometryImpl
 from track360.io.result_sink import FileResultSink
@@ -378,8 +379,7 @@ def runTracking(
                                         ),
                                     )
                                 if plan.scanViews:
-                                    forwardCount += len(plan.scanViews)
-                                    candidates = _scanCandidates(
+                                    candidates, scanForwards = _scanCandidates(
                                         frame=frame,
                                         plan=plan,
                                         geometry=geometry,
@@ -387,7 +387,13 @@ def runTracking(
                                         verifier=verifier,
                                         scoreCalibration=scoreCalibration,
                                         useMotionScore=useMotionScore,
+                                        refinementView=(
+                                            controller.refinementView
+                                            if plan.scanRefine
+                                            else None
+                                        ),
                                     )
+                                    forwardCount += scanForwards
                             with _profile(profiler, "controller"):
                                 result = controller.consume(plan, projected, candidates)
                             if verifier is not None:
@@ -597,10 +603,37 @@ def _scanCandidates(
     verifier: Any,
     scoreCalibration: ScoreCalibration,
     useMotionScore: bool,
-) -> tuple[ProjectedObservation, ...]:
-    """Boxes found in the plan's scan views, each with its similarity to the template."""
+    refinementView: Callable[..., ViewSpec] | None = None,
+) -> tuple[tuple[ProjectedObservation, ...], int]:
+    """Boxes found in the plan's scan views with their similarity to the template,
+    and the forward passes spent.
+
+    With ``refinementView`` a scan view only points at a place: a view of the normal
+    size is taken around each box found, and the boxes of those views are returned.
+    """
     views = {view.spec.viewId: view for view in geometry.cropViews(frame, plan.scanViews)}
     found = backend.inferDetached(tuple(views.values()))  # type: ignore[attr-defined]
+    forwards = len(views)
+    if refinementView is not None:
+        specs = []
+        for local in found:
+            try:
+                pointed = geometry.projectLocalBoxBoundary(
+                    local.bbox,
+                    views[local.viewId].spec,
+                    frame.rgb.shape[1],
+                    frame.rgb.shape[0],
+                )
+            except GeometryError:
+                continue
+            specs.append(refinementView(pointed.bfov.center, len(specs)))
+        views = (
+            {view.spec.viewId: view for view in geometry.cropViews(frame, specs)}
+            if specs
+            else {}
+        )
+        found = backend.inferDetached(tuple(views.values())) if views else ()  # type: ignore[attr-defined]
+        forwards += len(views)
     candidates = []
     for local in calibrateLocalAppearanceProbabilities(found, scoreCalibration):
         view = views[local.viewId]
@@ -619,7 +652,7 @@ def _scanCandidates(
                     projected, appearanceSimilarity=verifier.similarity(view, local.bbox)
                 )
             )
-    return tuple(candidates)
+    return tuple(candidates), forwards
 
 
 def _projectValidObservation(

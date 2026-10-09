@@ -5,6 +5,13 @@ Two rules decide the state (``backendTuning.stateRule``):
 ``fused``
     One number, the weighted mean of the three scores, against ``uncertainScore``.
 
+``relative``
+    The backend score and the template similarity are each compared with the
+    median of the frames of this sequence trusted so far, and the mean of the two
+    relative deviations is thresholded.  No score has a level or a weight of its
+    own.  A doubt holds until the mean deviation has been back within half the
+    threshold for ``releaseFrames`` frames.
+
 ``split``
     Each score answers its own question.  The backend score and the motion score say
     when a frame stops being trusted; the similarity to the frame-0 template says
@@ -23,6 +30,10 @@ from track360.core.errors import ProtocolError
 
 # Frames whose mean template similarity starts a doubt under the split rule.
 APPEARANCE_ENTER_FRAMES = 5
+# The relative rule: frames trusted without a check at the start of a sequence, and
+# the share of the entry threshold the deviation must be back within for release.
+RELATIVE_WARM_FRAMES = 10
+RELATIVE_RELEASE_SHARE = 0.5
 
 
 class TrackStateMachine:
@@ -48,6 +59,15 @@ class TrackStateMachine:
         self._doubtAppearance: deque[float] = deque(maxlen=self._tuning.lostAfterFrames)
         self._probationAppearance: list[float] = []
         self._probationBackend: list[float] = []
+        # Trusted values of each score so far; kept across jumps, since they
+        # describe the target and not the track.
+        self._trusted: dict[str, list[float]] = {"backend": [], "appearance": []}
+        self._relativeSignal: float | None = None
+
+    @property
+    def relativeSignal(self) -> float | None:
+        """Mean relative deviation of the last frame under the relative rule."""
+        return self._relativeSignal
 
     @property
     def untrustedFrames(self) -> int:
@@ -101,7 +121,11 @@ class TrackStateMachine:
             return TransitionDecision(
                 "COMMIT", TrackMode.TRACKING, TransitionReason.INITIALIZED, measurementAccepted
             )
-        if self._tuning.stateRule == "split":
+        if self._tuning.stateRule == "relative":
+            nextMode, reason = self._relative(
+                backendScore, appearanceScore, hasBox=backendScore is not None
+            )
+        elif self._tuning.stateRule == "split":
             nextMode, reason = self._split(
                 mode,
                 0.0 if backendScore is None else float(backendScore),
@@ -112,6 +136,55 @@ class TrackStateMachine:
         else:
             nextMode, reason = self._fused(float(stateScore))
         return TransitionDecision("COMMIT", nextMode, reason, measurementAccepted)
+
+    def _deviation(self, channel: str, value: float) -> float:
+        """``value`` relative to the median of the trusted frames, minus one."""
+        history = self._trusted[channel]
+        if len(history) < RELATIVE_WARM_FRAMES:
+            history.append(value)
+            return 0.0
+        deviation = value / max(median(history), 1e-6) - 1.0
+        if deviation > -self._tuning.relativeGate:
+            history.append(value)
+        return deviation
+
+    def _relative(
+        self, backend: float | None, appearance: float | None, *, hasBox: bool
+    ) -> tuple[TrackMode, TransitionReason]:
+        tuning = self._tuning
+        if hasBox:
+            signal = 0.5 * (
+                self._deviation("backend", float(backend or 0.0))
+                + self._deviation("appearance", float(appearance or 0.0))
+            )
+        else:
+            signal = -1.0
+        self._relativeSignal = signal
+        threshold = tuning.relativeEnterDeviation
+        if self._latched:
+            calm = signal > threshold * RELATIVE_RELEASE_SHARE
+            self._calmFrames = self._calmFrames + 1 if calm else 0
+            trusted = self._calmFrames >= tuning.releaseFrames
+        else:
+            trusted = signal >= threshold
+        if trusted:
+            released = self._latched
+            self._untrustedFrames = 0
+            self._calmFrames = 0
+            self._latched = False
+            return TrackMode.TRACKING, (
+                TransitionReason.RELEASED if released else TransitionReason.RELIABLE_MEASUREMENT
+            )
+        self._latched = True
+        self._untrustedFrames += 1
+        nextMode = (
+            TrackMode.LOST
+            if self._untrustedFrames >= tuning.lostAfterFrames
+            else TrackMode.UNCERTAIN
+        )
+        return nextMode, (
+            TransitionReason.WEAK_MEASUREMENT if hasBox else TransitionReason.HARD_MISS
+        )
 
     def _fused(self, stateScore: float) -> tuple[TrackMode, TransitionReason]:
         tuning = self._tuning

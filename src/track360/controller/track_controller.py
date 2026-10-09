@@ -19,7 +19,12 @@ from track360.controller.state_model import (
     TransitionReason,
 )
 from track360.controller.template_policy import TemplateDecision, TemplatePolicy
-from track360.controller.view_planner import TRAJECTORY_LENGTH, ViewPlanner
+from track360.controller.view_planner import (
+    REFINE_VIEW_ID_BASE,
+    SCAN_VIEW_ID_BASE,
+    TRAJECTORY_LENGTH,
+    ViewPlanner,
+)
 from track360.core.config import (
     AppConfig,
     BackendTuningConfig,
@@ -42,6 +47,7 @@ from track360.core.types import (
     ProjectedObservation,
     ResultSource,
     SearchPlan,
+    SphericalPoint,
     TemplateCommand,
     TemplateCommandKind,
     TrackResult,
@@ -151,6 +157,10 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._distractors: deque[BFoV] = deque(maxlen=_MAX_DISTRACTORS)
         # Scan views that may still be spent; starts full.
         self._scanTokens = backendTuning.scanBudgetBurst
+        # Frames planned since the track was last declared lost, and what the last
+        # plan's scan was (for the state trace).
+        self._lostFrames = 0
+        self._lastScan = ""
         self._lastFrameTrace: dict[str, object] = {}
 
     @property
@@ -321,7 +331,18 @@ class TrackControllerImpl(TrackControllerProtocol):
                 min(prediction.horizontalSizeRad, _MAX_HORIZONTAL_SIZE_RAD),
                 min(prediction.verticalSizeRad, _MAX_VERTICAL_SIZE_RAD),
             )
+        mainView = self._planner.searchView(
+            viewCenter,
+            targetBfov.horizontalFovRad,
+            targetBfov.verticalFovRad,
+            tuple(self._trajectory),
+        )
         scanViews: tuple[ViewSpec, ...] = ()
+        scanRefine = False
+        self._lastScan = ""
+        lost = self._mode is TrackMode.LOST
+        lostFrames = self._lostFrames if lost else 0
+        self._lostFrames = lostFrames + 1 if lost else 0
         scanCount = self._backendTuning.scanViewsPerFrame
         if self._backendTuning.scanBudgetPerFrame > 0.0:
             # Every frame earns a share of a scan view; a lost track spends the whole
@@ -331,7 +352,13 @@ class TrackControllerImpl(TrackControllerProtocol):
                 self._scanTokens + self._backendTuning.scanBudgetPerFrame,
             )
             scanCount = min(scanCount, int(self._scanTokens))
-        if (
+        searching = self._actions != "none" and lost and self._lastGoodBfov is not None
+        if searching and self._backendTuning.scanMode == "zoom":
+            scanViews, scanRefine = self._zoomScan(mainView, lostFrames, scanCount)
+            if scanViews:
+                self._scanTokens -= 2 if scanRefine else 1
+                self._scanFrameCount += 1
+        elif (
             self._actions != "none"
             and self._mode is TrackMode.LOST
             and self._lastGoodBfov is not None
@@ -342,16 +369,12 @@ class TrackControllerImpl(TrackControllerProtocol):
             )
             self._scanTokens -= len(scanViews)
             self._scanFrameCount += 1
+            self._lastScan = "tiles"
         plan = SearchPlan(
             sequenceId=frame.sequenceId,
             frameIndex=frame.frameIndex,
             stateRevision=self._stateRevision + 1,
-            view=self._planner.searchView(
-                viewCenter,
-                targetBfov.horizontalFovRad,
-                targetBfov.verticalFovRad,
-                tuple(self._trajectory),
-            ),
+            view=mainView,
             templateCommand=TemplateCommand(
                 kind=self._pendingTemplate.kind,
                 frameIndex=frame.frameIndex,
@@ -361,6 +384,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             ),
             predictedMotion=prediction.motionState,
             scanViews=scanViews,
+            scanRefine=scanRefine,
         )
         self._pending = _PendingFrame(
             frame=frame,
@@ -371,6 +395,55 @@ class TrackControllerImpl(TrackControllerProtocol):
         )
         self._pendingTemplate = TemplateDecision(TemplateCommandKind.KEEP)
         return plan
+
+    def _zoomScan(
+        self, mainView: ViewSpec, lostFrames: int, budget: int
+    ) -> tuple[tuple[ViewSpec, ...], bool]:
+        """The scan of a lost frame under ``scanMode: zoom``, and whether it is refined.
+
+        The first lost frame looks again at the view the tracker is in, without
+        the tracker's memory.  Later frames take one enlarged view, the larger the
+        longer the track has been lost; the box found there is not a candidate
+        itself but the centre of a view of the normal size (see ``refinementView``).
+        """
+        tuning = self._backendTuning
+        trusted = self._lastGoodBfov
+        assert trusted is not None and self._currentBfov is not None
+        if lostFrames == 0 and tuning.zoomInPlace:
+            if budget < 1:
+                return (), False
+            self._lastScan = "1x"
+            return (replace(mainView, viewId=SCAN_VIEW_ID_BASE, trajectory=()),), False
+        if budget < 2:
+            return (), False
+        if lostFrames >= tuning.zoomLastAfterFrames:
+            scale = tuning.zoomLastScale
+        elif tuning.zoomMidScale > 0.0 and lostFrames >= tuning.zoomMidAfterFrames:
+            scale = tuning.zoomMidScale
+        else:
+            scale = tuning.zoomFirstScale
+        centre = trusted.center if tuning.zoomCentre == "trusted" else self._currentBfov.center
+        self._lastScan = f"{scale:g}x"
+        view = self._planner.probeView(
+            centre,
+            trusted.horizontalFovRad,
+            trusted.verticalFovRad,
+            scale,
+            SCAN_VIEW_ID_BASE,
+        )
+        return (view,), True
+
+    def refinementView(self, center: SphericalPoint, index: int = 0) -> ViewSpec:
+        """A view of the normal size around a place an enlarged scan view pointed at."""
+        trusted = self._lastGoodBfov or self._currentBfov
+        assert trusted is not None
+        return self._planner.probeView(
+            center,
+            trusted.horizontalFovRad,
+            trusted.verticalFovRad,
+            1.0,
+            REFINE_VIEW_ID_BASE + index,
+        )
 
     def consume(
         self,
@@ -428,6 +501,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             reason=decision.reason.name,
             untrusted=self._stateMachine.untrustedFrames,
             calm=self._stateMachine.calmFrames,
+            relative=self._stateMachine.relativeSignal,
             **_place(result.bfov),
         )
         self._lastPipelineProfile = {
@@ -471,6 +545,8 @@ class TrackControllerImpl(TrackControllerProtocol):
             "untrusted": self._stateMachine.untrustedFrames,
             "calm": self._stateMachine.calmFrames,
             "scanViews": len(pending.plan.scanViews),
+            "scan": self._lastScan,
+            "relative": None,
             "candidates": [],
         }
 

@@ -169,11 +169,27 @@ class BackendTuningConfig:
     appearanceLostScore: float = 0.26
     probationFrames: int = 10
     distractorRadius: float = 1.0
+    # The relative rule: each score against the median of the frames trusted so far
+    # (a frame is trusted while it is no more than ``relativeGate`` below it); the mean
+    # of the two deviations below ``relativeEnterDeviation`` raises a latched doubt.
+    relativeGate: float = 0.05
+    relativeEnterDeviation: float = -0.53
+    # How a lost track searches: tiles (views of the normal size, nearest first) or
+    # zoom (one enlarged view, then a view of the normal size where it points).
+    scanMode: str = "tiles"
+    zoomInPlace: bool = True
+    zoomCentre: str = "trusted"
+    zoomFirstScale: float = 2.0
+    zoomMidScale: float = 0.0
+    zoomLastScale: float = 4.0
+    zoomMidAfterFrames: int = 10
+    zoomLastAfterFrames: int = 20
 
     def __post_init__(self) -> None:
         for name in (
             "lossHandling",
             "stateLatch",
+            "zoomInPlace",
             "sequenceModel",
             "acceptAnyCandidate",
             "fullViewSearch",
@@ -194,12 +210,25 @@ class BackendTuningConfig:
             raise ConfigError(
                 "backendTuning.alignedSearch and fullViewSearch cannot both be enabled"
             )
-        if self.stateRule not in ("fused", "split"):
-            raise ConfigError("backendTuning.stateRule must be fused or split")
+        if self.stateRule not in ("fused", "split", "relative"):
+            raise ConfigError("backendTuning.stateRule must be fused, split or relative")
+        if self.scanMode not in ("tiles", "zoom"):
+            raise ConfigError("backendTuning.scanMode must be tiles or zoom")
+        if self.zoomCentre not in ("trusted", "current"):
+            raise ConfigError("backendTuning.zoomCentre must be trusted or current")
+        if min(self.zoomFirstScale, self.zoomLastScale) < 1.0 or self.zoomMidScale < 0.0:
+            raise ConfigError("backendTuning zoom scales must be at least 1 (mid: 0 or more)")
+        if self.zoomMidAfterFrames < 0 or self.zoomLastAfterFrames < 0:
+            raise ConfigError("backendTuning zoom frame counts must be non-negative")
+        if not 0.0 <= self.relativeGate <= 1.0 or not -1.0 <= self.relativeEnterDeviation < 0:
+            raise ConfigError(
+                "backendTuning.relativeGate must be in [0, 1] and "
+                "relativeEnterDeviation in [-1, 0)"
+            )
         if self.lossActions not in ("none", "jump", "probation"):
             raise ConfigError("backendTuning.lossActions must be none, jump or probation")
-        if self.stateRule == "split" and not self.lossHandling:
-            raise ConfigError("backendTuning.stateRule split needs lossHandling")
+        if self.stateRule != "fused" and not self.lossHandling:
+            raise ConfigError(f"backendTuning.stateRule {self.stateRule} needs lossHandling")
         if self.lossActions == "probation" and self.stateRule != "split":
             raise ConfigError("backendTuning.lossActions probation needs stateRule split")
         if self.releaseFrames < 1 or self.probationFrames < 1:
@@ -421,6 +450,16 @@ def loadConfig(path: str | Path) -> AppConfig:
             "appearanceLostScore",
             "probationFrames",
             "distractorRadius",
+            "relativeGate",
+            "relativeEnterDeviation",
+            "scanMode",
+            "zoomInPlace",
+            "zoomCentre",
+            "zoomFirstScale",
+            "zoomMidScale",
+            "zoomLastScale",
+            "zoomMidAfterFrames",
+            "zoomLastAfterFrames",
         },
     )
     reproducibilityRaw = _section(root, "reproducibility", {"seed", "deterministic"})
@@ -598,6 +637,15 @@ def loadConfig(path: str | Path) -> AppConfig:
                 "backendTuning.reacquireScore", tuningRaw["reacquireScore"]
             ),
             stateRule=_requireStr("backendTuning.stateRule", tuningRaw["stateRule"]),
+            scanMode=_requireStr("backendTuning.scanMode", tuningRaw["scanMode"]),
+            zoomCentre=_requireStr("backendTuning.zoomCentre", tuningRaw["zoomCentre"]),
+            zoomInPlace=_requireBool("backendTuning.zoomInPlace", tuningRaw["zoomInPlace"]),
+            zoomMidAfterFrames=_requireInt(
+                "backendTuning.zoomMidAfterFrames", tuningRaw["zoomMidAfterFrames"]
+            ),
+            zoomLastAfterFrames=_requireInt(
+                "backendTuning.zoomLastAfterFrames", tuningRaw["zoomLastAfterFrames"]
+            ),
             lossActions=_requireStr("backendTuning.lossActions", tuningRaw["lossActions"]),
             stateLatch=_requireBool("backendTuning.stateLatch", tuningRaw["stateLatch"]),
             releaseFrames=_requireInt(
@@ -617,6 +665,11 @@ def loadConfig(path: str | Path) -> AppConfig:
                     "appearanceReleaseScore",
                     "appearanceLostScore",
                     "distractorRadius",
+                    "relativeGate",
+                    "relativeEnterDeviation",
+                    "zoomFirstScale",
+                    "zoomMidScale",
+                    "zoomLastScale",
                 )
             },
         ),

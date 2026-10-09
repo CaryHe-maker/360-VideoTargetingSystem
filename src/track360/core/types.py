@@ -419,6 +419,9 @@ class SearchPlan:
     predictedMotion: MotionState3D | None
     # Extra views searched without tracker state while the target is considered lost.
     scanViews: tuple[ViewSpec, ...] = ()
+    # The scan views only point at where to look: each box found in one is followed
+    # by a view of the normal size around it, and that view's box is the candidate.
+    scanRefine: bool = False
 
     def __post_init__(self) -> None:
         if not str(self.sequenceId) or int(self.frameIndex) < 0 or self.stateRevision < 0:

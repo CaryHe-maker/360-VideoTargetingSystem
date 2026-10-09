@@ -452,6 +452,8 @@ TRACE_COLUMNS = (
     "sizeDeg",
     "forwards",
     "scanViews",
+    "scan",
+    "relative",
     "candidates",
 )
 

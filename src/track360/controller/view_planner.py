@@ -37,6 +37,8 @@ SEARCH_VIEW_ID = 0
 SCAN_VIEW_ID_BASE = 1
 # Neighbouring scan views are this fraction of a view apart, so they overlap by half.
 SCAN_STEP_RATIO = 0.5
+# Views of the normal size that follow an enlarged scan view get the ids from here.
+REFINE_VIEW_ID_BASE = 64
 # Previous target boxes handed to the backend with every view (ARTrackV2 reads seven).
 TRAJECTORY_LENGTH = 7
 
@@ -85,6 +87,23 @@ class ViewPlanner:
                 )
             )
         return tuple(views), (cursor + len(views)) % len(offsets)
+
+    def probeView(
+        self,
+        center: SphericalPoint,
+        horizontalSizeRad: float,
+        verticalSizeRad: float,
+        scale: float,
+        viewId: int,
+    ) -> ViewSpec:
+        """A view ``scale`` times the normal search view of such a target, around ``center``.
+
+        Laid out as the search view of a target ``scale`` times as large, so the
+        backend's search crop is the whole view and the target appears that much
+        smaller in it.
+        """
+        view = self._searchView(center, scale * horizontalSizeRad, scale * verticalSizeRad)
+        return replace(view, viewId=viewId)
 
     def _offsetsFor(self, stepRad: float) -> list[tuple[float, float, float]]:
         """Directions covering the sphere ``stepRad`` apart, nearest to straight ahead first."""
@@ -385,6 +404,7 @@ def clampFov(value: float, geometry: GeometryConfig) -> float:
 
 __all__ = [
     "ALIGNED_SEARCH_FACTOR",
+    "REFINE_VIEW_ID_BASE",
     "SCAN_VIEW_ID_BASE",
     "SEARCH_FOV_SCALE",
     "SEARCH_VIEW_ID",

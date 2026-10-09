@@ -72,6 +72,16 @@ backendTuning:
   appearanceLostScore: 0.26
   probationFrames: 10
   distractorRadius: 1.0
+  relativeGate: 0.05
+  relativeEnterDeviation: -0.53
+  scanMode: tiles
+  zoomInPlace: true
+  zoomCentre: trusted
+  zoomFirstScale: 2.0
+  zoomMidScale: 0.0
+  zoomLastScale: 4.0
+  zoomMidAfterFrames: 10
+  zoomLastAfterFrames: 20
 reproducibility:
   seed: 0
   deterministic: true
