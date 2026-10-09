@@ -11,7 +11,10 @@ by a view of the normal size), works out from the ground truth:
   searched view, in half-widths of that view (at most 1: inside it);
 - what came back: nothing above the acceptance score, the box the tracker already
   had, a box on the target, or a box somewhere else;
-- for the attempts that ended in a jump, whether the next frames were right.
+- for the attempts that ended in a jump, whether the next frames were right;
+- how other acceptance rules would have chosen among the same boxes: a fixed score,
+  or the found box against the tracked box of the same frame (its backend score,
+  its similarity to the template, or both).
 
 The middle of an enlarged view is the place the track was last trusted; the look in
 place uses the tracker's own view.
@@ -110,6 +113,9 @@ def analyse(args: argparse.Namespace) -> list[dict[str, object]]:
                         < 1.5 * min(trackedSize, float(best["sizeDeg"]))
                     )
                     item["bestScore"] = float(best["score"])
+                    item["bestSimilarity"] = float(best["similarity"] or 0.0)
+                item["trackedScore"] = float(row["backend"] or 0.0) if row["hasBox"] == "1" else 0.0
+                item["trackedSimilarity"] = float(row["appearance"] or 0.0)
                 item["returned"] = bool(candidates)
                 item["accepted"] = bool(accepted)
                 if item["jumped"]:
@@ -213,6 +219,60 @@ def report(attempts: list[dict[str, object]]) -> dict[str, object]:
     for reason, count in reasons.most_common():
         print(f"  {reason:<52}{count:>4}")
     payload["failedJumps"] = dict(reasons)
+    payload["rules"] = rules(attempts)
+    return payload
+
+
+RULES = {
+    "score >= 0.70 (in use)": lambda a: a["bestScore"] >= 0.70,
+    "score >= 0.50": lambda a: a["bestScore"] >= 0.50,
+    "score > tracked score": lambda a: a["bestScore"] > a["trackedScore"],
+    "similarity > tracked similarity": lambda a: a["bestSimilarity"] > a["trackedSimilarity"],
+    "both higher": lambda a: a["bestScore"] > a["trackedScore"]
+    and a["bestSimilarity"] > a["trackedSimilarity"],
+    "mean of the two higher": lambda a: a["bestScore"] + a["bestSimilarity"]
+    > a["trackedScore"] + a["trackedSimilarity"],
+    "score higher by 0.1": lambda a: a["bestScore"] > a["trackedScore"] + 0.1,
+    "mean of the two higher by 0.1": lambda a: a["bestScore"] + a["bestSimilarity"]
+    > a["trackedScore"] + a["trackedSimilarity"] + 0.2,
+    "score > tracked and >= 0.50": lambda a: a["bestScore"] > max(a["trackedScore"], 0.50),
+}
+
+
+def rules(attempts: list[dict[str, object]]) -> dict[str, object]:
+    """What each acceptance rule would take among the boxes the searches returned.
+
+    Boxes that are the tracked box found again are left out.  The run itself used
+    one rule, so the boxes of later frames depend on it: this is a comparison on
+    the same recorded boxes, not what a run with another rule would give.
+    """
+    payload: dict[str, object] = {}
+    groups = (("enlarged views (2x, 3x, 4x)", KINDS[1:]), ("look in place (1x)", KINDS[:1]))
+    for label, kinds in groups:
+        part = [
+            a
+            for a in attempts
+            if a["scan"] in kinds and a["returned"] and not a.get("bestOnTrackedBox")
+        ]
+        onTarget = [a for a in part if a["present"] and a.get("bestOnTarget")]
+        print(
+            f"\n{label}: {len(part)} boxes returned that are not the tracked box, "
+            f"{len(onTarget)} of them on the target"
+        )
+        print(f"  {'rule':<34}{'accepted':>9}{'on target':>11}{'precision':>11}{'recall':>9}")
+        payload[label] = {}
+        for name, rule in RULES.items():
+            taken = [a for a in part if rule(a)]
+            right = [a for a in taken if a["present"] and a.get("bestOnTarget")]
+            precision = len(right) / len(taken) if taken else 0.0
+            recall = len(right) / len(onTarget) if onTarget else 0.0
+            payload[label][name] = {
+                "accepted": len(taken), "onTarget": len(right),
+                "precision": precision, "recall": recall,
+            }
+            print(
+                f"  {name:<34}{len(taken):>9}{len(right):>11}{precision:>11.1%}{recall:>9.1%}"
+            )
     return payload
 
 
