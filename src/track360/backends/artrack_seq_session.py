@@ -64,7 +64,17 @@ class PyTorchARTrackV2SeqSession:
         self._weights = Path(config.weights).expanduser().resolve()
         if not self._weights.is_file():
             raise ModelError(f"ARTrackV2 checkpoint does not exist: {self._weights}")
+        # TensorFloat-32 is a process-wide switch: the last session built decides.
+        self._precision = config.precision
+        if self._device.type == "cuda":
+            self._torch.backends.cuda.matmul.allow_tf32 = config.precision != "fp32"
         self._model, modelConfig = self._loadModel()
+        self._mean = self._torch.tensor([0.485, 0.456, 0.406], device=self._device).view(
+            3, 1, 1
+        )
+        self._std = self._torch.tensor([0.229, 0.224, 0.225], device=self._device).view(
+            3, 1, 1
+        )
         self._bins = int(modelConfig.BINS)
         self._range = int(modelConfig.RANGE)
         self._trajectoryLength = int(modelConfig.PRENUM)
@@ -255,9 +265,7 @@ class PyTorchARTrackV2SeqSession:
     def _preprocess(self, image: NDArray[np.uint8]) -> Any:
         array = image.astype(np.float32) / 255.0
         tensor = self._torch.from_numpy(array).permute(2, 0, 1).to(self._device)
-        mean = self._torch.tensor([0.485, 0.456, 0.406], device=self._device).view(3, 1, 1)
-        std = self._torch.tensor([0.229, 0.224, 0.225], device=self._device).view(3, 1, 1)
-        return (tensor - mean) / std
+        return (tensor - self._mean) / self._std
 
     def _requireOpen(self) -> None:
         if self._closed:

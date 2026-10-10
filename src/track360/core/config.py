@@ -14,8 +14,18 @@ VISUALIZATION_STAGES = frozenset({"local_rgb", "backend_box", "geometry_box"})
 GEOMETRY_RESAMPLERS = frozenset({"cpu", "opencv"})
 
 
+MODEL_PRECISIONS = ("fp32", "tf32")
+
+
 @dataclass(frozen=True, slots=True)
 class ModelConfig:
+    """``precision``: fp32 (the reference) or tf32 (float32 with TensorFloat-32
+    matrix products on the GPU: faster, results differ in the last digits).
+
+    Half precision was tried and dropped: the forward pass is bound by the work
+    of launching its many small operations, so it ran no faster than tf32 in the
+    pipeline and moved the boxes more (evaluation log E039)."""
+
     backend: str
     variant: str
     weights: Path
@@ -28,9 +38,10 @@ class ModelConfig:
             raise ConfigError("model.variant must be artrackv2_b_256")
         if not self.variant.strip():
             raise ConfigError("model.variant must be non-empty")
-        if self.precision != "fp32":
+        if self.precision not in MODEL_PRECISIONS:
             raise ConfigError(
-                f"unsupported model.precision: {self.precision}; only fp32 is implemented"
+                f"unsupported model.precision: {self.precision}; "
+                f"expected one of {', '.join(MODEL_PRECISIONS)}"
             )
 
 

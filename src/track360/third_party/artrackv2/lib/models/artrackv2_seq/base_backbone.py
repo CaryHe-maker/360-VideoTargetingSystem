@@ -138,12 +138,20 @@ class BaseBackbone(nn.Module):
 
         B, H, W = x.shape[0], x.shape[2], x.shape[3]
 
-        command = torch.cat([torch.ones((B, 1)).to(x) * x0, torch.ones((B, 1)).to(x) * y0,
-                       torch.ones((B, 1)).to(x) * x1,
-                       torch.ones((B, 1)).to(x) * y1,
-                       torch.ones((B, 1)).to(x) * score], dim=1)
         trajectory = seqs_input
-        command = command.to(trajectory)
+        # Track360: the command tokens and the attention mask below depend only on
+        # the batch size and the token counts, so they are built once and kept
+        # (same values; saves six host-to-device copies per forward pass).
+        cache = self.__dict__.setdefault("_track360_cache", {})
+        command_key = ("command", B, x.dtype, x.device, trajectory.dtype, trajectory.device)
+        command = cache.get(command_key)
+        if command is None:
+            command = torch.cat([torch.ones((B, 1)).to(x) * x0, torch.ones((B, 1)).to(x) * y0,
+                           torch.ones((B, 1)).to(x) * x1,
+                           torch.ones((B, 1)).to(x) * y1,
+                           torch.ones((B, 1)).to(x) * score], dim=1)
+            command = command.to(trajectory)
+            cache[command_key] = command
         seqs_input_ = torch.cat([trajectory, command], dim=1)
         
         seqs_input_ = seqs_input_.to(torch.int64).to(x.device)
@@ -176,7 +184,11 @@ class BaseBackbone(nn.Module):
         z_1 += self.pos_embed_z1
         x += self.pos_embed_x
 
-        mask = generate_square_subsequent_mask(len_z, len_x, len_seq).to(tgt.device)
+        mask_key = ("mask", len_z, len_x, len_seq, tgt.device)
+        mask = cache.get(mask_key)
+        if mask is None:
+            mask = generate_square_subsequent_mask(len_z, len_x, len_seq).to(tgt.device)
+            cache[mask_key] = mask
 
         tgt += query_seq_embed[:, :tgt.shape[1]]
 
