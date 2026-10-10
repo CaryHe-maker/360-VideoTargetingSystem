@@ -60,10 +60,11 @@ def decodeRgbImage(payload: bytes, name: str = "<bytes>") -> np.ndarray:
     import cv2
 
     buffer = np.frombuffer(payload, dtype=np.uint8)
-    bgr = cv2.imdecode(buffer, cv2.IMREAD_COLOR) if buffer.size else None
-    if bgr is None:
+    # Decoded straight to RGB: converting a 4K frame afterwards costs about 4 ms.
+    rgb = cv2.imdecode(buffer, cv2.IMREAD_COLOR_RGB) if buffer.size else None
+    if rgb is None:
         raise DecodeError(f"cannot decode image: {name}")
-    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    return rgb
 
 
 def _readPng(path: Path) -> np.ndarray:

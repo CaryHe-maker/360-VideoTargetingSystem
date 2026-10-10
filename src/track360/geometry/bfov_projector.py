@@ -86,22 +86,29 @@ def _remapView(image: NDArray[np.uint8], spec: ViewSpec) -> NDArray[np.uint8]:
         vertical = (single(1.0) - single(2.0) * row) * single(
             np.tan(spec.bfov.verticalFovRad / 2.0)
         )
-        shape = (heightPx, widthPx)
-        along = np.ones(shape, dtype=single)
-        across = np.broadcast_to(horizontal[np.newaxis, :], shape)
-        upward = np.broadcast_to(vertical[:, np.newaxis], shape)
+        along = across = upward = None
     forward, right, up = (
         axis.astype(single) for axis in viewAxes(spec.bfov.center, spec.bfov.rollRad)
     )
-    x = along * forward[0] + across * right[0] + upward * up[0]
-    y = along * forward[1] + across * right[1] + upward * up[1]
-    z = along * forward[2] + across * right[2] + upward * up[2]
+    if along is None:
+        # A perspective view has a constant forward part, a part per column and a
+        # part per row: summed in the order of the general form, so the values are
+        # the same to the last bit at a fraction of the work.
+        x, y, z = (
+            (forward[k] + horizontal * right[k])[np.newaxis, :]
+            + (vertical * up[k])[:, np.newaxis]
+            for k in range(3)
+        )
+    else:
+        x = along * forward[0] + across * right[0] + upward * up[0]
+        y = along * forward[1] + across * right[1] + upward * up[1]
+        z = along * forward[2] + across * right[2] + upward * up[2]
     yaw = np.arctan2(x, z)
     pitch = np.arctan2(y, np.hypot(x, z))
-    mapX = np.mod(
-        (yaw + single(np.pi)) * single(frameWidthPx / (2.0 * np.pi)) - single(0.5),
-        single(frameWidthPx),
-    )
+    # The column lies in [-0.5, width - 0.5): wrapping it is adding the width to the
+    # negative ones, which is what ``np.mod`` computes and several times faster.
+    mapX = (yaw + single(np.pi)) * single(frameWidthPx / (2.0 * np.pi)) - single(0.5)
+    np.add(mapX, single(frameWidthPx), out=mapX, where=mapX < single(0.0))
     mapY = np.clip(
         (single(np.pi / 2.0) - pitch) * single(frameHeightPx / np.pi) - single(0.5),
         single(0.0),

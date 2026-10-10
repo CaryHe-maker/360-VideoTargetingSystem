@@ -348,16 +348,13 @@ class LocalBoxProjection:
 
     bfov: BFoV
     bbox: BBoxXYWH
-    sphericalBoundary: tuple[SphericalPoint, ...]
     erpBoundary: tuple[tuple[float, float], ...]
     indirectBbox: BBoxXYWH
     envelopeInflation: float
 
     def __post_init__(self) -> None:
-        if len(self.sphericalBoundary) < 8:
+        if len(self.erpBoundary) < 8:
             raise ProtocolError("projected local boundary requires at least eight samples")
-        if len(self.sphericalBoundary) != len(self.erpBoundary):
-            raise ProtocolError("spherical and ERP boundaries must have equal length")
         for point in self.erpBoundary:
             if len(point) != 2:
                 raise ProtocolError("each ERP boundary point must contain x and y")

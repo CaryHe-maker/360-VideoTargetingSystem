@@ -148,21 +148,10 @@ class SphericalGeometryImpl(SphericalGeometryProtocol):
         )
         directArea = bbox.widthPx * bbox.heightPx
         indirectArea = indirectBbox.widthPx * indirectBbox.heightPx
-        sphericalBoundary = tuple(
-            makeSphericalPoint(
-                float(np.arctan2(vector[0], vector[2])),
-                float(np.arcsin(np.clip(vector[1], -1.0, 1.0))),
-            )
-            for vector in vectors
-        )
         return LocalBoxProjection(
             bfov=bfov,
             bbox=bbox,
-            sphericalBoundary=sphericalBoundary,
-            erpBoundary=tuple(
-                (float(xValue), float(yValue))
-                for xValue, yValue in zip(erpX, erpY, strict=True)
-            ),
+            erpBoundary=tuple(zip(erpX.tolist(), erpY.tolist(), strict=True)),
             indirectBbox=indirectBbox,
             envelopeInflation=float(indirectArea / max(directArea, 1e-12)),
         )
