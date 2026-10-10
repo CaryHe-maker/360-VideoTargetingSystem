@@ -10,6 +10,7 @@
 - 新增可选的试验选项 `backendTuning.samePlaceAction`、`zoomSpread`、`crossScore`、`crossCheck` 和 `zoomCentre: extrapolated`（E033）；默认值不改变原有行为。基线 2 用 `samePlaceAction: jump`。
 - 新增工具：`tools/candidate_support.py`（搜索候选按分数和视图一致性的准确率）、`tools/frame_level_search.py`（帧级和序列级前向在同一批搜索上的三关对比，E034；需要先把帧级模型代码恢复到 vendor 目录）、`tools/oracle_restart.py`（丢失后用真值重置跟踪器的上限测试）。
 - DINOv2 优先从本地 `models/hub` 加载，启动不再需要联网。
+- 冻结期间的三组离线测试，不改跟踪逻辑：真值重置的上限（E035，`tools/oracle_restart.py` 改为按重新出现、突然位移、其他丢失三类在第 N 帧重置）、DINOv2 分块相似度选候选点再逐点前向（E036，新工具 `tools/topk_search.py`）、消失或位移后目标离上一位置的距离和 2 × 2 区域的候选点（E037）。
 
 ### 清理旧版本的代码路径
 
