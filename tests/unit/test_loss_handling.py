@@ -8,7 +8,7 @@ import numpy as np
 from track360.backends import ARTrackBackend, ARTrackPrediction, TrackerBackendImpl
 from track360.backends.appearance import histogramSimilarity, targetCrop
 from track360.backends.artrack_model import ARTrackTemplate
-from track360.controller import TrackControllerImpl, ViewPlanner
+from track360.controller import TrackControllerImpl
 from track360.core.config import loadConfig
 from track360.core.errors import ConfigError
 from track360.core.types import (
@@ -19,7 +19,6 @@ from track360.core.types import (
     LocalView,
     ProjectedObservation,
     SequenceId,
-    ViewProjection,
     ViewSpec,
 )
 from track360.geometry import SphericalGeometryImpl, makeSphericalPoint
@@ -53,91 +52,6 @@ def _observation(
 
 
 class LossHandlingControllerTest(unittest.TestCase):
-    def setUp(self) -> None:
-        config = loadConfig(ROOT / "configs" / "default.yaml")
-        # State score = mean of the backend score and the appearance similarity; a
-        # frame below 0.6 is not trusted and three of them in a row mean lost.
-        self.config = replace(
-            config,
-            backendTuning=replace(
-                config.backendTuning,
-                lossHandling=True,
-                stateBackendWeight=0.5,
-                stateAppearanceWeight=0.5,
-                stateMotionWeight=0.0,
-                uncertainScore=0.6,
-                lostAfterFrames=4,
-            ),
-        )
-        self.controller = TrackControllerImpl(SphericalGeometryImpl(), self.config)
-        self.controller.commitInitialization(
-            self.controller.buildInitialization(_frame(0), INITIAL_BOX)
-        )
-
-    def _step(self, index: int, observation, candidates=()):
-        plan = self.controller.beginFrame(_frame(index))
-        return plan, self.controller.consume(plan, observation, candidates)
-
-    def testALowScoreOrAnUnlikeBoxIsSuspectAndAGoodFrameClearsIt(self) -> None:
-        self._step(1, _observation(0.9, 0.7))
-        self.assertFalse(self.controller.lastFrameSuspect)
-        self._step(2, _observation(0.9, 0.1))
-        self.assertTrue(self.controller.lastFrameSuspect)
-        self._step(3, _observation(0.2, 0.7))
-        self.assertEqual(self.controller.suspectFrames, 2)
-        # The box is still followed: doubt alone does not stop the tracker.
-        _, result = self._step(4, _observation(0.9, 0.1, yaw=0.05))
-        self.assertTrue(result.valid)
-        self.assertAlmostEqual(result.bfov.center.yawRad, 0.05)
-        self._step(5, _observation(0.9, 0.7))
-        self.assertEqual(self.controller.suspectFrames, 0)
-        self.assertFalse(self.controller.lastFrameSuspect)
-
-    def testScanViewsStartAfterEnoughDoubtfulFramesAroundTheLastTrustedPlace(self) -> None:
-        self._step(1, _observation(0.9, 0.7))
-        plans = []
-        for index in range(2, 8):
-            plan, _ = self._step(index, _observation(0.9, 0.1, yaw=0.1 * index))
-            plans.append(plan)
-
-        # Four doubtful frames must have passed before a plan carries scan views.
-        self.assertEqual([len(plan.scanViews) for plan in plans], [0, 0, 0, 0, 4, 4])
-        first = plans[4].scanViews[0]
-        # The nearest scan view looks at where the target was last trusted (yaw 0), not at
-        # where the doubted box wandered to.
-        self.assertLess(abs(first.bfov.center.yawRad), 0.5)
-        self.assertIsNotNone(first.priorBox)
-        self.assertEqual([view.viewId for view in plans[4].scanViews], [1, 2, 3, 4])
-        self.assertNotEqual(plans[4].scanViews, plans[5].scanViews)
-
-    def testAClearlyBetterCandidateRestartsTheTrackThere(self) -> None:
-        for index in range(1, 6):
-            self._step(index, _observation(0.9, 0.1))
-        weak = _observation(0.9, 0.2, yaw=1.0, viewId=1)
-        unsure = _observation(0.3, 0.9, yaw=1.5, viewId=2)
-        strong = _observation(0.8, 0.8, yaw=2.0, viewId=3)
-
-        _, kept = self._step(6, _observation(0.9, 0.1), (weak, unsure))
-        self.assertFalse(self.controller.lastFrameReacquired)
-        self.assertAlmostEqual(kept.bfov.center.yawRad, 0.0)
-
-        _, jumped = self._step(7, _observation(0.9, 0.1), (weak, unsure, strong))
-        self.assertTrue(self.controller.lastFrameReacquired)
-        self.assertFalse(self.controller.lastFrameSuspect)
-        self.assertAlmostEqual(jumped.bfov.center.yawRad, 2.0)
-        self.assertEqual(self.controller.suspectFrames, 0)
-        after = self.controller.beginFrame(_frame(8))
-        self.assertEqual(after.scanViews, ())
-        self.assertAlmostEqual(after.view.bfov.center.yawRad, 2.0, places=3)
-        # The trajectory starts over at the new place.
-        self.assertEqual(len(set(after.view.trajectory)), 1)
-
-    def testACandidateMustBeatTheTrackedBoxByAMargin(self) -> None:
-        for index in range(1, 6):
-            self._step(index, _observation(0.4, 0.55))
-        self._step(6, _observation(0.4, 0.55), (_observation(0.8, 0.6, yaw=2.0, viewId=1),))
-        self.assertFalse(self.controller.lastFrameReacquired)
-
     def testLossHandlingIsOffByDefaultAndItsSettingsAreValidated(self) -> None:
         config = loadConfig(ROOT / "configs" / "default.yaml")
         self.assertFalse(config.backendTuning.lossHandling)
@@ -152,45 +66,6 @@ class LossHandlingControllerTest(unittest.TestCase):
             replace(config.backendTuning, lostAfterFrames=0)
         with self.assertRaises(ConfigError):
             replace(config.backendTuning, uncertainScore=2.0)
-
-
-class ScanViewsTest(unittest.TestCase):
-    def setUp(self) -> None:
-        config = loadConfig(ROOT / "configs" / "default.yaml")
-        self.planner = ViewPlanner(config.geometry, config.tracking, config.backendTuning)
-
-    def testScanCoversTheSphereNearestFirstAndWrapsAround(self) -> None:
-        lastSeen = BFoV(makeSphericalPoint(1.0, 0.3), math.radians(20.0), math.radians(20.0))
-        views, cursor = self.planner.scanViews(lastSeen, 0, 6)
-        self.assertEqual(cursor, 6)
-        forward = np.asarray((lastSeen.center.x, lastSeen.center.y, lastSeen.center.z))
-        centers = np.asarray([(v.bfov.center.x, v.bfov.center.y, v.bfov.center.z) for v in views])
-        distances = np.round(np.arccos(np.clip(centers @ forward, -1.0, 1.0)), 9).tolist()
-        self.assertEqual(distances, sorted(distances))
-        # An 80 degree view every 40 degrees: the nearest is within half a step.
-        self.assertLess(distances[0], math.radians(21.0))
-        self.assertAlmostEqual(math.degrees(views[0].bfov.horizontalFovRad), 70.4, delta=1.0)
-
-        total, seen, cursor = 0, [], 0
-        while True:
-            batch, cursor = self.planner.scanViews(lastSeen, cursor, 7)
-            seen += [view.bfov.center for view in batch]
-            total += len(batch)
-            if cursor < 7 and total > 7:
-                break
-        directions = np.asarray([(c.x, c.y, c.z) for c in seen])
-        # Every direction on the sphere is within one step of some scan view.
-        rng = np.random.default_rng(0)
-        probes = rng.normal(size=(500, 3))
-        probes /= np.linalg.norm(probes, axis=1, keepdims=True)
-        nearest = np.arccos(np.clip(probes @ directions.T, -1.0, 1.0)).min(axis=1)
-        self.assertLess(float(nearest.max()), math.radians(40.0))
-
-    def testLargeTargetsAreScannedWithSphericalViews(self) -> None:
-        lastSeen = BFoV(makeSphericalPoint(0.0, 0.0), math.radians(60.0), math.radians(60.0))
-        views, _ = self.planner.scanViews(lastSeen, 0, 3)
-        self.assertTrue(all(view.projection is ViewProjection.SPHERICAL for view in views))
-        self.assertEqual(self.planner.scanViews(lastSeen, 0, 0), ((), 0))
 
 
 class _StatefulSession:

@@ -4,8 +4,15 @@
 
 ## 获取方式
 
-1. **官方发布（推荐）**：从 ARTrack 仓库 README 中的 ARTrackV2-B-256 下载链接获取（Google Drive，或者百度网盘）。
-2. **本仓库的历史版本**：提交 `f04c76d` 及更早的提交通过 Git LFS 保存了这个文件，可以这样取出：
+1. **命令（推荐）**：
+
+   ```bash
+   track360 download
+   ```
+
+   从作者发布在 Google Drive 上的文件下载到本目录，并核对下面的 SHA-256；中断后再运行会接着下。`--url` 可以换来源，`--check` 只核对已有的文件。这个命令对真实的下载地址还没有完整验证过（下载需要 1.6 GB 流量），如果它报告“返回的是网页”，请用下面的方法。
+2. **手动**：从 [ARTrack 仓库](https://github.com/MIV-XJTU/ARTrack) README 中的 ARTrackV2-B-256 链接下载（Google Drive，或者百度网盘），放到本目录并重命名为 `artrackv2_b_256.pth.tar`，再运行 `track360 download --check`。
+3. **本仓库的历史版本**：提交 `f04c76d` 及更早的提交通过 Git LFS 保存了这个文件，可以这样取出：
 
    ```bash
    git lfs install
@@ -14,6 +21,8 @@
    ```
 
    这种方式会消耗 GitHub LFS 流量，只建议在官方链接不可用时使用。
+
+上游仓库的代码是 Apache-2.0；它的 README 同时写明“This project is not for commercial use”，权重没有单独的许可声明。本项目不再分发这份权重。
 
 ## 校验
 
@@ -31,17 +40,9 @@ Windows PowerShell 可以使用 `Get-FileHash models\artrackv2_b_256.pth.tar`。
 
 文件中应包含 `net` 状态字典，代码会严格加载 ViT-B、搜索尺寸 256 对应的全部参数。
 
-## 分数校准（可选）
-
-ARTrackV2 输出的分数不是校准过的概率。如果需要，可以把与本权重绑定的校准 JSON 路径写入 `configs/default.yaml` 的 `scoring.calibrationArtifact`。加载时会校验产物中记录的权重 SHA-256，以及阈值是否与 YAML 一致。没有校准产物时，运行时直接使用原始分数。
-
-## 计划
-
-按照 [V2Plan](../docs/V2Plan.md)，之后会把权重发布到 Hugging Face Hub 或 GitHub Releases，并提供 `track360 download` 命令自动下载和校验。
-
 ## 外观模型（可选）
 
-丢失处理（`backendTuning.lossHandling`）和外观探针（`tools/benchmark.py run --probe`）用到的小模型放在 `models/hub/`，由 `torch.hub` 在第一次使用时下载，同样不随仓库分发：
+丢失处理（`--preset loss_handling`）和外观探针（`tools/benchmark.py run --probe`）用到的小模型放在 `models/hub/`，由 `torch.hub` 在第一次使用时下载，同样不随仓库分发：
 
 | 模型 | 来源 | 许可证 | 大小 |
 |---|---|---|---:|

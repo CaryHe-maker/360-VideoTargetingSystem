@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from math import acos, asin, atan2, cos, degrees, pi, sin, sqrt
+from math import asin, atan2, degrees, pi, sqrt
 from typing import TYPE_CHECKING
 
 from track360.controller.motion_estimator import SphericalMotionEstimator
@@ -16,7 +16,6 @@ from track360.controller.state_model import (
     StateObservation,
     TrackMode,
     TransitionDecision,
-    TransitionReason,
 )
 from track360.controller.view_planner import (
     REFINE_VIEW_ID_BASE,
@@ -61,19 +60,8 @@ if TYPE_CHECKING:
 
 _MAX_HORIZONTAL_SIZE_RAD = 2.0 * pi - 1e-6
 _MAX_VERTICAL_SIZE_RAD = pi - 1e-6
-# A scan candidate this close to the tracked box, in target sizes, and no more than
-# this many times larger or smaller, is the tracked box found again (81 of the 139
-# jumps of evaluation log E030 were such).
-_SAME_PLACE_OFFSET = 0.5
-_SAME_PLACE_SIZE_RATIO = 1.5
-# After the in-place look confirmed the tracked box, a track lost again within this
-# many frames goes straight to the enlarged views: asking the same question again
-# would give the same answer.
-_CONFIRM_COOLDOWN_FRAMES = 30
-# The extrapolated search centre: the motion over this many trusted frames,
-# continued for at most this many frames.
-_EXTRAPOLATE_SPAN_FRAMES = 5
-_EXTRAPOLATE_MAX_FRAMES = 10
+# Search views a lost frame may take when the budget is not limited.
+_UNLIMITED_SCAN_VIEWS = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,10 +130,8 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._initialPlan: InitializationPlan | None = None
         self._lastStateObservation: StateObservation | None = None
         self._lastPipelineProfile: dict[str, object] = {}
-        # Loss handling: where the target was last trusted, and how far the scan
-        # around that place has got.
+        # Loss handling: where the target was last trusted.
         self._lastGoodBfov: BFoV | None = None
-        self._scanCursor = 0
         self._lastFrameSuspect = False
         self._lastFrameReacquired = False
         self._suspectFrameCount = 0
@@ -159,13 +145,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         # plan's scan was (for the state trace).
         self._lostFrames = 0
         self._lastScan = ""
-        self._lastConfirmedFrame: int | None = None
-        # Frame and centre of the last trusted frames, oldest first.
-        self._trustedPath: deque[tuple[int, SphericalPoint]] = deque(
-            maxlen=_EXTRAPOLATE_SPAN_FRAMES + 1
-        )
         self._scanPrepaid = 0
-        self._spreadTurn = 0
         self._lastFrameTrace: dict[str, object] = {}
 
     @property
@@ -315,11 +295,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         # angular scale, the last committed BFoV is the basis.
         targetBfov = self._currentBfov
         viewCenter = prediction.center
-        if not self._backendTuning.predictiveSearch:
-            # The view follows the last committed target, as the tracker's own loop does;
-            # the motion estimate is left to the backend's trajectory input.
-            viewCenter = self._currentBfov.center
-        elif prediction.horizontalSizeRad > 0.0 and prediction.verticalSizeRad > 0.0:
+        if prediction.horizontalSizeRad > 0.0 and prediction.verticalSizeRad > 0.0:
             # Extrapolating a growing target can leave the range a BFoV can express.
             targetBfov = BFoV(
                 prediction.center,
@@ -338,7 +314,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         lost = self._mode is TrackMode.LOST
         lostFrames = self._lostFrames if lost else 0
         self._lostFrames = lostFrames + 1 if lost else 0
-        scanCount = self._backendTuning.scanViewsPerFrame
+        scanCount = _UNLIMITED_SCAN_VIEWS
         if self._backendTuning.scanBudgetPerFrame > 0.0:
             # Every frame earns a share of a scan view; a lost track spends the whole
             # ones it has saved, so the average cost per frame stays bounded.
@@ -348,26 +324,12 @@ class TrackControllerImpl(TrackControllerProtocol):
             )
             scanCount = min(scanCount, int(self._scanTokens))
         searching = self._actions != "none" and lost and self._lastGoodBfov is not None
-        if searching and self._backendTuning.scanMode == "zoom":
-            scanViews, scanRefine = self._zoomScan(
-                mainView, lostFrames, scanCount, int(frame.frameIndex)
-            )
+        if searching:
+            scanViews, scanRefine = self._zoomScan(mainView, lostFrames, scanCount)
             if scanViews:
                 self._scanPrepaid = len(scanViews) + (1 if scanRefine else 0)
                 self._scanTokens -= self._scanPrepaid
                 self._scanFrameCount += 1
-        elif (
-            self._actions != "none"
-            and self._mode is TrackMode.LOST
-            and self._lastGoodBfov is not None
-            and scanCount > 0
-        ):
-            scanViews, self._scanCursor = self._planner.scanViews(
-                self._lastGoodBfov, self._scanCursor, scanCount
-            )
-            self._scanTokens -= len(scanViews)
-            self._scanFrameCount += 1
-            self._lastScan = "tiles"
         plan = SearchPlan(
             sequenceId=frame.sequenceId,
             frameIndex=frame.frameIndex,
@@ -387,126 +349,41 @@ class TrackControllerImpl(TrackControllerProtocol):
         return plan
 
     def _zoomScan(
-        self, mainView: ViewSpec, lostFrames: int, budget: int, frameIndex: int
+        self, mainView: ViewSpec, lostFrames: int, budget: int
     ) -> tuple[tuple[ViewSpec, ...], bool]:
-        """The scan of a lost frame under ``scanMode: zoom``, and whether it is refined.
+        """The search views of a lost frame, and whether what they find is refined.
 
         The first lost frame looks again at the view the tracker is in, without
-        the tracker's memory.  Later frames take one enlarged view, the larger the
-        longer the track has been lost; the box found there is not a candidate
-        itself but the centre of a view of the normal size (see ``refinementView``).
+        the tracker's memory.  Later frames take one enlarged view around the place
+        the track was last trusted, larger once the track has been lost for a while;
+        the box found there is not a candidate itself but the centre of a view of the
+        normal size (see ``refinementView``).
         """
         tuning = self._backendTuning
         trusted = self._lastGoodBfov
-        assert trusted is not None and self._currentBfov is not None
-        confirmedLately = (
-            self._lastConfirmedFrame is not None
-            and frameIndex - self._lastConfirmedFrame <= _CONFIRM_COOLDOWN_FRAMES
-        )
-        if lostFrames == 0 and tuning.zoomInPlace and not confirmedLately:
+        assert trusted is not None
+        if lostFrames == 0:
             if budget < 1:
                 return (), False
             self._lastScan = "1x"
             return (replace(mainView, viewId=SCAN_VIEW_ID_BASE, trajectory=()),), False
-        spread = tuning.zoomSpread if lostFrames >= tuning.zoomLastAfterFrames else 1
         limited = tuning.scanBudgetPerFrame > 0.0
-        if budget < 1 or (limited and int(self._scanTokens) < spread + 1):
+        if budget < 1 or (limited and int(self._scanTokens) < 2):
             return (), False
-        if lostFrames >= tuning.zoomLastAfterFrames:
-            scale = tuning.zoomLastScale
-        elif tuning.zoomMidScale > 0.0 and lostFrames >= tuning.zoomMidAfterFrames:
-            scale = tuning.zoomMidScale
-        else:
-            scale = tuning.zoomFirstScale
-        if tuning.zoomCentre == "trusted":
-            centre = trusted.center
-        elif tuning.zoomCentre == "extrapolated":
-            centre = self._extrapolatedCentre(frameIndex) or trusted.center
-        else:
-            centre = self._currentBfov.center
-        self._lastScan = f"{scale:g}x" if spread == 1 else f"{scale:g}x{spread}"
+        scale = (
+            tuning.zoomLastScale
+            if lostFrames >= tuning.zoomLastAfterFrames
+            else tuning.zoomFirstScale
+        )
+        self._lastScan = f"{scale:g}x"
         view = self._planner.probeView(
-            centre,
+            trusted.center,
             trusted.horizontalFovRad,
             trusted.verticalFovRad,
             scale,
             SCAN_VIEW_ID_BASE,
         )
-        if spread == 1:
-            return (view,), True
-        # Views a quarter of their width off the centre: neighbours share half.
-        stepH = 0.25 * view.bfov.horizontalFovRad
-        stepV = 0.25 * view.bfov.verticalFovRad
-        if spread == 4:
-            shifts = ((-stepH, -stepV), (stepH, -stepV), (-stepH, stepV), (stepH, stepV))
-        elif self._spreadTurn % 2 == 0:
-            shifts = ((-stepH, 0.0), (stepH, 0.0))
-        else:
-            shifts = ((0.0, -stepV), (0.0, stepV))
-        self._spreadTurn += 1
-        views = tuple(
-            self._planner.probeView(
-                _shifted(centre, dYaw, dPitch),
-                trusted.horizontalFovRad,
-                trusted.verticalFovRad,
-                scale,
-                SCAN_VIEW_ID_BASE + index,
-            )
-            for index, (dYaw, dPitch) in enumerate(shifts)
-        )
-        return views, True
-
-    def _extrapolatedCentre(self, frameIndex: int) -> SphericalPoint | None:
-        """The last trusted centre moved on as the target moved before it."""
-        if len(self._trustedPath) < 2:
-            return None
-        (olderFrame, older), (newerFrame, newer) = self._trustedPath[0], self._trustedPath[-1]
-        span = newerFrame - olderFrame
-        if span <= 0 or span > 3 * _EXTRAPOLATE_SPAN_FRAMES:
-            return None
-        steps = min(frameIndex - newerFrame, _EXTRAPOLATE_MAX_FRAMES) / span
-        a = (older.x, older.y, older.z)
-        b = (newer.x, newer.y, newer.z)
-        axis = (
-            a[1] * b[2] - a[2] * b[1],
-            a[2] * b[0] - a[0] * b[2],
-            a[0] * b[1] - a[1] * b[0],
-        )
-        norm = sqrt(sum(value * value for value in axis))
-        if norm < 1e-9 or steps <= 0.0:
-            return None
-        axis = tuple(value / norm for value in axis)
-        angle = acos(max(-1.0, min(1.0, sum(p * q for p, q in zip(a, b, strict=True))))) * steps
-        cross = (
-            axis[1] * b[2] - axis[2] * b[1],
-            axis[2] * b[0] - axis[0] * b[2],
-            axis[0] * b[1] - axis[1] * b[0],
-        )
-        x, y, z = (b[i] * cos(angle) + cross[i] * sin(angle) for i in range(3))
-        return makeSphericalPoint(atan2(x, z), asin(max(-1.0, min(1.0, y))))
-
-    @property
-    def crossBand(self) -> tuple[float, float] | None:
-        """Scores between which a candidate is looked at once more, if at all."""
-        tuning = self._backendTuning
-        if not tuning.crossCheck or tuning.crossScore <= 0.0:
-            return None
-        return tuning.crossScore, tuning.reacquireScore
-
-    def shiftedView(self, center: SphericalPoint, index: int = 0) -> ViewSpec:
-        """A view of the normal size one target size beside ``center``."""
-        trusted = self._lastGoodBfov or self._currentBfov
-        assert trusted is not None
-        return self.refinementView(
-            _shifted(center, trusted.horizontalFovRad, 0.5 * trusted.verticalFovRad),
-            index,
-        )
-
-    def agreementRadiusRad(self) -> float:
-        """How far apart two views may point and still mean the same place."""
-        trusted = self._lastGoodBfov or self._currentBfov
-        assert trusted is not None
-        return _angularSize(trusted)
+        return (view,), True
 
     def settleScan(self, forwards: int) -> None:
         """Charge the scan of the frame what it really cost."""
@@ -534,9 +411,8 @@ class TrackControllerImpl(TrackControllerProtocol):
     ) -> TrackResult:
         """Commit the frame from the observation of its search view (``None``: no box).
 
-        ``candidates`` are the boxes found in the plan's scan views.  When one of
-        them looks like the template clearly more than the tracked box does, the
-        track jumps to it.
+        ``candidates`` are the boxes found in the plan's search views.  When one of
+        them scores high enough without the tracker's memory, the track jumps to it.
         """
         self._requireInitialized()
         pending = self._pending
@@ -555,11 +431,8 @@ class TrackControllerImpl(TrackControllerProtocol):
             frameHeightPx=pending.frame.rgb.shape[0],
         )
         trace = self._traceOf(pending, evaluation)
-        confirmed = False
         if self._actions != "none":
-            chosen, confirmed, trace["candidates"] = self._reacquisitionCandidate(
-                observation, candidates, inPlace=self._lastScan == "1x"
-            )
+            chosen, trace["candidates"] = self._reacquisitionCandidate(candidates)
             if chosen is not None:
                 result = self._reacquire(pending, chosen)
                 trace.update(
@@ -574,15 +447,6 @@ class TrackControllerImpl(TrackControllerProtocol):
             backendScore=evaluation.backendScore if evaluation.hasCandidate else None,
             appearanceScore=evaluation.appearanceScore,
         )
-        if confirmed:
-            # The look without memory found the box the tracker has: the doubt ends
-            # and the tracker keeps what it learnt.
-            self._stateMachine.reset()
-            decision = replace(
-                decision, nextMode=TrackMode.TRACKING, reason=TransitionReason.CONFIRMED
-            )
-            self._lastConfirmedFrame = int(pending.frame.frameIndex)
-            trace["action"] = "confirm"
         result = self._commit(pending, evaluation, decision)
         trace.update(
             modeAfter=decision.nextMode.name,
@@ -600,11 +464,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._lastStateObservation = evaluation
         if self._backendTuning.lossHandling:
             if decision.nextMode is TrackMode.TRACKING:
-                self._scanCursor = 0
                 self._lastGoodBfov = self._currentBfov
-                self._trustedPath.append(
-                    (int(plan.frameIndex), self._currentBfov.center)
-                )
             else:
                 self._suspectFrameCount += 1
                 # Without actions the run must stay what it is without loss handling.
@@ -648,64 +508,40 @@ class TrackControllerImpl(TrackControllerProtocol):
             self._motion.initialize(bfov.center, frame.timestampNs)
 
     def _reacquisitionCandidate(
-        self,
-        observation: ProjectedObservation | None,
-        candidates: Sequence[ProjectedObservation],
-        *,
-        inPlace: bool = False,
-    ) -> tuple[ProjectedObservation | None, bool, list[dict[str, object]]]:
-        """The scan candidate to jump to, if any, and why each one was or was not it.
+        self, candidates: Sequence[ProjectedObservation]
+    ) -> tuple[ProjectedObservation | None, list[dict[str, object]]]:
+        """The search candidate to jump to, if any, and what became of each one.
 
-        A candidate that is the tracked box found again is never jumped to: the
-        jump would change nothing but the tracker's memory.  When it came from the
-        look in place it confirms the tracked box instead (the second value).
+        A candidate is taken when its score without the tracker's memory reaches
+        ``reacquireScore``: the only signal found to tell a re-found target from
+        another object (evaluation log E026, E034, E036).  A candidate on the box the
+        tracker already has is taken as well: the jump then only restarts the
+        tracker's memory, which is what helped in E030 and E031.
         """
-        tuning = self._backendTuning
-        current = -1.0
-        if observation is not None and observation.appearanceSimilarity is not None:
-            current = observation.appearanceSimilarity
         best: ProjectedObservation | None = None
         records: list[dict[str, object]] = []
         bestRecord: dict[str, object] | None = None
-        confirmed = False
         for candidate in candidates:
             similarity = candidate.appearanceSimilarity
             score = _observationScore(candidate)
-            if similarity is None or similarity < tuning.reacquireSimilarity:
-                verdict = "low_similarity"
-            elif similarity < current + tuning.reacquireMargin:
-                verdict = "low_margin"
-            elif score < tuning.reacquireScore and not (
-                tuning.crossScore > 0.0
-                and candidate.support >= 2
-                and score >= tuning.crossScore
-            ):
-                verdict = "low_score"
-            elif (
-                tuning.samePlaceAction == "stay"
-                and observation is not None
-                and _samePlace(candidate.bfov, observation.bfov)
-            ):
-                verdict = "same_place"
-                confirmed = confirmed or inPlace
-            else:
-                verdict = "not_best"
+            verdict = "low_score" if score < self._backendTuning.reacquireScore else "not_best"
             record: dict[str, object] = {
                 "view": int(candidate.viewId),
                 "similarity": None if similarity is None else round(float(similarity), 4),
                 "score": round(score, 4),
-                "support": int(candidate.support),
                 "verdict": verdict,
                 **_place(candidate.bfov),
             }
             records.append(record)
             if verdict == "not_best" and (
-                best is None or similarity > (best.appearanceSimilarity or -1.0)
+                best is None
+                or (similarity if similarity is not None else -1.0)
+                > (best.appearanceSimilarity if best.appearanceSimilarity is not None else -1.0)
             ):
                 best, bestRecord = candidate, record
         if bestRecord is not None:
             bestRecord["verdict"] = "accepted"
-        return best, confirmed and best is None, records
+        return best, records
 
     def _reacquire(
         self, pending: _PendingFrame, candidate: ProjectedObservation
@@ -714,10 +550,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         plan, frame = pending.plan, pending.frame
         score = _observationScore(candidate)
         self._lastGoodBfov = candidate.bfov
-        self._trustedPath.clear()
-        self._trustedPath.append((int(frame.frameIndex), candidate.bfov.center))
         self._stateMachine.reset()
-        self._scanCursor = 0
         self._restartMotion(candidate.bfov, frame)
         self._currentBfov = candidate.bfov
         self._currentBox = candidate.bbox
@@ -828,24 +661,10 @@ class TrackControllerImpl(TrackControllerProtocol):
             assert self._currentBox is not None and self._currentBfov is not None
             currentArea = self._currentBox.widthPx * self._currentBox.heightPx
             frameArea = float(pending.frame.rgb.shape[1] * pending.frame.rgb.shape[0])
-            if self._backendTuning.holdWeakBox and currentArea >= 0.10 * frameArea:
+            if currentArea >= 0.10 * frameArea:
                 outputBox = self._currentBox
                 outputBfov = self._currentBfov
                 holdingWeak = True
-            # Break the motion/acceptance bootstrap cycle without committing a weak box as the
-            # public target state.  A single bounded provisional observation supplies the second
-            # timestamped point required for velocity fitting; subsequent weak frames do not
-            # continue polluting the history.
-            if (
-                evaluation.measuredBfov is not None
-                and pending.prediction.sampleCount < self._motionMinSamples
-                and pending.mode in {TrackMode.TRACKING, TrackMode.UNCERTAIN}
-            ):
-                self._recordMeasurement(
-                    pending,
-                    evaluation.measuredBfov,
-                    max(self._trackingConfig.candidateMinScore, evaluation.backendScore),
-                )
         self._mode = decision.nextMode
         assert self._currentBfov is not None
         self._trajectory.append(self._currentBfov)
@@ -933,29 +752,6 @@ def _observationScore(observation: ProjectedObservation) -> float:
 def _motionCenter(motion: MotionState3D):
     x, y, z = motion.position
     return makeSphericalPoint(atan2(x, z), asin(max(-1.0, min(1.0, y))))
-
-
-def _samePlace(first: BFoV, second: BFoV) -> bool:
-    """Whether two boxes are the same box up to a small shift and change of size."""
-    cosine = (
-        first.center.x * second.center.x
-        + first.center.y * second.center.y
-        + first.center.z * second.center.z
-    )
-    sizes = _angularSize(first), _angularSize(second)
-    return (
-        acos(max(-1.0, min(1.0, cosine))) < _SAME_PLACE_OFFSET * max(sizes)
-        and max(sizes) < _SAME_PLACE_SIZE_RATIO * min(sizes)
-    )
-
-
-def _shifted(center: SphericalPoint, dYawRad: float, dPitchRad: float) -> SphericalPoint:
-    """``center`` moved by angles along the parallel and the meridian."""
-    pitch = asin(max(-1.0, min(1.0, center.y)))
-    yaw = atan2(center.x, center.z)
-    limit = pi / 2.0 - 0.02
-    newPitch = max(-limit, min(limit, pitch + dPitchRad))
-    return makeSphericalPoint(yaw + dYawRad / max(0.2, cos(pitch)), newPitch)
 
 
 def _angularSize(bfov: BFoV) -> float:

@@ -3,7 +3,7 @@
     python tools/candidate_support.py --dataset-root <dir> --label-root <dir> \\
         --output-root outputs/E033_c_train --json outputs/E033/c_support.json
 
-Reads the state trace of a run with ``scanMode: zoom``.  Every box a search returned is
+Reads the state trace of a run with loss handling on.  Every box a search returned is
 one row: the kind of scan (``1x``: the look in place; ``2x`` / ``4x``: one enlarged view
 and a view of the normal size; ``4x2`` / ``4x4``: two or four half-overlapping enlarged
 views), its score without memory, and its support (2 or more: a second view pointed at

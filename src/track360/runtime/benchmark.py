@@ -490,8 +490,6 @@ def _trackSpherical(
             controller=runtime.controller,
             backend=runtime.backend,
             sink=collector,
-            scoreCalibration=runtime.scoreCalibration,
-            useMotionScore=runtime.useMotionScore,
             probe=probe,
             verifier=runtime.verifier,
             trace=trace,

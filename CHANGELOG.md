@@ -4,6 +4,29 @@
 
 ## [未发布]
 
+### 发布前的清理和对外接口
+
+#### 移除
+
+- 配置 `schemaVersion` 升到 2。删除整个 `scoring` 配置段，以及 `geometry.resampler`、`tracking.candidateMinScore`、`backendTuning` 里的 `acceptAnyCandidate`、`holdWeakBox`、`predictiveSearch`、`useMotionScore`、`verifierModel`、`stateRule`、`stateLatch`、`latchReleaseMargin`、`scanMode`、`scanViewsPerFrame`、`zoomInPlace`、`zoomCentre`、`zoomMidScale`、`zoomMidAfterFrames`、`reacquireSimilarity`、`reacquireMargin`、`samePlaceAction`、`zoomSpread`、`crossScore`、`crossCheck`。每一项固定成什么行为见 [docs/configuration.md](docs/configuration.md#已删除的字段)。
+- 对应的代码：分数校准（`controller/score_calibration.py`）、分块扫描、融合分的加锁、多视图一致性、原地重检的确认分支、外推的搜索中心、带门槛的测量接受。
+- 工具 `fusion_dataset.py`、`fusion_analysis.py`、`fusion_freerun.py`、`state_replay.py`、`loss_centres.py`、`frame_level_search.py`、`topk_search.py`。
+
+两条基线的结果不变：dev train 的 33 条序列，清理前后结果文件逐字节相同（评测日志 E041）。
+
+#### 新增
+
+- `track360 download`：下载 ARTrackV2-B-256 权重并核对 SHA-256，支持续传、换来源、只校验（`track360/hub.py`）。
+- `track360.api.Track360Tracker`：Python 入口。`fromPretrained(preset, precision=...)` 选预设，`track(source, initBox=... | initBfov=...)` 返回逐帧结果。
+- `track360 track` 的 `--preset default|loss_handling`、`--precision fp32|tf32`、`--demo`、`--gif`、`--max-frames`、`--weights`；`--config` 变为可选。
+- 演示视频：左边全景画面和结果，右边跟踪器看到的局部视图（`visualization/demo.py`）。
+- `track360 benchmark`：转到 `tools/benchmark.py`。
+- `CITATION.cff`。
+
+#### 变更
+
+- README、快速上手、配置说明、Controller 模块文档按现在的实现重写或更正；`NOTICE` 注明对上游两个文件的改动。
+
 ### 速度优化
 
 - 默认配置在 dev train 上从 22–26 FPS 到 39.6 FPS，结果与 E015 逐字节相同（评测日志 E039、E040）：解码直接出 RGB；`LocalBoxProjection` 去掉没有使用者的 `sphericalBoundary`；透视取视图的坐标按行列分开算；上游骨干每次前向重建的掩码和命令 token 改为缓存。

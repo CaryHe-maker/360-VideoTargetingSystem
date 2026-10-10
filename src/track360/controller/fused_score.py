@@ -1,4 +1,4 @@
-"""Calibration and composition for backend, motion, and single-candidate scores."""
+"""Scores attached to an observation before the controller judges it."""
 
 from __future__ import annotations
 
@@ -8,9 +8,6 @@ from math import acos, exp, isfinite, log, log1p, pi
 
 import numpy as np
 
-from track360.controller.score_calibration import (
-    ScoreCalibration,
-)
 from track360.core.errors import ProtocolError
 from track360.core.types import (
     LocalObservation,
@@ -31,39 +28,35 @@ class MotionScore:
     squaredDistance: float
 
 
-def calibrateBackendFusedScore(
-    score: float,
-    calibration: ScoreCalibration,
-) -> float:
-    """Calibrate a backend probability with a monotonic beta map."""
+def backendScoreProbability(score: float) -> float:
+    """The backend score as the probability the controller works with.
+
+    Mathematically the score itself: the logit of the score put back through the
+    logistic function.  The round trip is kept because it moves the last digits, and
+    the number weights each frame in the motion model: dropping it would change the
+    recorded baselines without changing anything else (it is what is left of a score
+    calibration that was never fitted).
+    """
     value = float(score)
     if not isfinite(value) or not 0.0 <= value <= 1.0:
         raise ProtocolError(f"backend fusedScore must be in [0, 1], actual={score}")
     if value == 0.0 or value == 1.0:
         return value
-
-    alpha = calibration.appearance.alpha
-    beta = calibration.appearance.beta
-    intercept = calibration.appearance.intercept
-    calibratedLogit = intercept + alpha * log(value) - beta * log1p(-value)
-    if calibratedLogit >= 0.0:
-        return 1.0 / (1.0 + exp(-calibratedLogit))
-    exponential = exp(calibratedLogit)
+    logit = 0.0 + 1.0 * log(value) - 1.0 * log1p(-value)
+    if logit >= 0.0:
+        return 1.0 / (1.0 + exp(-logit))
+    exponential = exp(logit)
     return exponential / (1.0 + exponential)
 
 
-def calibrateLocalAppearanceProbabilities(
+def withScoreProbability(
     observations: Sequence[LocalObservation],
-    calibration: ScoreCalibration,
 ) -> tuple[LocalObservation, ...]:
-    """Attach appearance probabilities without overwriting backend evidence."""
+    """Attach the score probability without overwriting the backend's own numbers."""
     return tuple(
         replace(
             observation,
-            appearanceProbability=calibrateBackendFusedScore(
-                observation.fusedScore,
-                calibration,
-            ),
+            appearanceProbability=backendScoreProbability(observation.fusedScore),
         )
         for observation in observations
     )
@@ -76,8 +69,8 @@ def scoreViewCenterMotion(
     """Score one local view center against this frame's predicted spherical position.
 
     This is a same-frame spatial prior: 0 degrees maps to 1.0 and every additional
-    30 degrees continuously subtracts 0.1.  It intentionally does not blend around 0.5,
-    because all views in the frame must remain directly comparable to the same prediction.
+    30 degrees continuously subtracts 0.1.  It is recorded with the observation; the
+    controller's decisions do not use it.
     """
     if prediction is None:
         return MotionScore(0.5, 0.5, 0.5, 0.0, 0.0)
@@ -107,32 +100,9 @@ def scoreViewCenterMotion(
     )
 
 
-def composeSingleScore(
-    appearanceProbability: float,
-    motionProbability: float,
-    calibration: ScoreCalibration,
-) -> float:
-    """Compose the score consumed by candidate ranking and two-box fusion."""
-    for name, value in (
-        ("appearanceProbability", appearanceProbability),
-        ("motionProbability", motionProbability),
-    ):
-        if not isfinite(value) or not 0.0 <= value <= 1.0:
-            raise ProtocolError(f"{name} must be in [0, 1], actual={value}")
-    return float(
-        np.clip(
-            calibration.appearanceWeight * appearanceProbability
-            + calibration.motionWeight * motionProbability,
-            0.0,
-            1.0,
-        )
-    )
-
-
 __all__ = [
     "MotionScore",
-    "calibrateBackendFusedScore",
-    "calibrateLocalAppearanceProbabilities",
-    "composeSingleScore",
+    "backendScoreProbability",
     "scoreViewCenterMotion",
+    "withScoreProbability",
 ]

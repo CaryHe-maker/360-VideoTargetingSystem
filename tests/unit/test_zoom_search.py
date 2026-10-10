@@ -27,7 +27,6 @@ INITIAL_BOX = BBoxXYWH(170.0, 80.0, 20.0, 20.0)
 # back within -0.15; lost after three doubted frames.
 RELATIVE = {
     "lossHandling": True,
-    "stateRule": "relative",
     "relativeEnterDeviation": -0.3,
     "relativeGate": 0.05,
     "releaseFrames": 2,
@@ -133,13 +132,27 @@ class RelativeRuleTest(unittest.TestCase):
 
     def testSettingsAreValidated(self) -> None:
         with self.assertRaises(ConfigError):
-            _tuning(lossHandling=False)
-        with self.assertRaises(ConfigError):
             _tuning(relativeEnterDeviation=0.2)
         with self.assertRaises(ConfigError):
-            _tuning(scanMode="other")
+            _tuning(lossActions="other")
         with self.assertRaises(ConfigError):
             _tuning(zoomFirstScale=0.5)
+
+    def testWithoutLossHandlingTheStateFollowsTheFusedScore(self) -> None:
+        machine = TrackStateMachine(_tuning(lossHandling=False, uncertainScore=0.42))
+        machine.initialize()
+        # Scores that the relative rule would call a deep drop are not looked at.
+        self._run(machine, [(0.9, 0.8)] * RELATIVE_WARM_FRAMES)
+        decision = machine.transition(
+            TrackMode.TRACKING, 0.5, measurementAccepted=True, backendScore=0.1,
+            appearanceScore=0.1,
+        )
+        self.assertEqual(decision.nextMode, TrackMode.TRACKING)
+        low = machine.transition(TrackMode.TRACKING, 0.3, measurementAccepted=True)
+        self.assertEqual(low.nextMode, TrackMode.UNCERTAIN)
+        # No latch: one frame above the threshold is trusted again.
+        back = machine.transition(TrackMode.UNCERTAIN, 0.5, measurementAccepted=True)
+        self.assertEqual(back.nextMode, TrackMode.TRACKING)
 
 
 class ZoomSearchTest(unittest.TestCase):
@@ -147,14 +160,11 @@ class ZoomSearchTest(unittest.TestCase):
         config = loadConfig(ROOT / "configs" / "default.yaml")
         settings = {
             **RELATIVE,
-            "scanMode": "zoom",
             "zoomFirstScale": 2.0,
             "zoomLastScale": 4.0,
             "zoomLastAfterFrames": 3,
             "scanBudgetPerFrame": 0.5,
             "scanBudgetBurst": 5.0,
-            "reacquireSimilarity": -1.0,
-            "reacquireMargin": -1.0,
             **overrides,
         }
         config = replace(config, backendTuning=replace(config.backendTuning, **settings))
@@ -210,13 +220,6 @@ class ZoomSearchTest(unittest.TestCase):
         self.assertLessEqual(spent, 5 + 0.5 * (index - 1))
         self.assertEqual([bool(plan.scanViews) for plan in plans[:4]], [True, True, True, False])
 
-    def testTheZoomCanFollowTheTrackedBoxInstead(self) -> None:
-        controller = self._controller(zoomCentre="current", zoomInPlace=False)
-        index = self._lose(controller)
-        plan = controller.beginFrame(_frame(index))
-        self.assertTrue(plan.scanRefine)
-        self.assertAlmostEqual(plan.scanViews[0].bfov.center.yawRad, 0.3, places=6)
-
     def testTheRefinementViewIsOfTheNormalSizeAndACandidateWithAHighScoreIsTaken(self) -> None:
         controller = self._controller()
         index = self._lose(controller)
@@ -236,42 +239,29 @@ class ZoomSearchTest(unittest.TestCase):
         self.assertTrue(controller.lastFrameReacquired)
         self.assertAlmostEqual(result.bfov.center.yawRad, 1.0)
 
-    def testACandidateOnTheTrackedBoxIsNotJumpedTo(self) -> None:
-        controller = self._controller(zoomInPlace=False)
-        index = self._lose(controller)
-        plan = controller.beginFrame(_frame(index))
-        self.assertTrue(plan.scanRefine)
-        # The enlarged search came back to the box the tracker already has.
-        same = _observation(0.9, 0.5, yaw=0.3, viewId=REFINE_VIEW_ID_BASE)
-        controller.consume(plan, _observation(0.2, 0.1, yaw=0.3), (same,))
-        self.assertFalse(controller.lastFrameReacquired)
-        self.assertEqual(controller.lastFrameTrace["candidates"][0]["verdict"], "same_place")
-        # The track stays lost and the tracker is still told not to learn the frame.
-        self.assertEqual(controller.lastFrameTrace["modeAfter"], "LOST")
-        self.assertTrue(controller.lastFrameSuspect)
-
-    def testTheLookInPlaceConfirmsTheTrackedBoxWithoutAJump(self) -> None:
+    def testACandidateOnTheTrackedBoxIsTakenToo(self) -> None:
         controller = self._controller()
         index = self._lose(controller)
         plan = controller.beginFrame(_frame(index))
-        self.assertFalse(plan.scanRefine)
+        # The look in place found the box the tracker already has, with a high score:
+        # the jump moves nothing but restarts the tracker's memory.
         same = _observation(0.9, 0.5, yaw=0.3, viewId=SCAN_VIEW_ID_BASE)
         result = controller.consume(plan, _observation(0.2, 0.1, yaw=0.3), (same,))
-        # No jump, no reset of the tracker's memory: the doubt simply ends.
-        self.assertFalse(controller.lastFrameReacquired)
-        self.assertFalse(controller.lastFrameSuspect)
-        self.assertEqual(controller.lastFrameTrace["action"], "confirm")
-        self.assertEqual(controller.lastFrameTrace["reason"], "CONFIRMED")
+        self.assertTrue(controller.lastFrameReacquired)
+        self.assertEqual(controller.lastFrameTrace["candidates"][0]["verdict"], "accepted")
+        self.assertEqual(controller.lastFrameTrace["action"], "jump")
         self.assertEqual(result.status.name, "TRACKING")
-        # Lost again right away: the same look is not repeated, the view grows instead.
-        index += 1
-        for _ in range(3):
-            plan = controller.beginFrame(_frame(index))
-            self.assertEqual(plan.scanViews, ())
-            controller.consume(plan, _observation(0.2, 0.1, yaw=0.3))
-            index += 1
+        self.assertAlmostEqual(result.bfov.center.yawRad, 0.3)
+
+    def testWithoutActionsTheStateIsJudgedButNothingIsSearched(self) -> None:
+        controller = self._controller(lossActions="none")
+        index = self._lose(controller)
         plan = controller.beginFrame(_frame(index))
-        self.assertTrue(plan.scanRefine)
+        self.assertEqual(plan.scanViews, ())
+        controller.consume(plan, _observation(0.2, 0.1, yaw=0.3))
+        self.assertEqual(controller.lastFrameTrace["modeAfter"], "LOST")
+        # The tracker goes on learning: the run stays what it is without loss handling.
+        self.assertFalse(controller.lastFrameSuspect)
 
 
 if __name__ == "__main__":

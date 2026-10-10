@@ -1,0 +1,74 @@
+cff-version: 1.2.0
+message: >-
+  If you use Track360, please cite it as below, together with ARTrackV2 (the tracker
+  it runs) and 360VOT (the benchmark it follows).
+title: "Track360: single-object tracking in 360-degree video with a perspective-view tracker"
+type: software
+authors:
+  # The GitHub account that owns the repository; replace with the authors' names.
+  - name: "CaryHe-maker"
+repository-code: "https://github.com/CaryHe-maker/360-VideoTargetingSystem"
+license: Apache-2.0
+version: 2.0.0.dev0
+keywords:
+  - visual object tracking
+  - 360-degree video
+  - omnidirectional vision
+  - equirectangular projection
+references:
+  - type: conference-paper
+    title: "ARTrackV2: Prompting Autoregressive Tracker Where to Look and How to Describe"
+    authors:
+      - family-names: Bai
+        given-names: Yifan
+      - family-names: Zhao
+        given-names: Zeyang
+      - family-names: Gong
+        given-names: Yihong
+      - family-names: Wei
+        given-names: Xing
+    collection-title: "Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    year: 2024
+  - type: conference-paper
+    title: "Autoregressive Visual Tracking"
+    authors:
+      - family-names: Wei
+        given-names: Xing
+      - family-names: Bai
+        given-names: Yifan
+      - family-names: Zheng
+        given-names: Yongchao
+      - family-names: Shi
+        given-names: Dahu
+      - family-names: Gong
+        given-names: Yihong
+    collection-title: "Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    year: 2023
+    start: 9697
+    end: 9706
+  - type: conference-paper
+    title: "360VOT: A New Benchmark Dataset for Omnidirectional Visual Object Tracking"
+    authors:
+      - family-names: Huang
+        given-names: Huajian
+      - family-names: Xu
+        given-names: Yinzhe
+      - family-names: Chen
+        given-names: Yingshu
+      - family-names: Yeung
+        given-names: Sai-Kit
+    collection-title: "Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)"
+    year: 2023
+  - type: article
+    title: "360VOTS: Visual Object Tracking and Segmentation in Omnidirectional Videos"
+    authors:
+      - family-names: Xu
+        given-names: Yinzhe
+      - family-names: Huang
+        given-names: Huajian
+      - family-names: Chen
+        given-names: Yingshu
+      - family-names: Yeung
+        given-names: Sai-Kit
+    journal: "arXiv preprint arXiv:2404.13953"
+    year: 2024

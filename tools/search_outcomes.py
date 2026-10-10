@@ -3,7 +3,7 @@
     python tools/search_outcomes.py --dataset-root <dir> --label-root <dir> \\
         --output-root outputs/E030_a_train --json outputs/E030/a_search_outcomes.json
 
-Reads the state trace of a run with ``scanMode: zoom`` and, for every frame on which a
+Reads the state trace of a run with loss handling on and, for every frame on which a
 search was made (``1x``: the look in place; ``2x`` / ``4x``: an enlarged view followed
 by a view of the normal size), works out from the ground truth:
 

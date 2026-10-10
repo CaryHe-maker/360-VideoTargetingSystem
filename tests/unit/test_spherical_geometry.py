@@ -31,7 +31,7 @@ from track360.geometry.spherical_geometry import _fitBfovFromVectors
 
 class GeometryTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.geometry = SphericalGeometryImpl(boundarySamplesPerEdge=33)
+        self.geometry = SphericalGeometryImpl(boundarySamplesPerEdge=33, useRemap=False)
 
     def testSphericalViewOfTheWholeSphereIsTheErpFrameItself(self) -> None:
         rng = np.random.default_rng(0)

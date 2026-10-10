@@ -134,8 +134,6 @@ def runScenario(config: AppConfig, scenario: str) -> dict[str, Any]:
             controller=runtime.controller,
             backend=runtime.backend,
             sink=sink,
-            scoreCalibration=runtime.scoreCalibration,
-            useMotionScore=runtime.useMotionScore,
         )
     finally:
         closeRuntime(runtime)

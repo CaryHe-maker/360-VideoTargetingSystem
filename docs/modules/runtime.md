@@ -15,12 +15,11 @@ Runtime 是组合根和执行器，本身不实现状态判定或模型算法。
 `buildRuntime(config)` 按配置创建并返回 `RuntimeBundle`：
 
 1. 固定随机种子并按 `reproducibility.deterministic` 设置 cuDNN；
-2. Geometry：`SphericalGeometryImpl`，`geometry.resampler` 选择取色方式（`opencv` 默认，`cpu` 是参考实现）；
+2. Geometry：`SphericalGeometryImpl`，取视图用 `cv2.remap`；
 3. 后端：`PyTorchARTrackV2Session` → `ARTrackBackend` → `TrackerBackendImpl`；
 4. 控制器：`TrackControllerImpl(geometry, config)`；
 5. 结果输出：`FileResultSink`；
 6. 可选的中间视图记录器；
-7. 分数校准：有 `scoring.calibrationArtifact` 时加载并校验，否则对 ARTrackV2 使用未校准的原始分数。
 
 测试可以通过 `artrackSessionFactory` 和 `geometryFactory` 注入假实现，不需要真实权重和 GPU。
 

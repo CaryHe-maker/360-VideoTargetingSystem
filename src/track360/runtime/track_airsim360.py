@@ -79,9 +79,7 @@ def main(argv: list[str] | None = None) -> int:
                     stages=frozenset(("local_rgb", "backend_box", "geometry_box")),
                 ),
             )
-        runtime = buildRuntime(
-            config, allowUncalibratedScoring=config.scoring.calibrationArtifact is None
-        )
+        runtime = buildRuntime(config)
         source.open(args.dataset_root, args.sequence)
         initialFrame = source.read()
         if initialFrame is None:
@@ -105,8 +103,6 @@ def main(argv: list[str] | None = None) -> int:
             recorder=runtime.recorder,
             resultRecorder=resultRecorder,
             processingTimer=timeCounter,
-            scoreCalibration=runtime.scoreCalibration,
-            useMotionScore=runtime.useMotionScore,
             verifier=runtime.verifier,
         )
         expectedCount = resultCount if getattr(source, "frameCount", 0) <= 0 else source.frameCount

@@ -22,9 +22,6 @@ GOLDEN = Path(__file__).resolve().parent / "golden"
 FLOAT_TOLERANCE = 1e-6
 
 VARIANT_OVERRIDES: dict[str, dict[str, object]] = {
-    "gated": {"acceptAnyCandidate": False},
-    "gated_no_hold": {"acceptAnyCandidate": False, "holdWeakBox": False},
-    "motion_on": {"useMotionScore": True},
     "view_caps": {
         "viewHorizontalFovCapRad": 70.0 * pi / 180.0,
         "viewVerticalFovCapRad": 50.0 * pi / 180.0,

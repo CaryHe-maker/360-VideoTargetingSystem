@@ -92,8 +92,6 @@ def _track(config, session, source, initialBfov, profiler):
             controller=runtime.controller,
             backend=runtime.backend,
             sink=collector,
-            scoreCalibration=runtime.scoreCalibration,
-            useMotionScore=runtime.useMotionScore,
             verifier=runtime.verifier,
             profiler=profiler,
         )

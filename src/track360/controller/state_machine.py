@@ -1,16 +1,14 @@
 """Track state from the scores of each frame.
 
-Two rules decide the state (``backendTuning.stateRule``):
+Without loss handling the state is only a report: one number, the weighted mean of the
+backend score and the motion score, against ``uncertainScore``.
 
-``fused``
-    One number, the weighted mean of the three scores, against ``uncertainScore``.
-
-``relative``
-    The backend score and the template similarity are each compared with the
-    median of the frames of this sequence trusted so far, and the mean of the two
-    relative deviations is thresholded.  No score has a level or a weight of its
-    own.  A doubt holds until the mean deviation has been back within half the
-    threshold for ``releaseFrames`` frames.
+With loss handling the state decides when to search, and the relative rule is used:
+the backend score and the template similarity are each compared with the median of
+the frames of this sequence trusted so far, and the mean of the two relative
+deviations is thresholded.  No score has a level or a weight of its own.  A doubt
+holds until the mean deviation has been back within half the threshold for
+``releaseFrames`` frames.
 """
 
 from __future__ import annotations
@@ -30,12 +28,8 @@ RELATIVE_RELEASE_SHARE = 0.5
 class TrackStateMachine:
     """TRACKING while the scores hold, UNCERTAIN when they drop, LOST when they stay down.
 
-    Under the fused rule a frame below ``uncertainScore`` is not trusted; after
-    ``lostAfterFrames`` such frames in a row the target counts as LOST and one trusted
-    frame brings the track back.  With ``stateLatch`` a doubt, once raised, holds
-    until the score has been ``latchReleaseMargin`` above the threshold for
-    ``releaseFrames`` frames in a row.  The relative rule is described in the module
-    docstring; it is always latched.
+    After ``lostAfterFrames`` untrusted frames in a row the target counts as LOST.
+    Which rule judges a frame is described in the module docstring.
     """
 
     def __init__(self, tuning: BackendTuningConfig | None = None) -> None:
@@ -92,7 +86,7 @@ class TrackStateMachine:
             return TransitionDecision(
                 "COMMIT", TrackMode.TRACKING, TransitionReason.INITIALIZED, measurementAccepted
             )
-        if self._tuning.stateRule == "relative":
+        if self._tuning.lossHandling:
             nextMode, reason = self._relative(
                 backendScore, appearanceScore, hasBox=backendScore is not None
             )
@@ -137,16 +131,9 @@ class TrackStateMachine:
         )
 
     def _fused(self, stateScore: float) -> tuple[TrackMode, TransitionReason]:
-        tuning = self._tuning
-        if self._latched:
-            release = tuning.uncertainScore + tuning.latchReleaseMargin
-            self._calmFrames = self._calmFrames + 1 if stateScore >= release else 0
-            trusted = self._calmFrames >= tuning.releaseFrames
-        else:
-            trusted = stateScore >= tuning.uncertainScore
         return self._judged(
-            trusted,
-            latch=tuning.stateLatch,
+            stateScore >= self._tuning.uncertainScore,
+            latch=False,
             miss=(
                 TransitionReason.HARD_MISS
                 if stateScore <= 0.0

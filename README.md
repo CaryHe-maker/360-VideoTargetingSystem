@@ -2,14 +2,14 @@
 
 # Track360
 
-**360° 全景视频单目标跟踪框架：让普通的单目标跟踪器直接用于 360° 全景视频。**
+**让普通的单目标跟踪器直接用于 360° 全景视频。**
 
-球面局部视图搜索 · 跨缝回投 · 球面运动预测 · GPU 重采样
+球面局部视图 · 跨缝回投 · 球面运动预测 · 每帧一次前向
 
-[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.11-ee4c2c)](https://pytorch.org)
-[![Backend](https://img.shields.io/badge/backend-ARTrackV2--B--256-6f42c1)](https://github.com/miv-xjtu/artrack)
-[![Status](https://img.shields.io/badge/status-V2%20重构中-orange)](docs/V2Plan.md)
+[![Backend](https://img.shields.io/badge/backend-ARTrackV2--B--256-6f42c1)](https://github.com/MIV-XJTU/ARTrack)
+[![Status](https://img.shields.io/badge/status-V2.0%20开发中-orange)](docs/V2Plan.md)
 
 </div>
 
@@ -23,150 +23,181 @@
 - 目标可能跨越图像左右边界（经线接缝，下文称“跨缝”）；
 - 整帧分辨率太大，无法直接送入 256×256 输入的跟踪器。
 
-本项目不改动跟踪器本身，只改变**“看哪里”**，做法与 360VOT 论文的 360 跟踪框架一致：
+Track360 不改动跟踪器本身，只改变**“看哪里”**，做法与 360VOT 论文的 360 跟踪框架一致：
 
-1. 在单位球面上用 **BFoV**（Bounding Field of View：`clon, clat, fov_h, fov_v`）表示目标；
-2. 每一帧由**控制器**围绕预测的目标方向规划**一个**局部透视视图；
-3. 视图从 ERP 帧重采样（支持 CUDA），送入后端 **ARTrackV2-B-256**，每帧一次前向；
-4. 局部框回投到球面，得到 BFoV 和跨缝的 ERP 框，**每帧提交一次**结果。
+1. 在单位球面上用 **BFoV**（`clon, clat, fov_h, fov_v`）表示目标；
+2. 每一帧围绕运动模型预测的方向取**一个**局部视图，目标约占视图边长的四分之一，和跟踪器训练时见到的搜索区域一样；
+3. 视图送入 **ARTrackV2-B-256**（序列级模型：同时输入前 7 帧的目标框），每帧一次前向；
+4. 局部框回投到球面，得到 BFoV 和可以跨缝的 ERP 框。
 
-Geometry、Controller 和 I/O 只依赖 `core/` 中定义的协议，不依赖具体模型，因此更换跟踪后端不会影响其余部分。
+## 现状和数字
 
-> **项目状态**：已完成与比赛代码的解耦和结构整理，正在推进 **V2.0**（V1 为比赛版本）：在公开 benchmark [360VOT](https://360vot.hkustvgd.com) 上评测并超过已发表的 360 跟踪基线，同时完成效率优化和产品化。分阶段路线见 **[V2Plan](docs/V2Plan.md)**。
+V2.0 还没有发布。下面的数字来自项目自己的开发集（360VOS 训练集里的序列），**不是 360VOT 官方测试集的结果**；官方测试集上只有早期代码的数字，当前代码的还没有跑。
 
-## 核心特性
+| 配置 | 怎么选 | S<sub>dual</sub>（dev train，33 条） | 每帧前向 | FPS（RTX 4060 Laptop） |
+|---|---|---:|---:|---:|
+| 直接在 ERP 上跟踪（对照） | — | 见下 | 1 | 没有重测 |
+| **基线 1：默认** | `--preset default` | 0.48–0.49 | 1.00 | 39.6 |
+| 基线 1，速度档 | `--preset default --precision tf32` | 0.48（与上一行分不出高低） | 1.00 | 43.2 |
+| 基线 2：丢失后重新寻找目标（实验） | `--preset loss_handling` | 0.517 | 平均 1.16 | 约 25 |
 
-| 模块 | 已实现的能力 |
-|---|---|
-| **球面几何** | ERP ↔ 球面 ↔ 透视视图转换；局部框边界一次回投得到 BFoV 与 ERP 框；循环（跨缝）区间与最小覆盖弧 |
-| **GPU 重采样** | ERP 帧只上传一次显存，透视网格和跨缝双线性采样都在 CUDA 中完成；与 CPU 参考实现对比，P99 像素误差为 0 |
-| **视图规划** | 每帧一个透视视图：以运动模型预测的方向为中心，视场按预测的目标角尺寸确定 |
-| **运动模型** | 切平面 Huber 拟合的球面速度与 log 尺度估计，不会在 ±180° 经线处跳变 |
-| **状态机** | 根据最近分数的分位数（ScoreGroup）自适应阈值，在 `TRACKING` 和 `UNCERTAIN` 之间切换 |
-| **逐帧协议** | “规划 → 提交”两步协议带 revision 校验，迟到或重复的结果不会污染状态；单帧出错时仍保证每帧一行输出 |
-| **评估** | 循环 ERP IoU、球面 BFoV IoU（按 cos 纬度加权）、大圆中心误差、success 曲线 / AUC、跟踪丢失率 |
+- 在全部 66 条开发序列上，基线 1 是 0.504，直接在 ERP 上跟踪是 0.412。
+- **单次运行的分数有约 0.009 的标准差来自数值上的偶然**：给输入加一个看不见的噪声，同样的代码在 0.470–0.495 之间。所以基线 2 相对基线 1 的 +0.024 还不能算确定的提升，它是实验功能，默认关闭。
+- 用真值在丢失后把跟踪器放回目标，上限是 0.65 左右：丢失后的重新寻找还有很大空间，这是 V2.1 的方向。
+- 速度是完整流程的数字（读图、解码、取视图、前向、回投），4K 的 JPEG 序列。
 
-## 系统架构
-
-```text
-视频 ──▶ 预取解码线程 ──▶ ERP 帧
-                            │
-                            ▼
-           ┌──────── TrackController ◀──────────────────┐
-           │  规划一个视图（基于预测 BFoV）                │
-           ▼                                            │
-   Geometry：ERP → 透视视图（256×256）                   │
-           │                                            │
-           ▼                                            │
-   跟踪后端：ARTrackV2-B-256（每帧一次前向）              │
-           │                                            │
-           ▼                                            │
-   Geometry：局部框 → 球面（BFoV / 跨缝 ERP 框）          │
-           │                                            │
-           ▼                                            │
-   打分 + 状态机 ───────────────── 每帧一次提交 ──────────┘
-           │
-           ▼
-   结果输出（每帧一行）
-```
-
-```text
-src/track360/
-├── cli.py          统一命令行入口
-├── core/           数据类型、协议、配置 schema、错误类型
-├── geometry/       球面数学、BFoV 投影、跨缝区间、CUDA 重采样
-├── controller/     视图规划、测量判定、运动预测、状态机、丢失处理
-├── backends/       ARTrackV2 推理会话与批量适配
-├── runtime/        组件装配与逐帧循环
-├── datasets/       360VOT / AirSim360 / 视频 / 图像序列读取
-├── io/             图像与视频读取、结果写入
-├── evaluation/     平面 / 循环 / 球面指标与性能统计
-├── visualization/  中间视图与结果图
-└── third_party/    上游 ARTrackV2 模型代码（推理子集）
-```
-
-详见 [系统架构](docs/architecture.md)。
+每个数字的来历、测法和局限见 [两条基线](docs/baselines.md) 和 [评测记录](docs/evaluation-log.md)。
 
 ## 安装
 
-环境要求：Python 3.11+、NVIDIA GPU 及 CUDA 版 PyTorch 2.11。
+环境要求：Python 3.11+，NVIDIA GPU 和 CUDA 版 PyTorch 2.11。
 
 ```bash
 git clone https://github.com/CaryHe-maker/360-VideoTargetingSystem.git
 cd 360-VideoTargetingSystem
 pip install -e ".[dev]"
+track360 download        # ARTrackV2-B-256 权重，约 1.6 GB，下载后核对 SHA-256
 ```
 
-模型权重不随仓库分发：请下载官方 ARTrackV2-B-256 checkpoint（约 1.6 GB），放到 `models/artrackv2_b_256.pth.tar`，下载方式和校验见 [models/README.md](models/README.md)。
+权重不随仓库分发，由 `track360 download` 从作者发布的地址下载；手动下载的方法见 [models/README.md](models/README.md)。上游仓库声明该项目不用于商业用途，使用前请自行确认许可。
 
 ## 快速上手
 
 ```bash
-# 跟踪一个视频：初始框为第 0 帧的 ERP 像素框 x,y,width,height
-track360 track --input path/to/video.mp4 --init-box 1200,640,180,140 --output outputs/result.txt
+# 第 0 帧的目标用 ERP 像素框给出：x,y,width,height
+track360 track --input path/to/video.mp4 --init-box 1200,640,180,140 --output out/result.txt
 
-# AirSim360 格式数据：先列出首帧实例，再跟踪其中一个
-track360 list-instances path/to/airsim360_seq
-track360 airsim360 --dataset-root path/to/airsim360_seq --target-instance <id> --output outputs/tracking.txt
+# 或者用球面框（度）：clon,clat,fov_h,fov_v；同时输出一段演示视频
+track360 track --input path/to/frames/ --init-bfov=12.0,-3.5,20,35 \
+  --output out/result.txt --demo out/demo.mp4 --gif out/demo.gif
+
+# 速度档；丢失处理
+track360 track --input video.mp4 --init-box 1200,640,180,140 --output out/a.txt --precision tf32
+track360 track --input video.mp4 --init-box 1200,640,180,140 --output out/b.txt --preset loss_handling
 ```
 
-- 不传 `--config` 时使用 [`configs/default.yaml`](configs/default.yaml)；
 - 输出每帧一行 `x,y,width,height`（ERP 像素坐标，跨缝目标的 `x + width` 可以超过图像宽度）；
-- 带真值评估的完整产物使用 `python tools/run_airsim360_dataset.py`。
+- 演示视频左边是全景画面和结果，右边是跟踪器实际看到的局部视图；
+- 读视频文件需要系统里装有 ffmpeg，图像序列目录不需要。
 
-更多用法和退出码见 [快速上手](docs/getting-started.md)，参数说明见 [配置说明](docs/configuration.md)。
+Python 里：
 
-## Benchmark
+```python
+from track360.api import Track360Tracker
 
-V2 阶段会在公开数据集 **[360VOT](https://360vot.hkustvgd.com)**（ICCV 2023，120 条序列，约 113K 帧）上给出完整结果，参数只在 360VOS 训练集上调整。计划的对比方法：
+with Track360Tracker.fromPretrained("default") as tracker:
+    results = tracker.track("panorama.mp4", initBfov=(12.0, -3.5, 20.0, 35.0))
+    for result in results:
+        print(int(result.frameIndex), result.bbox, result.status.name)
+```
 
-| 方法 | 说明 |
+更多参数见 [快速上手](docs/getting-started.md) 和 [配置说明](docs/configuration.md)。
+
+## 怎么工作
+
+```text
+帧 ──▶ 解码线程 ──▶ ERP 帧
+                      │
+        ┌─────── TrackController ◀────────────────────────┐
+        │  运动模型预测这一帧的方向和大小，规划一个视图       │
+        ▼                                                 │
+   Geometry：ERP → 局部视图（256×256；大目标用球面视图）    │
+        │                                                 │
+        ▼                                                 │
+   ARTrackV2-B-256：模板 + 视图 + 前 7 帧的框 → 一个框      │
+        │                                                 │
+        ▼                                                 │
+   Geometry：局部框 → 球面 BFoV 和跨缝的 ERP 框            │
+        │                                                 │
+        ▼                                                 │
+   状态判定 ─────────────── 每帧提交一个结果 ───────────────┘
+```
+
+| 模块 | 做什么 |
 |---|---|
-| ARTrackV2 直接跟踪 ERP | 最简单的基线：直接在全景图上跟踪 |
-| 论文基线 | 360VOT 论文中报告的结果，例如 AiATrack-360（S<sub>dual</sub> 0.534） |
-| **本项目** | 以预测 BFoV 为中心的单个透视视图，并逐个组件做消融 |
+| **球面几何** | ERP、球面、局部视图之间的转换；局部框边界一次回投得到 BFoV 和 ERP 框；跨缝区间和最小覆盖弧。目标搜索区域超过 120° 时改用球面视图（以目标为中心的局部 ERP），避免透视投影在大视场下的拉伸 |
+| **视图规划** | 每帧一个视图：以运动预测为中心，边长是目标平均尺寸的 4 倍 |
+| **运动模型** | 切平面上 Huber 拟合的球面速度和 log 尺度，不会在 ±180° 经线处跳变 |
+| **后端** | ARTrackV2 的序列级用法：轨迹输入和每帧更新的外观特征。上游模型代码的推理子集在 `third_party/` 下 |
+| **状态** | 每帧报告 `TRACKING` / `UNCERTAIN` / `LOST`。默认配置下它只是报告，不影响跟踪 |
+| **丢失处理（实验）** | 用后端分数和对第 0 帧模板的外观相似度（DINOv2）相对本序列自身水平的下降来判断丢失；可疑帧不更新后端的外观记忆；丢失后先原地重看，再用放大的视图定位、正常大小的视图确认，分数够高才跳回去 |
+| **逐帧协议** | “规划 → 提交”两步，带 revision 校验；单帧出错时仍然保证每帧一行输出 |
 
-指标与官方 toolkit 一致：dual success（S<sub>dual</sub>，AUC）、dual precision（P<sub>dual</sub>）、angle precision（P<sub>angle</sub>），另外在固定 GPU 上报告 FPS 和 P50 / P95 延迟。数据集选型和评测协议见 [Benchmark 数据集](docs/benchmark.md)。
+```text
+src/track360/
+├── api.py          Python 入口：Track360Tracker
+├── cli.py          命令行入口
+├── hub.py          权重下载和校验
+├── core/           数据类型、协议、配置、错误类型
+├── geometry/       球面数学、视图投影、跨缝区间
+├── controller/     视图规划、运动预测、状态机、丢失处理
+├── backends/       ARTrackV2 推理会话、外观验证器
+├── runtime/        组件装配和逐帧循环、批量评测
+├── datasets/       360VOT / AirSim360 / 视频 / 图像序列读取
+├── io/             图像和视频读取、结果写入
+├── evaluation/     360VOT 指标、丢失率、配对 bootstrap、计时
+├── visualization/  中间视图、结果图、演示视频
+└── third_party/    上游 ARTrackV2 模型代码（推理子集）、360VOT 指标代码
+```
+
+详见 [系统架构](docs/architecture.md) 和各 [模块文档](docs/README.md)。
+
+## 评测
+
+```bash
+track360 benchmark run  --dataset-root <360VOT> --output-root outputs/run --method ours
+track360 benchmark eval --dataset-root <360VOT> --output-root outputs/run
+track360 benchmark compare --dataset-root <360VOT> \
+  --baseline outputs/a:ours --candidate outputs/b:ours
+```
+
+指标与官方 toolkit 一致：dual success（S<sub>dual</sub>，AUC）、dual precision（P<sub>dual</sub>）、angle precision（P<sub>angle</sub>），另有丢失率和配对 bootstrap 的 95% 区间。数据集的准备和划分见 [Benchmark 数据集](docs/benchmark.md)。
+
+比较两种做法时请注意上面说的偶然波动：单次运行之间小于约 0.02–0.03 的差别不足以下结论。
 
 ## 测试
 
 ```bash
-pytest                            # 没有 CUDA 时，GPU 几何测试会自动跳过
-pytest -m "not slow"              # 跳过耗时约 1.5 分钟的开关组合回归
+pytest                    # 不需要 GPU 和权重
 ruff check src tests tools
 ```
 
+回归测试里有一组在合成序列上逐位比对的轨迹；默认配置在真实数据上的结果也要求与记录逐字节相同，做法见 [两条基线](docs/baselines.md)。
+
 ## 文档
 
-全部文档见 [docs/](docs/README.md)：
 [快速上手](docs/getting-started.md) ·
 [系统架构](docs/architecture.md) ·
 [配置说明](docs/configuration.md) ·
-[Benchmark](docs/benchmark.md) ·
-[V2Plan](docs/V2Plan.md) ·
+[两条基线](docs/baselines.md) ·
+[Benchmark 数据集](docs/benchmark.md) ·
 [评测记录](docs/evaluation-log.md) ·
-[历史实验结论](docs/experiments.md)
+[V2 计划](docs/V2Plan.md) ·
+[全部文档](docs/README.md)
 
 ## 路线图
 
-- [x] 移除比赛专用入口、Docker 分层和死代码，重新组织包结构，统一 CLI
-- [x] 文档重组为中文文档集，确定公开 benchmark 测试集（360VOT）
-- [x] 把后端调参用的环境变量迁入 YAML 配置，统一测试与运行行为；CI、运行记录、端到端回归测试
-- [x] 项目、Python 包和命令行统一命名为 Track360 / `track360`
-- [ ] 统一为 PEP 8 命名，提供 Python API
-- [x] 权重不再通过 Git LFS 随仓库分发
-- [ ] 权重发布到 Hugging Face Hub / Releases，提供自动下载与校验
-- [ ] 360VOT / 360VOS 数据加载器，评测结果与官方 toolkit 交叉验证
-- [ ] 消融与效率 benchmark（GPU 几何、流水线、FP16、TensorRT）
-- [ ] 后端注册表，新增 OSTrack 后端和轻量速度档
-- [ ] CI、文档站、Demo GIF、Gradio 在线演示
+- [x] 与比赛代码解耦，重组包结构，统一命令行和配置
+- [x] 360VOT / 360VOS 数据加载，评测结果与官方 toolkit 交叉验证
+- [x] 换成与跟踪器训练条件一致的视图取法；大目标的球面视图；序列级模型
+- [x] 速度：默认配置 22 → 40 FPS，结果不变；TF32 速度档
+- [x] 权重下载和校验、Python API、演示视频
+- [ ] 在 360VOT 官方测试集上给出当前代码的结果
+- [ ] V2.0 发布
+- [ ] V2.1：丢失后的重新寻找（出事时把位置定住、候选的确认）
+- [ ] 更多后端；TensorRT
+
+## 引用
+
+见 [CITATION.cff](CITATION.cff)。使用本项目时请同时引用 ARTrackV2 和 360VOT。
 
 ## 致谢
 
-- [ARTrack / ARTrackV2](https://github.com/miv-xjtu/artrack)（Apache-2.0）：跟踪后端。`src/track360/third_party/artrackv2` 中的模型代码来自官方实现。
+- [ARTrack / ARTrackV2](https://github.com/MIV-XJTU/ARTrack)：跟踪后端。`src/track360/third_party/artrackv2` 中的模型代码来自官方实现。
 - [360VOT](https://github.com/HuajianUP/360VOT)：全景跟踪 benchmark、BFoV 表示和评测协议。
-- [OSTrack](https://github.com/botaoye/OSTrack)、[pytracking](https://github.com/visionml/pytracking)：跟踪器接口与评测设计的参考。
+- [DINOv2](https://github.com/facebookresearch/dinov2)：丢失处理里的外观验证器。
+- [OSTrack](https://github.com/botaoye/OSTrack)、[pytracking](https://github.com/visionml/pytracking)：跟踪器接口和评测设计的参考。
 
 ## 许可证
 
-Track360 使用 [Apache License 2.0](LICENSE)。`src/track360/third_party/artrackv2/` 中的代码来自 ARTrack，同样使用 Apache-2.0，原许可证保留在该目录下，来源说明见 [NOTICE](NOTICE)。模型权重和 360VOT / 360VOTS 数据集不属于本仓库，分别遵循其发布方的许可。
+Track360 使用 [Apache License 2.0](LICENSE)。`src/track360/third_party/artrackv2/` 中的代码来自 ARTrack，同样使用 Apache-2.0，原许可证保留在该目录下，来源说明见 [NOTICE](NOTICE)。模型权重不属于本仓库，其使用条件以上游的声明为准。

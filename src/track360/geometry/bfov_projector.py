@@ -25,7 +25,7 @@ class BfovProjector:
     # Sample with single-precision coordinates and OpenCV's remap instead of the
     # double-precision reference path.  Same sampling positions; values differ by
     # at most one intensity level.
-    useRemap: bool = False
+    useRemap: bool = True
 
     def __post_init__(self) -> None:
         _requireBoundarySamplesPerEdge(self.boundarySamplesPerEdge)

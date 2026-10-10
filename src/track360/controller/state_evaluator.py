@@ -73,12 +73,9 @@ class StateEvaluator:
             else float(np.clip(observation.appearanceSimilarity, 0.0, 1.0))
         )
         stateScore = fuseStateScore(backendScore, appearanceScore, motionScore, self._tuning)
-        # ARTrack's score is a localization-quality signal, not a calibrated probability:
-        # by default the returned box is the measurement whatever its raw score.
-        accepted = (
-            self._tuning.acceptAnyCandidate
-            or backendScore >= self._tracking.candidateMinScore
-        )
+        # ARTrack's score tells how well the box is placed, not whether the target is
+        # there: the returned box is the measurement whatever its score.
+        accepted = True
         return StateObservation(
             sequenceId=plan.sequenceId,
             frameIndex=plan.frameIndex,

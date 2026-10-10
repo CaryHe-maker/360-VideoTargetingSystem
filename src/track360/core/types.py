@@ -422,8 +422,6 @@ class ProjectedObservation:
     edgeMargin: float = 0.0
     # Feature similarity of the box to the frame-0 template; None: not measured.
     appearanceSimilarity: float | None = None
-    # Scan views that pointed at this box (a candidate of a lost track).
-    support: int = 1
 
     def __post_init__(self) -> None:
         if self.viewId < 0:

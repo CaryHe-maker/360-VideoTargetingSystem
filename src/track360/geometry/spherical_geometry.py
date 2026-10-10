@@ -39,7 +39,7 @@ class SphericalGeometryImpl(SphericalGeometryProtocol):
 
     boundarySamplesPerEdge: int = 65
     # Crop views with OpenCV's remap; see ``BfovProjector.useRemap``.
-    useRemap: bool = False
+    useRemap: bool = True
     _projector: BfovProjector = field(init=False, repr=False)
 
     def __post_init__(self) -> None:

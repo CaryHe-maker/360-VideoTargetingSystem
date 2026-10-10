@@ -421,10 +421,6 @@ class LocalBoxOfBfovTest(unittest.TestCase):
 class ControllerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = loadConfig(ROOT / "configs" / "default.yaml")
-        self.gatedConfig = replace(
-            self.config,
-            backendTuning=replace(self.config.backendTuning, acceptAnyCandidate=False),
-        )
         self.geometry = SphericalGeometryImpl(
             boundarySamplesPerEdge=self.config.geometry.boundarySamplesPerEdge
         )
@@ -518,52 +514,17 @@ class ControllerTest(unittest.TestCase):
         self.assertTrue(result.valid)
         self.assertEqual(result.resultSource, ResultSource.OBSERVED_CONFIRMED)
 
-    def testGatedConfigRejectsABoxBelowCandidateMinScore(self) -> None:
-        controller = self._controller(self.gatedConfig)
-        weak = controller.consume(controller.beginFrame(_frame(1)), _observation(0.10, xPx=20.0))
-
-        self.assertFalse(weak.valid)
-        self.assertEqual(weak.resultSource, ResultSource.OBSERVED_WEAK_BLEND)
-        self.assertAlmostEqual(weak.bbox.xPx, 20.0)
-
-        strong = controller.consume(controller.beginFrame(_frame(2)), _observation(0.90))
-        self.assertTrue(strong.valid)
-
-    def testWeakFirstObservationBootstrapsVelocityBeforeThirdFrame(self) -> None:
-        estimator = SphericalMotionEstimator(windowLength=3, minSamplesForVelocity=2)
-        controller = self._controller(self.gatedConfig, motionEstimator=estimator)
-
-        weak = controller.consume(controller.beginFrame(_frame(1)), _observation(0.10))
-        self.assertFalse(weak.valid)
-        self.assertEqual(len(estimator.samples), 2)
-
-        controller.beginFrame(_frame(2))
-        prediction = estimator.predictDetailed(_frame(2).timestampNs)
-        self.assertEqual(prediction.sampleCount, 2)
-        self.assertNotIn("insufficient_motion_samples", prediction.degradedReasons)
-
-    def testRejectedMeasurementHoldsTheBoxOfALargeTarget(self) -> None:
+    def testAFrameWithoutABoxHoldsTheBoxOfALargeTarget(self) -> None:
         largeBox = BBoxXYWH(100.0, 40.0, 150.0, 100.0)  # more than 10% of the frame
-
-        def track(config):
-            controller = TrackControllerImpl(self.geometry, config)
-            controller.commitInitialization(controller.buildInitialization(_frame(0), largeBox))
-            return controller.consume(
-                controller.beginFrame(_frame(1)), _observation(0.10, xPx=20.0)
-            )
-
-        held = track(self.gatedConfig)
-        released = track(
-            replace(
-                self.gatedConfig,
-                backendTuning=replace(self.gatedConfig.backendTuning, holdWeakBox=False),
-            )
-        )
+        controller = TrackControllerImpl(self.geometry, self.config)
+        controller.commitInitialization(controller.buildInitialization(_frame(0), largeBox))
+        held = controller.consume(controller.beginFrame(_frame(1)), None)
 
         self.assertTrue(held.valid)
         self.assertEqual(held.bbox, largeBox)
-        self.assertFalse(released.valid)
-        self.assertAlmostEqual(released.bbox.xPx, 20.0)
+        # A small target is not held: its frame without a box is not a valid result.
+        small = self._controller()
+        self.assertFalse(small.consume(small.beginFrame(_frame(1)), None).valid)
 
     def testFallbackAdvancesProtocolAndAllowsNextFrame(self) -> None:
         controller = self._controller()

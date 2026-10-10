@@ -3,7 +3,7 @@ model:
   backend: pytorch
   variant: artrackv2_b_256
   weights: ../models/artrackv2_b_256.pth.tar
-  precision: fp32
+  precision: tf32
 geometry:
   viewWidthPx: 256
   viewHeightPx: 256
@@ -29,7 +29,7 @@ backendTuning:
   sphericalSearch: true
   sphericalSearchFovDeg: 120.0
   templateFovScale: 2.5
-  lossHandling: false
+  lossHandling: true
   stateBackendWeight: 0.40
   stateAppearanceWeight: 0.55
   stateMotionWeight: 0.05
@@ -37,7 +37,7 @@ backendTuning:
   motionSizeScale: 0.1
   uncertainScore: 0.42
   lostAfterFrames: 4
-  scanBudgetPerFrame: 0.0
+  scanBudgetPerFrame: 0.5
   scanBudgetBurst: 40.0
   reacquireScore: 0.70
   lossActions: jump

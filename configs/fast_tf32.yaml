@@ -1,19 +1,15 @@
-schemaVersion: 1
+schemaVersion: 2
 model:
   backend: pytorch
   variant: artrackv2_b_256
   weights: ../models/artrackv2_b_256.pth.tar
   precision: tf32
-scoring:
-  calibrationArtifact: null
-  requireCheckpointHashMatch: true
 geometry:
   viewWidthPx: 256
   viewHeightPx: 256
   boundarySamplesPerEdge: 65
   minFovDeg: 20.0
   maxFovDeg: 120.0
-  resampler: opencv
 motion:
   minSamplesForVelocity: 2
   maxTangentSpanRad: 1.20
@@ -22,24 +18,18 @@ motion:
   maxAngularSpeedRadPerSec: 2.0
   maxLogScaleRatePerSec: 1.0
 tracking:
-  candidateMinScore: 0.597262
   windowLength: 5
   contextScale: 2.0
   contextMarginRatio: 0.15
   maxPredictionHorizon: 3
 backendTuning:
-  acceptAnyCandidate: true
   viewHorizontalFovCapDeg: 90.0
   viewVerticalFovCapDeg: 90.0
   alignedMinFovDeg: 2.0
   sphericalSearch: true
   sphericalSearchFovDeg: 120.0
-  predictiveSearch: true
-  useMotionScore: false
   templateFovScale: 2.5
-  holdWeakBox: true
   lossHandling: false
-  verifierModel: dinov2
   stateBackendWeight: 0.40
   stateAppearanceWeight: 0.55
   stateMotionWeight: 0.05
@@ -47,26 +37,15 @@ backendTuning:
   motionSizeScale: 0.1
   uncertainScore: 0.42
   lostAfterFrames: 4
-  scanViewsPerFrame: 4
   scanBudgetPerFrame: 0.0
   scanBudgetBurst: 40.0
-  reacquireSimilarity: 0.45
-  reacquireMargin: 0.15
   reacquireScore: 0.70
-  stateRule: fused
   lossActions: jump
-  stateLatch: false
-  latchReleaseMargin: 0.20
   releaseFrames: 3
   relativeGate: 0.05
   relativeEnterDeviation: -0.53
-  scanMode: tiles
-  zoomInPlace: true
-  zoomCentre: trusted
   zoomFirstScale: 2.0
-  zoomMidScale: 0.0
   zoomLastScale: 4.0
-  zoomMidAfterFrames: 10
   zoomLastAfterFrames: 20
 reproducibility:
   seed: 0

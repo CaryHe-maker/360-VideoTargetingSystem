@@ -21,14 +21,10 @@ from track360.backends import (
     createArtrackSession,
 )
 from track360.controller import (
-    UNCALIBRATED_STAGE3_SCORE_CALIBRATION,
-    ScoreCalibration,
     TrackControllerImpl,
-    calibrateBackendFusedScore,
-    calibrateLocalAppearanceProbabilities,
-    composeSingleScore,
-    loadScoreCalibration,
+    backendScoreProbability,
     scoreViewCenterMotion,
+    withScoreProbability,
 )
 from track360.core.config import AppConfig, ModelConfig
 from track360.core.errors import DecodeError, GeometryError
@@ -64,8 +60,6 @@ class RuntimeBundle:
     controller: TrackControllerImpl
     backend: TrackerBackend
     sink: ResultSinkProtocol
-    scoreCalibration: ScoreCalibration
-    useMotionScore: bool
     verifier: Any | None = None
     recorder: VisualizationRecorder | None = None
 
@@ -156,7 +150,6 @@ def buildRuntime(
     *,
     artrackSessionFactory: Callable[[ModelConfig], ARTrackSession] | None = None,
     geometryFactory: Callable[[int], SphericalGeometry] | None = None,
-    allowUncalibratedScoring: bool = False,
     profile: bool = False,
 ) -> RuntimeBundle:
     tuning = config.backendTuning
@@ -166,7 +159,6 @@ def buildRuntime(
     else:
         geometry = SphericalGeometryImpl(
             boundarySamplesPerEdge=config.geometry.boundarySamplesPerEdge,
-            useRemap=config.geometry.resampler == "opencv",
         )
     rgbSession = (
         artrackSessionFactory(config.model)
@@ -181,35 +173,17 @@ def buildRuntime(
         from track360.visualization.recorder import VisualizationRecorder
 
         recorder = VisualizationRecorder(config.visualization)
-    if config.scoring.calibrationArtifact is not None:
-        scoreCalibration = loadScoreCalibration(
-            config.scoring.calibrationArtifact,
-            checkpointPath=config.model.weights,
-            candidateMinScore=config.tracking.candidateMinScore,
-            requireCheckpointHashMatch=config.scoring.requireCheckpointHashMatch,
-        )
-    elif (
-        allowUncalibratedScoring
-        or config.model.variant.lower().replace("-", "_") == "artrackv2_b_256"
-    ):
-        scoreCalibration = UNCALIBRATED_STAGE3_SCORE_CALIBRATION
-    else:
-        raise ValueError("production runtime requires a score calibration artifact")
     verifier = None
     if tuning.lossHandling:
         from track360.backends.appearance import AppearanceVerifier
 
-        verifier = AppearanceVerifier(
-            tuning.verifierModel, Path(config.model.weights).parent / "hub"
-        )
+        verifier = AppearanceVerifier("dinov2", Path(config.model.weights).parent / "hub")
     return RuntimeBundle(
         geometry=geometry,
         controller=controller,
         backend=backend,
         sink=sink,
-        scoreCalibration=scoreCalibration,
         recorder=recorder,
-        useMotionScore=tuning.useMotionScore,
         verifier=verifier,
     )
 
@@ -227,8 +201,6 @@ def runTracking(
     resultRecorder: ResultVisualizationRecorder | None = None,
     processingTimer: TimeCounter | None = None,
     profiler: RuntimeProfiler | None = None,
-    scoreCalibration: ScoreCalibration,
-    useMotionScore: bool,
     probe: Any | None = None,
     verifier: Any | None = None,
     trace: list[dict[str, object]] | None = None,
@@ -329,10 +301,7 @@ def runTracking(
                             probed = (view, rawObservation)
                             _recordBackendProfile(profiler, backend)
                             with _profile(profiler, "calibration"):
-                                observation = calibrateLocalAppearanceProbabilities(
-                                    (rawObservation,),
-                                    scoreCalibration,
-                                )[0]
+                                observation = withScoreProbability((rawObservation,))[0]
                             with _profile(profiler, "projection"):
                                 projected = _projectValidObservation(
                                     frame=frame,
@@ -340,8 +309,6 @@ def runTracking(
                                     observation=observation,
                                     predictedMotion=plan.predictedMotion,
                                     geometry=geometry,
-                                    scoreCalibration=scoreCalibration,
-                                    useMotionScore=useMotionScore,
                                 )
                             # PostTrainV2.4 keeps recorder inputs host-only at this boundary.
                             # Recorders only consume the compatibility RGB and view
@@ -368,14 +335,11 @@ def runTracking(
                                         geometry=geometry,
                                         backend=backend,
                                         verifier=verifier,
-                                        scoreCalibration=scoreCalibration,
-                                        useMotionScore=useMotionScore,
                                         refinementView=(
                                             controller.refinementView
                                             if plan.scanRefine
                                             else None
                                         ),
-                                        controller=controller,
                                     )
                                     forwardCount += scanForwards
                                     controller.settleScan(scanForwards)
@@ -520,8 +484,6 @@ def _projectObservation(
     observation: LocalObservation,
     predictedMotion: MotionState3D | None,
     geometry: SphericalGeometry,
-    scoreCalibration: ScoreCalibration,
-    useMotionScore: bool,
 ) -> ProjectedObservation:
     projection = geometry.projectLocalBoxBoundary(
         observation.bbox,
@@ -533,18 +495,10 @@ def _projectObservation(
     appearanceProbability = (
         observation.appearanceProbability
         if observation.appearanceProbability is not None
-        else calibrateBackendFusedScore(observation.fusedScore, scoreCalibration)
+        else backendScoreProbability(observation.fusedScore)
     )
-    if not useMotionScore:
-        # ARTrack already scores localization against its template/search crop.
-        # The legacy spherical motion prior can reject a correct appearance hit.
-        singleScore = float(np.clip(appearanceProbability, 0.0, 1.0))
-    else:
-        singleScore = composeSingleScore(
-            appearanceProbability,
-            motion.effectiveProbability,
-            scoreCalibration,
-        )
+    # ARTrack already scores its box against the template and the search crop.
+    singleScore = float(np.clip(appearanceProbability, 0.0, 1.0))
     scaleScore = _scaleScore(observation.bbox, view, predictedMotion)
     normalizedRadius, edgeMargin = _projectionQuality(observation.bbox, view)
     return ProjectedObservation(
@@ -577,24 +531,19 @@ def _scanCandidates(
     geometry: SphericalGeometry,
     backend: TrackerBackend,
     verifier: Any,
-    scoreCalibration: ScoreCalibration,
-    useMotionScore: bool,
     refinementView: Callable[..., ViewSpec] | None = None,
-    controller: Any = None,
 ) -> tuple[tuple[ProjectedObservation, ...], int]:
-    """Boxes found in the plan's scan views with their similarity to the template,
+    """Boxes found in the plan's search views with their similarity to the template,
     and the forward passes spent.
 
-    With ``refinementView`` a scan view only points at a place: a view of the normal
+    With ``refinementView`` a search view only points at a place: a view of the normal
     size is taken around each box found, and the boxes of those views are returned.
     """
     views = {view.spec.viewId: view for view in geometry.cropViews(frame, plan.scanViews)}
     found = backend.inferDetached(tuple(views.values()))  # type: ignore[attr-defined]
     forwards = len(views)
-    support = 1
     if refinementView is not None:
         specs = []
-        pointedAt = []
         for local in found:
             try:
                 pointed = geometry.projectLocalBoxBoundary(
@@ -605,21 +554,7 @@ def _scanCandidates(
                 )
             except GeometryError:
                 continue
-            pointedAt.append((pointed.bfov.center, float(local.fusedScore)))
-        if len(views) > 1 and pointedAt:
-            # Several enlarged views: follow the place most of them point at.
-            radius = controller.agreementRadiusRad()
-            counts = [
-                sum(_angleBetween(centre, other) < radius for other, _ in pointedAt)
-                for centre, _ in pointedAt
-            ]
-            chosen = max(
-                range(len(pointedAt)), key=lambda i: (counts[i], pointedAt[i][1])
-            )
-            support = counts[chosen]
-            pointedAt = [pointedAt[chosen]]
-        for centre, _ in pointedAt:
-            specs.append(refinementView(centre, len(specs)))
+            specs.append(refinementView(pointed.bfov.center, len(specs)))
         views = (
             {view.spec.viewId: view for view in geometry.cropViews(frame, specs)}
             if specs
@@ -628,7 +563,7 @@ def _scanCandidates(
         found = backend.inferDetached(tuple(views.values())) if views else ()  # type: ignore[attr-defined]
         forwards += len(views)
     candidates = []
-    for local in calibrateLocalAppearanceProbabilities(found, scoreCalibration):
+    for local in withScoreProbability(found):
         view = views[local.viewId]
         projected = _projectValidObservation(
             frame=frame,
@@ -636,48 +571,14 @@ def _scanCandidates(
             observation=local,
             predictedMotion=None,
             geometry=geometry,
-            scoreCalibration=scoreCalibration,
-            useMotionScore=useMotionScore,
         )
         if projected is not None:
             candidates.append(
                 replace(
-                    projected,
-                    appearanceSimilarity=verifier.similarity(view, local.bbox),
-                    support=support,
+                    projected, appearanceSimilarity=verifier.similarity(view, local.bbox)
                 )
             )
-    band = controller.crossBand if controller is not None else None
-    if band is not None and refinementView is not None:
-        for index, candidate in enumerate(candidates):
-            score = float(candidate.singleScore or 0.0)
-            if not band[0] <= score < band[1] or candidate.support >= 2:
-                continue
-            # A second look from a shifted view: the same box again counts as agreement.
-            spec = controller.shiftedView(candidate.bfov.center, 8 + index)
-            second = geometry.cropViews(frame, [spec])[0]
-            again = backend.inferDetached((second,))  # type: ignore[attr-defined]
-            forwards += 1
-            for local in again:
-                other = _projectValidObservation(
-                    frame=frame,
-                    view=second,
-                    observation=local,
-                    predictedMotion=None,
-                    geometry=geometry,
-                    scoreCalibration=scoreCalibration,
-                    useMotionScore=useMotionScore,
-                )
-                if other is not None and _angleBetween(
-                    other.bfov.center, candidate.bfov.center
-                ) < 0.5 * controller.agreementRadiusRad():
-                    candidates[index] = replace(candidate, support=2)
     return tuple(candidates), forwards
-
-
-def _angleBetween(first: Any, second: Any) -> float:
-    cosine = first.x * second.x + first.y * second.y + first.z * second.z
-    return math.acos(max(-1.0, min(1.0, cosine)))
 
 
 def _projectValidObservation(
@@ -687,8 +588,6 @@ def _projectValidObservation(
     observation: LocalObservation,
     predictedMotion: MotionState3D | None,
     geometry: SphericalGeometry,
-    scoreCalibration: ScoreCalibration,
-    useMotionScore: bool,
 ) -> ProjectedObservation | None:
     """Project the local box onto the sphere; ``None`` when it has no valid projection."""
     try:
@@ -698,8 +597,6 @@ def _projectValidObservation(
             observation=observation,
             predictedMotion=predictedMotion,
             geometry=geometry,
-            scoreCalibration=scoreCalibration,
-            useMotionScore=useMotionScore,
         )
     except GeometryError as error:
         print(
