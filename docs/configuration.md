@@ -13,7 +13,7 @@
 
 | 配置段 | 归属模块 | 主要字段 |
 |---|---|---|
-| `model` | Backends | `variant`（当前只支持 `artrackv2_b_256`）、`weights`、`precision`（当前只支持 `fp32`） |
+| `model` | Backends | `variant`（当前只支持 `artrackv2_b_256`）、`weights`、`precision`（`fp32` 是基准；`tf32` 打开显卡上的 TensorFloat-32 矩阵乘法，网络前向快约四分之一，结果在末位上有差别，见评测日志 E039） |
 | `scoring` | Controller | `calibrationArtifact`：可选的分数校准 JSON；`requireCheckpointHashMatch`：校准产物必须与权重的 SHA-256 绑定 |
 | `geometry` | Geometry | 局部视图尺寸 256×256、`boundarySamplesPerEdge`（局部框每条边回投的采样点数）、FoV 范围 20°–120°、`resampler`（`opencv`：默认，`cv2.remap` 取色；`cpu`：双精度的参考实现，慢约 17 ms / 帧，像素值最多差 1 级） |
 | `motion` | Controller | 球面运动估计：Huber 参数、过程噪声、最大角速度、最大尺度变化率 |

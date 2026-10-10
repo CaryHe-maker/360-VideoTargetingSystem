@@ -4,6 +4,13 @@
 
 ## [未发布]
 
+### 速度优化
+
+- 默认配置在 dev train 上从 22–26 FPS 到 39.6 FPS，结果与 E015 逐字节相同（评测日志 E039、E040）：解码直接出 RGB；`LocalBoxProjection` 去掉没有使用者的 `sphericalBoundary`；透视取视图的坐标按行列分开算；上游骨干每次前向重建的掩码和命令 token 改为缓存。
+- `model.precision` 增加 `tf32`（`configs/fast_tf32.yaml`）：43.2 FPS，结果在末位上有差别，精度与 FP32 分不出高低。
+- 试过没有采用：半精度、`torch.compile`、TorchScript 追踪、融合注意力、独立进程解码、多线程解码。
+- 分数对数值扰动的敏感度：dev train 上一次运行的 S<sub>dual</sub> 有约 0.009 的标准差来自数值上的偶然（E039），记入 [docs/baselines.md](docs/baselines.md)。
+
 ### 速度优化的基准
 
 - 新工具 `tools/stage_timing.py`：完整流程的分步计时、重复、帧在内存、单步四组测量。基线 1 的基准见评测日志 E038：主线程一帧 38–45 ms（22–26 FPS），后端约 60%、取视图约 14.5%、回投约 12%、控制器约 8.5%；网络前向单独 18.3 ms；单次运行的 FPS 有约 15% 的波动。
