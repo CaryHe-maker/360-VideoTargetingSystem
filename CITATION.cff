@@ -5,7 +5,7 @@ message: >-
 title: "Track360: single-object tracking in 360-degree video with a perspective-view tracker"
 type: software
 authors:
-  # The GitHub account that owns the repository; replace with the authors' names.
+  # The GitHub account that owns the repository.
   - name: "CaryHe-maker"
 repository-code: "https://github.com/CaryHe-maker/360-VideoTargetingSystem"
 license: Apache-2.0

@@ -10,7 +10,7 @@
    track360 download
    ```
 
-   从作者发布在 Google Drive 上的文件下载到本目录，并核对下面的 SHA-256；中断后再运行会接着下。`--url` 可以换来源，`--check` 只核对已有的文件。这个命令对真实的下载地址还没有完整验证过（下载需要 1.6 GB 流量），如果它报告“返回的是网页”，请用下面的方法。
+   从作者发布在 Google Drive 上的文件下载到本目录，并核对下面的 SHA-256；中断后再运行会接着下。`--url` 可以换来源，`--check` 只核对已有的文件。2026-10-11 对真实的下载地址完整跑过一次：约 5 分钟下完 1.6 GB，SHA-256 与下面记录的一致。Google Drive 对热门文件有下载次数限制，如果它报告“返回的是网页”，请用下面的方法。
 2. **手动**：从 [ARTrack 仓库](https://github.com/MIV-XJTU/ARTrack) README 中的 ARTrackV2-B-256 链接下载（Google Drive，或者百度网盘），放到本目录并重命名为 `artrackv2_b_256.pth.tar`，再运行 `track360 download --check`。
 3. **本仓库的历史版本**：提交 `f04c76d` 及更早的提交通过 Git LFS 保存了这个文件，可以这样取出：
 

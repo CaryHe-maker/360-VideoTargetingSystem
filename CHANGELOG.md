@@ -24,7 +24,7 @@
 
 #### 新增
 
-- `track360 download`：下载 ARTrackV2-B-256 权重并核对 SHA-256，支持续传、换来源、只校验（`track360/hub.py`）。
+- `track360 download`：下载 ARTrackV2-B-256 权重并核对 SHA-256，支持续传、换来源、只校验（`track360/hub.py`）。2026-10-11 对真实地址完整下载并校验通过。
 - `track360.api.Track360Tracker`：Python 入口。`fromPretrained(preset, precision=...)` 选预设，`track(source, initBox=... | initBfov=...)` 返回逐帧结果。
 - `track360 track` 的 `--preset default|loss_handling`、`--precision fp32|tf32`、`--demo`、`--gif`、`--max-frames`、`--weights`；`--config` 变为可选。
 - 演示视频：左边全景画面和结果，右边跟踪器看到的局部视图（`visualization/demo.py`）。
