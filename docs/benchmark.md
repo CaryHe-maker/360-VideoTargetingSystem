@@ -66,8 +66,10 @@ python scripts/eval_360VOT.py -d <dataset_dir> -b <results>/bbox -f <results>/bf
 | SimTrack | 0.400 | 0.373 | 0.424 |
 | MixFormer | 0.395 | 0.378 | 0.424 |
 | **AiATrack-360**（论文的 360 框架） | **0.534** | **0.506** | **0.574** |
+| LoRAT | 0.461 | 0.468 | 0.503 |
+| LoRAT（在 360VOTS 上微调） | 0.495 | 0.504 | 0.526 |
 
-> 数值摘自 [360VOTS 论文](https://arxiv.org/abs/2404.13953)，正式引用前请对照原文表格核实。
+> 数值摘自 [360VOTS 论文](https://arxiv.org/abs/2404.13953)。2026-10-11 对照 arXiv 网页版核对了 OSTrack、AiATrack、AiATrack-360 三行并补上 LoRAT；SimTrack、MixFormer 两行还没有核对。
 
 ## 评测协议（本项目）
 
