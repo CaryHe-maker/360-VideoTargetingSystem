@@ -7,19 +7,14 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from instatarget.app.driver import _projectObservation, _projectValidObservations
-from instatarget.controller import (
-    BetaCalibration,
+from track360.controller import (
     MotionScore,
-    ScoreCalibration,
-    calibrateBackendFusedScore,
-    calibrateLocalAppearanceProbabilities,
-    composeSingleScore,
-    scoreMotionConsistency,
+    backendScoreProbability,
     scoreViewCenterMotion,
+    withScoreProbability,
 )
-from instatarget.core.errors import GeometryError
-from instatarget.core.types import (
+from track360.core.errors import GeometryError
+from track360.core.types import (
     BBoxXYWH,
     BFoV,
     FrameIndex,
@@ -30,85 +25,36 @@ from instatarget.core.types import (
     SequenceId,
     ViewSpec,
 )
-from instatarget.geometry import makeSphericalPoint
-
-TEST_CALIBRATION = ScoreCalibration(
-    format="instatarget.score-calibration.v1",
-    checkpointSha256="1" * 64,
-    manifestSha256="2" * 64,
-    split="calibration",
-    appearanceInput="presence_quality_product",
-    appearance=BetaCalibration(alpha=1.5, beta=0.75, intercept=-0.2),
-    appearanceWeight=0.8,
-    motionWeight=0.2,
-    candidateMinScore=0.35,
-    fusionSourceMinConfidence=0.65,
-)
+from track360.geometry import makeSphericalPoint
+from track360.runtime.driver import _projectObservation, _projectValidObservation
 
 
 class FusedScoreRemappingTest(unittest.TestCase):
-    def testArtifactBetaCalibrationIsMonotonicAndKeepsEndpoints(self) -> None:
+    def testTheScoreProbabilityIsTheScoreUpToRounding(self) -> None:
         rawScores = (0.0, 0.1, 0.4, 0.8, 0.95, 1.0)
-        calibrated = tuple(
-            calibrateBackendFusedScore(score, TEST_CALIBRATION) for score in rawScores
-        )
+        mapped = tuple(backendScoreProbability(score) for score in rawScores)
 
-        self.assertEqual(calibrated, tuple(sorted(calibrated)))
-        self.assertEqual(calibrated[0], 0.0)
-        self.assertEqual(calibrated[-1], 1.0)
+        self.assertEqual(mapped, tuple(sorted(mapped)))
+        self.assertEqual(mapped[0], 0.0)
+        self.assertEqual(mapped[-1], 1.0)
+        for score, value in zip(rawScores, mapped, strict=True):
+            self.assertAlmostEqual(value, score, places=12)
+        # The round trip is not exact, which is why it is kept: the recorded
+        # baselines were made with these very numbers.
+        self.assertEqual(backendScoreProbability(0.9), 0.8999999999999999)
+        self.assertEqual(backendScoreProbability(0.7), 0.7)
 
     def testCreatesNewObservationsWithoutOverwritingBackendScore(self) -> None:
         original = _observation(0.85)
 
-        (remapped,) = calibrateLocalAppearanceProbabilities(
-            (original,), TEST_CALIBRATION
-        )
+        (remapped,) = withScoreProbability((original,))
 
         self.assertIsNot(remapped, original)
         self.assertEqual(original.fusedScore, 0.85)
         self.assertEqual(remapped.fusedScore, 0.85)
-        self.assertAlmostEqual(
-            remapped.appearanceProbability or 0.0,
-            calibrateBackendFusedScore(0.85, TEST_CALIBRATION),
-        )
+        self.assertAlmostEqual(remapped.appearanceProbability or 0.0, 0.85)
         self.assertEqual(remapped.bbox, original.bbox)
         self.assertEqual(remapped.appearanceScore, original.appearanceScore)
-
-    def testMotionScoreUsesPredictionCovarianceAndReliability(self) -> None:
-        prediction = MotionState3D(
-            position=(0.0, 0.0, 1.0),
-            velocity=(0.0, 0.0, 0.0),
-            confidence=0.9,
-            horizontalSizeRad=0.4,
-            verticalSizeRad=0.3,
-            angularUncertaintyRad=0.03,
-            scaleUncertainty=0.1,
-            reliability=1.0,
-            centerCovarianceRad2=((0.0009, 0.0), (0.0, 0.0009)),
-            scaleCovarianceLog2=((0.01, 0.0), (0.0, 0.01)),
-        )
-        aligned = scoreMotionConsistency(
-            BFoV(makeSphericalPoint(0.0, 0.0), 0.4, 0.3), prediction
-        )
-        displaced = scoreMotionConsistency(
-            BFoV(makeSphericalPoint(0.35, 0.0), 0.4, 0.3), prediction
-        )
-
-        self.assertGreater(aligned.rawScore, displaced.rawScore)
-        self.assertGreater(aligned.effectiveProbability, displaced.effectiveProbability)
-
-        unreliable = scoreMotionConsistency(
-            BFoV(makeSphericalPoint(0.35, 0.0), 0.4, 0.3),
-            MotionState3D(
-                position=prediction.position,
-                velocity=prediction.velocity,
-                confidence=0.9,
-            ),
-        )
-        self.assertAlmostEqual(unreliable.effectiveProbability, 0.5)
-
-    def testSingleScoreUsesArtifactWeights(self) -> None:
-        self.assertAlmostEqual(composeSingleScore(0.8, 0.2, TEST_CALIBRATION), 0.68)
 
     def testViewCenterMotionFallsContinuouslyByPointOnePerThirtyDegrees(self) -> None:
         prediction = MotionState3D(
@@ -174,18 +120,20 @@ class FusedScoreRemappingTest(unittest.TestCase):
         )
         viewScore = MotionScore(0.8, 0.8, 0.8, 0.5, (pi / 3.0) ** 2)
 
-        with patch("instatarget.app.driver.scoreViewCenterMotion", return_value=viewScore) as score:
+        target = "track360.runtime.driver.scoreViewCenterMotion"
+        with patch(target, return_value=viewScore) as score:
             projected = _projectObservation(
                 frame=frame,
                 view=view,
                 observation=observation,
                 predictedMotion=predicted,
                 geometry=geometry,
-                scoreCalibration=TEST_CALIBRATION,
             )
 
         score.assert_called_once_with(view.spec.bfov.center, predicted)
         self.assertAlmostEqual(projected.motionScore, 0.8)
+        # The motion prior is recorded; the score the controller uses is the backend's.
+        self.assertAlmostEqual(projected.singleScore, 0.90)
 
     def testInvalidSphericalProjectionIsSkipped(self) -> None:
         view = LocalView(
@@ -206,16 +154,15 @@ class FusedScoreRemappingTest(unittest.TestCase):
         stderr = StringIO()
 
         with redirect_stderr(stderr):
-            projected = _projectValidObservations(
+            projected = _projectValidObservation(
                 frame=frame,
-                views=(view,),
-                observations=(observation,),
+                view=view,
+                observation=observation,
                 predictedMotion=None,
                 geometry=geometry,
-                scoreCalibration=TEST_CALIBRATION,
             )
 
-        self.assertEqual(projected, ())
+        self.assertIsNone(projected)
         self.assertIn("sequence=projection-skip, frame=18, view=7", stderr.getvalue())
 
 

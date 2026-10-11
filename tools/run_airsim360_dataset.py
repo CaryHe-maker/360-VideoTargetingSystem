@@ -9,12 +9,12 @@ from pathlib import Path
 
 import numpy as np
 
-from instatarget.app.track_airsim360 import main as trackMain
-from instatarget.core.types import BBoxXYWH
-from instatarget.data.airsim360_source import AirSim360DataSource
-from instatarget.data.pseudo_track_builder import PseudoTrackBuilder
-from instatarget.eval.otb_metrics import OtbMetrics, circularBBoxIoU, readResultFile
-from instatarget.geometry.seam import minimalCircularInterval
+from track360.core.types import BBoxXYWH
+from track360.datasets.airsim360_source import AirSim360DataSource
+from track360.datasets.pseudo_track_builder import PseudoTrackBuilder
+from track360.evaluation.otb_metrics import OtbMetrics, circularBBoxIoU, readResultFile
+from track360.geometry.seam import minimalCircularInterval
+from track360.runtime.track_airsim360 import main as trackMain
 
 
 def buildParser() -> argparse.ArgumentParser:

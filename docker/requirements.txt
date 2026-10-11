@@ -1,6 +1,0 @@
-# torch and torchvision are supplied by the CUDA base image.
-numpy==2.2.6
-opencv-python-headless==4.11.0.86
-PyYAML==6.0.2
-timm==0.5.4
-easydict==1.13

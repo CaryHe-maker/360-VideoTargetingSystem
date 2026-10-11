@@ -1,0 +1,23 @@
+# Fragile sequences: tune sequences whose score swings between configurations that
+# differ in a few frames only.  Each has a moment where the target is nearly lost, and
+# without recovery that one frame decides the rest of the sequence.  A single one says
+# nothing about a change; they are judged as a group, by the mean difference and its
+# bootstrap interval (tools/benchmark.py compare --fragile-file).
+#
+# Chosen on 2026-10-08 from the same seven runs as the hard-regression list: a spread
+# (max - min) of S_dual above 0.05.
+# <id>  # frames, mean S_dual, spread over the seven runs
+150  # 230, 0.676, 0.056
+016  # 909, 0.138, 0.071
+131  # 314, 0.600, 0.079
+076  # 251, 0.316, 0.134
+050  # 872, 0.277, 0.137
+109  # 766, 0.041, 0.152
+054  # 953, 0.162, 0.197
+118  # 790, 0.124, 0.226
+107  # 367, 0.400, 0.234
+081  # 432, 0.232, 0.254
+029  # 328, 0.615, 0.260
+006  # 931, 0.308, 0.265
+009  # 421, 0.214, 0.290
+026  # 451, 0.597, 0.691

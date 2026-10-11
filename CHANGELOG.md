@@ -1,0 +1,328 @@
+# 更新日志
+
+格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。到 V2.0 发布前的工作计划见 [docs/V2Plan.md](docs/V2Plan.md)。
+
+## [未发布]
+
+### 360VOT 测试集上的结果（E042）
+
+- 四个配置各跑一次：基线 1 FP32 的 S<sub>dual</sub> 0.512（36.6 FPS），TF32 0.499（39.6 FPS）；基线 2 FP32 0.532（28.3 FPS，每帧 1.11 次前向），TF32 0.510（30.9 FPS）。基线 2 对基线 1 是 +0.019 [−0.002, +0.040]。
+- 论文最佳的 360 框架是 0.534；V2.0 原定的 0.56 没有达到。
+- 补跑了当前代码下的 `b0` 对照（同一个后端直接在 ERP 上跟踪）：0.368，丢失率 0.532，20.3 FPS。框架带来 +0.144 [+0.098, +0.190]（基线 1）和 +0.163 [+0.118, +0.209]（基线 2）。
+- 对照 360VOTS 论文核对了主要的参考数字，补上 LoRAT（直接在 ERP 上 0.461，微调后 0.495）；此前文档里“直接在 ERP 上最好的是 OSTrack”的说法已更正。
+- 新增 `configs/loss_handling_tf32.yaml`。README、`docs/baselines.md` 和评测日志按测试集的结果更新。
+
+### 发布前的清理和对外接口
+
+#### 移除
+
+- 配置 `schemaVersion` 升到 2。删除整个 `scoring` 配置段，以及 `geometry.resampler`、`tracking.candidateMinScore`、`backendTuning` 里的 `acceptAnyCandidate`、`holdWeakBox`、`predictiveSearch`、`useMotionScore`、`verifierModel`、`stateRule`、`stateLatch`、`latchReleaseMargin`、`scanMode`、`scanViewsPerFrame`、`zoomInPlace`、`zoomCentre`、`zoomMidScale`、`zoomMidAfterFrames`、`reacquireSimilarity`、`reacquireMargin`、`samePlaceAction`、`zoomSpread`、`crossScore`、`crossCheck`。每一项固定成什么行为见 [docs/configuration.md](docs/configuration.md#已删除的字段)。
+- 对应的代码：分数校准（`controller/score_calibration.py`）、分块扫描、融合分的加锁、多视图一致性、原地重检的确认分支、外推的搜索中心、带门槛的测量接受。
+- 工具 `fusion_dataset.py`、`fusion_analysis.py`、`fusion_freerun.py`、`state_replay.py`、`loss_centres.py`、`frame_level_search.py`、`topk_search.py`。
+
+两条基线的结果不变：dev train 的 33 条序列，清理前后结果文件逐字节相同（评测日志 E041）。
+
+#### 新增
+
+- `track360 download`：下载 ARTrackV2-B-256 权重并核对 SHA-256，支持续传、换来源、只校验（`track360/hub.py`）。2026-10-11 对真实地址完整下载并校验通过。
+- `track360.api.Track360Tracker`：Python 入口。`fromPretrained(preset, precision=...)` 选预设，`track(source, initBox=... | initBfov=...)` 返回逐帧结果。
+- `track360 track` 的 `--preset default|loss_handling`、`--precision fp32|tf32`、`--demo`、`--gif`、`--max-frames`、`--weights`；`--config` 变为可选。
+- 演示视频：左边全景画面和结果，右边跟踪器看到的局部视图（`visualization/demo.py`）。
+- `track360 benchmark`：转到 `tools/benchmark.py`。
+- `CITATION.cff`。
+
+#### 变更
+
+- README、快速上手、配置说明、Controller 模块文档按现在的实现重写或更正；`NOTICE` 注明对上游两个文件的改动。
+
+### 速度优化
+
+- 默认配置在 dev train 上从 22–26 FPS 到 39.6 FPS，结果与 E015 逐字节相同（评测日志 E039、E040）：解码直接出 RGB；`LocalBoxProjection` 去掉没有使用者的 `sphericalBoundary`；透视取视图的坐标按行列分开算；上游骨干每次前向重建的掩码和命令 token 改为缓存。
+- `model.precision` 增加 `tf32`（`configs/fast_tf32.yaml`）：43.2 FPS，结果在末位上有差别，精度与 FP32 分不出高低。
+- 试过没有采用：半精度、`torch.compile`、TorchScript 追踪、融合注意力、独立进程解码、多线程解码。
+- 分数对数值扰动的敏感度：dev train 上一次运行的 S<sub>dual</sub> 有约 0.009 的标准差来自数值上的偶然（E039），记入 [docs/baselines.md](docs/baselines.md)。
+
+### 速度优化的基准
+
+- 新工具 `tools/stage_timing.py`：完整流程的分步计时、重复、帧在内存、单步四组测量。基线 1 的基准见评测日志 E038：主线程一帧 38–45 ms（22–26 FPS），后端约 60%、取视图约 14.5%、回投约 12%、控制器约 8.5%；网络前向单独 18.3 ms；单次运行的 FPS 有约 15% 的波动。
+
+### 丢失找回冻结，两条基线
+
+- 丢失找回冻结（2026-10-10）。基线 1 是默认配置（关闭）；基线 2 是新增的 `configs/loss_handling.yaml`（E030 A 组的配置）。说明见 [docs/baselines.md](docs/baselines.md)。
+- 新增可选的试验选项 `backendTuning.samePlaceAction`、`zoomSpread`、`crossScore`、`crossCheck` 和 `zoomCentre: extrapolated`（E033）；默认值不改变原有行为。基线 2 用 `samePlaceAction: jump`。
+- 新增工具：`tools/candidate_support.py`（搜索候选按分数和视图一致性的准确率）、`tools/frame_level_search.py`（帧级和序列级前向在同一批搜索上的三关对比，E034；需要先把帧级模型代码恢复到 vendor 目录）、`tools/oracle_restart.py`（丢失后用真值重置跟踪器的上限测试）。
+- DINOv2 优先从本地 `models/hub` 加载，启动不再需要联网。
+- 冻结期间的三组离线测试，不改跟踪逻辑：真值重置的上限（E035，`tools/oracle_restart.py` 改为按重新出现、突然位移、其他丢失三类在第 N 帧重置）、DINOv2 分块相似度选候选点再逐点前向（E036，新工具 `tools/topk_search.py`）、消失或位移后目标离上一位置的距离和 2 × 2 区域的候选点（E037）。
+
+### 清理旧版本的代码路径
+
+#### 移除
+
+- 帧级模型的会话（`PyTorchARTrackV2Session`）和上游的帧级模型代码；`backendTuning.sequenceModel`。现在只有序列级模型。
+- 模板更新：模板命令、模板策略、模板缓存；`backendTuning.onlineTemplate`、`templateMinConfidence`、`tracking.stableFramesBeforeUpdate`。后端的 `infer` 不再接收模板命令。
+- 显卡取视图（`GpuGeometryImpl`、`geometry.resampler: cuda`）和后端里接收显卡张量的路径；`LocalView.deviceRgb`。
+- 旧的搜索视图取法和整视图搜索；`backendTuning.alignedSearch`、`fullViewSearch`。
+- 分开规则、试用期、干扰物记忆（E022 的结论是没有收益）；对应的 8 个配置项。`stateRule` 只有 `fused` 和 `relative`，`lossActions` 只有 `none` 和 `jump`。
+- 没有调用方的函数：`startTimingNs`、`requireDestination`、`lastTransition`。
+
+默认配置的结果不变：068、006 两条序列的框和分数与 E015 逐字节相同，基线 `b0` 在 068 上与 E011 的结果相同。
+
+#### 新增
+
+- `backendTuning.stateRule: relative`：相对量的丢失判定（E027）。
+- `backendTuning.scanMode: zoom`：先放大定位、再正常视图细看的搜索（E029、E030）；`scanBudgetPerFrame` / `scanBudgetBurst` 限制搜索的前向次数（E023）。
+
+### 状态机的分开规则、锁、试用期和逐帧记录（实验用，默认不启用）
+
+#### 新增
+
+- `backendTuning.stateRule: split`：后端分和运动分触发可疑，模板相似度确认丢失、解除可疑、判定试用。
+- `backendTuning.stateLatch`：融合规则下进入不可信后锁住，分数明显回升并保持几帧才解除。
+- `backendTuning.lossActions`：`none`（只判定）、`jump`（原来的行为）、`probation`（跳转后试用，失败退回并记住干扰物）。新增状态 `PROBATION`，对外的状态是 `UNCERTAIN`。
+- 开启丢失处理的运行在 `trace/<方法>/<序列>.csv` 写逐帧记录：三个分数和运动残差、转移前后的状态和原因、动作、外观记忆是否冻结、每个扫描候选的位置、分数和被拒原因。
+- `tools/state_replay.py`（在已有的逐帧表上离线回放状态机、搜索门槛）、`tools/state_trace.py`（把逐帧记录接上真值）、`tools/baseline_analysis.py`（按序列基线和固定阈值的离线比较，E021）。
+
+#### 修复
+
+- 写进运动模型和结果文件的置信度改回校准后的分数。E018 的改动把它换成了后端的原始分数，两者在个别帧上差在第 6 位小数，导致丢失处理关闭时的结果不再和 E015 逐字节相同（S_dual 差 −0.001）。金标准轨迹重新录制。
+
+### 外观验证器只参照第 0 帧模板
+
+#### 变更
+
+- 外观相似度只对第 0 帧的模板计算。`uncertainScore` 相应从 0.60 改为 0.42，保持约 0.8% 的好帧误判率（评测记录 E019、E020）。
+- 丢失处理关闭时，状态分数只由后端分和运动分组成，用的是同一个 `uncertainScore`，所以结果里的状态标签会变；框和置信度不变。金标准轨迹重新录制。
+
+#### 移除
+
+- 外观验证器里“可信帧的滑动平均”参照，以及配置项 `verifierMemoryRate`、`verifierTrustSimilarity`、`verifierTrustScore`。它在跟错之后会被错的物体带偏。
+
+### 状态机改用融合的状态分数
+
+#### 变更
+
+- 状态分数是后端分、外观分、运动分的加权平均（默认 0.40 / 0.55 / 0.05）；低于 `uncertainScore`（0.60）是 `UNCERTAIN`，连续 `lostAfterFrames` 帧是 `LOST`。权重和阈值来自评测记录 E018 的数据。
+- 丢失处理直接使用这个状态；`suspectSimilarity` / `suspectScore` 两个配置项删除，新增 `stateBackendWeight`、`stateAppearanceWeight`、`stateMotionWeight`、`motionOffsetScale`、`motionSizeScale`、`uncertainScore`、`verifierTrustScore`。
+- 没有框的帧和低分的帧现在会进入 `UNCERTAIN` / `LOST`（此前永远不会到 `LOST`）。结果里的状态标签因此改变；丢失处理关闭时框和置信度不变。金标准轨迹重新录制。
+
+#### 移除
+
+- 基于历史分数自适应阈值的状态判定（`ScoreGroup`）。
+
+#### 新增
+
+- `tools/fusion_dataset.py`、`tools/fusion_freerun.py`、`tools/fusion_analysis.py`：采集和分析三个分数与 IoU 的关系，搜索融合权重。
+
+### 丢失判定、扫描和找回（默认关闭）
+
+#### 新增
+
+- `backendTuning.lossHandling`（默认关闭）：用外观相似度和跟踪器分数判断一帧是否可疑；可疑帧不更新跟踪器的外观记忆；连续可疑后从最后可信的位置由近到远扫描整个球面；候选明显更像目标时跳转过去。
+- 外观验证器 `backends/appearance.py`：DINOv2 ViT-S/14 的特征相似度，取“对第 0 帧模板”和“对可信帧滑动平均”中较大的。权重放在 `models/hub/`，不随仓库分发。
+- 后端门面的无状态推理 `inferDetached()` 和外观记忆的保存 / 恢复 / 重置。
+- 外观探针 `tools/benchmark.py run --probe` 和 `tools/probe_analysis.py`：逐帧记录并比较候选的丢失信号。
+- hold-out 的稳定 / 不稳定序列名单（只用于解读结果）。
+- 66 条训练序列上 S<sub>dual</sub> 0.504 → 0.511（95% 区间 [−0.004, +0.017]），48 次跳转没有一次从跟得好的状态跳走；收益尚未确认，所以默认关闭。见评测记录 E016、E017。
+
+### 回投与 360VOT 官方工具对齐
+
+#### 变更
+
+- 透视视图里拟合 BFoV 时，垂直方向改用纬度跨度（原来是切平面上的角度），与官方工具的定义一致。
+- ERP 框的包络在所有视图里都使用框内部的采样点（原来只有球面视图使用），包含极点的框不再偏窄。
+- 66 条训练序列上 S<sub>dual</sub> 0.489 → 0.504（95% 区间 [−0.007, +0.040]），丢失率 0.333 → 0.300。见评测记录 E015。金标准轨迹重新录制。
+
+### 取视图改用 OpenCV 重映射
+
+#### 变更
+
+- `geometry.resampler` 增加 `opencv` 并成为默认值：用单精度算采样坐标，`cv2.remap` 双线性取色。取一个 256×256 的视图从约 19 ms 降到约 2 ms，像素值与参考实现最多差 1 个灰度级。
+- tune 集上整条流水线的 P50 / P95 从 64 / 75 ms 降到 35 / 44 ms（15.6 → 27.6 FPS，单独运行）；66 条训练序列上 S<sub>dual</sub> 0.489 → 0.489（95% 区间 [−0.026, +0.030]）。见评测记录 E014。
+- 原来的双精度实现保留为 `resampler: cpu`。金标准轨迹重新录制。
+
+### 评测：运行记录和新的回归检查
+
+#### 新增
+
+- `tools/benchmark.py archive`：把一次运行写成记录放进 `docs/runs/`（逐条序列的分数和耗时、配置、commit、环境），并更新总表。到 E012 为止的 28 次运行已经补录。
+- `compare --fragile-file` 和 `configs/splits/360vos_tune_fragile.txt`：14 条不稳定的序列作为一组判断，看平均 S<sub>dual</sub> 的差值和 bootstrap 区间。
+
+#### 变更
+
+- 硬回归名单换成 7 条稳定的序列（156、099、160、139、149、082、068），门槛从 0.02 改为 0.03。原来的 5 条里有 3 条在无关的改动下就会摆动 0.1 以上，几乎每个实验都误报。
+
+### 实验：运动预测消融
+
+#### 新增
+
+- `backendTuning.predictiveSearch`（默认开启，行为不变）：关闭后搜索视图跟随上一帧提交的结果，不做位置和尺寸的外推。66 条序列上关闭后 S<sub>dual</sub> 0.489 → 0.465（95% 区间 [−0.061, +0.014]），没有采纳。见评测记录 E012。
+
+### 大目标改用球面采样
+
+#### 新增
+
+- `ViewSpec.projection`：视图的投影方式，透视或球面。球面视图的像素在“以视图中心为 (0, 0) 的经纬度”上均匀分布，最多覆盖整个球面，做法与 360VOT 的扩展 BFoV 相同。
+- `backendTuning.sphericalSearch`（默认开启）和 `sphericalSearchFovDeg`（默认 120°）：搜索区域达到这个角度时，搜索视图和模板视图改用球面采样。之前是 90° 的透视视图加补黑边。
+- `ViewPlanner.templateView()`；Geometry 的裁剪和回投按视图的投影方式处理，球面视图的 ERP 框额外使用框内部的采样点（处理包含极点的框）。
+- 66 条可用训练序列上 S<sub>dual</sub> 0.469 → 0.489（95% 区间 [−0.001, +0.049]），P<sub>angle</sub> +0.023 [+0.003, +0.051]，丢失率 0.368 → 0.323；目标接近 180° 的 010 号序列 0.022 → 0.768。见评测记录 E011。
+
+#### 修复
+
+- 序列级模型的结果依赖序列的运行顺序：坐标嵌入表的 `max_norm` 在首次查表时才生效，同一张表又是输出层。加载权重后一次缩放到位。E010 及更早的序列级数字带有这种噪声。
+- 运动模型外推出的目标尺寸超出 BFoV 能表示的范围时，整帧报错。
+
+#### 变更
+
+- 默认配置的金标准轨迹重新录制；之前的行为保留为 `perspective_only` 变体，摘要与此前的 `default` 相同。
+
+### 评测：效率数字进入报告
+
+#### 新增
+
+- 每条序列的运行报告增加前向次数（`forwards`）。
+- `tools/benchmark.py` 的 `eval` 和 `compare` 打印效率表：每帧前向次数、P50 / P95 延迟、FPS；`--json` 输出里增加 `efficiency` 字段。延迟只作参考（机器负载不受控），前向次数不受机器影响。
+
+#### 修复
+
+- 续跑时被跳过的序列不再用空报告覆盖它原来的运行报告。
+
+### 清理没有调用方的代码
+
+#### 移除
+
+- `scoreMotionConsistency()`、`calibrateMotionScore()`：基于协方差的运动一致性打分，没有调用方。
+- `TrackStateMachine.update()`、`StateUpdate` 以及 `uncertainFrames` / `recoveryFrames` 计数：为旧调用方保留的适配层。状态机只剩 `transition()` 和 `recordScore()`。
+- `TrackMode.TERMINATED` 和没有任何地方产生的 `TransitionReason`（`PATIENCE_EXHAUSTED`、`RECOVERY_PROGRESS`、`REACQUIRED`、`RECOVERY_EXHAUSTED`、`END_OF_STREAM`、`EXTERNAL_RESET`）。
+- `evaluation/spherical_metrics.py`（`SphericalMetrics`、`bfovSphericalIoU()`）：评测使用官方工具包的球面指标。
+- 序列级会话的 `inferBatchWithFovs()`。
+
+输出不变：金标准轨迹的摘要没有变化。
+
+### 按序列级模型运行 ARTrackV2
+
+#### 变更
+
+- 官方的 ARTrackV2-B-256 权重是序列级训练的结果。此前用帧级的模型代码加载，303 组参数里有 106 组被丢掉，推理时不输入轨迹。现在默认按序列级模型运行（`backendTuning.sequenceModel: true`）：权重严格加载，每帧输入前 7 帧的目标框，使用模型自己每帧更新的外观特征。`b0` 基线同样切换。
+- 66 条可用训练序列上 S<sub>dual</sub> 0.483 → 0.485（95% 区间 [−0.046, +0.047]），总分不变，逐条序列有升有降；硬回归序列 131 不通过，作为已知问题保留。分数从与 IoU 无关变成随跟踪质量变化（丢失帧对好帧的 AUROC 0.42–0.46 → 0.72）。见评测记录 E010。
+- 序列级用法下框架不做模板更新，`onlineTemplate` 只在 `sequenceModel: false` 时起作用。
+- 默认配置的金标准轨迹重新录制；帧级用法保留为 `frame_model` 变体，摘要与此前的 `default` 相同。
+
+#### 新增
+
+- `backends/artrack_seq_session.py`：`PyTorchARTrackV2SeqSession` 和 `createArtrackSession()`。
+- `ViewSpec.trajectory`：目标在前 7 帧的框，换算成这一帧视图里的像素坐标，由 `ViewPlanner` 从控制器保存的历史 BFoV 生成（`localBoxOfBfov()`）。
+- `third_party/artrackv2/` 增加上游的序列级模型代码、外观解码器和配置（同一上游版本，见 `NOTICE`）。
+
+### 对齐搜索区域成为默认
+
+#### 变更
+
+- `backendTuning.alignedSearch` 的默认值改为 `true`。66 条可用训练序列上 S<sub>dual</sub> 0.278 → 0.473（95% 区间 [+0.134, +0.255]），其中没有参与设计的 41 条 hold-out 序列上 0.283 → 0.504（评测记录 E005、E007）。硬回归序列 081 仍不通过，作为已知问题保留。
+- 默认配置的金标准轨迹重新录制；旧取法保留为 `legacy_search` 变体，摘要与改默认值之前的 `default` 相同。
+
+#### 新增
+
+- 每条序列的逐帧置信度写入 `score/<方法>/<序列>.txt`。
+- `tools/score_analysis.py` 和 `evaluation/score_analysis.py`：逐帧置信度与 IoU 的关系。
+- hold-out 集 `configs/splits/360vos_holdout.txt`。
+
+### 实验：对齐搜索区域
+
+#### 新增
+
+- `backendTuning.alignedSearch`（默认关闭）和 `alignedMinFovDeg`：搜索视图和模板视图改成正方形、边长为目标平均尺寸的 4 倍（模板为 `templateFovScale` 倍），视场下限 2°；视图带上预测的目标框（`ViewSpec.priorBox`），后端以它为中心裁搜索区域，视场被上限截住时超出部分补黑边。
+- tune 集上 S<sub>dual</sub> 0.271 → 0.421（95% 区间 [+0.056, +0.248]），但硬回归序列 081 不通过，默认值没有改（评测记录 E005）。
+
+### 评测：丢失率、置信区间、硬回归序列
+
+#### 新增
+
+- 丢失率 `evaluation/loss_rate.py`：IoU < 0.1 连续至少 5 帧算丢失，丢失率 = 丢失帧数之和 ÷ 总帧数之和。`tools/benchmark.py eval` 的 BBox 表多一列 `loss_rate`，`scores.json` 里每条序列多了 `frames`、`lostFrames`、`firstLostFrame`。
+- 按序列 bootstrap 的置信区间 `evaluation/bootstrap.py`，以及 `tools/benchmark.py compare`：比较两次运行，给出 S<sub>dual</sub>、P<sub>angle</sub>、丢失率的差和 95% 区间。
+- 硬回归序列 `configs/splits/360vos_tune_hard.txt`（081、107、131、156、160）和 `compare --hard-file`：任何一条的 S<sub>dual</sub> 下降超过 0.02 时命令以退出码 1 结束。
+
+### 改为单视图跟踪
+
+tune 集上多视图方案的 S<sub>dual</sub> 只有 0.065，单视图是 0.271，延迟还是单视图的 3.5 倍（评测记录 E001）。因此删除多视图，改为和 360VOT 论文的 360 跟踪框架相同的做法：每帧一个透视视图、一次前向、一次提交。
+
+#### 移除
+
+- 四角视图（`ViewSpecType1`）、旋转 cubemap 和 `RecoveryPlanner`；同一帧的第二轮搜索（`MoreViewsRequired` / `FrameCommitted`、帧事务、临时运动预测）；跨视图融合（`Fusor`、`FusionBoxMode`、`FrameAggregate`）。
+- 配置段 `evaluator` 和 `recovery`；`tracking` 与 `backendTuning` 中只服务于多视图、两轮搜索和融合的字段；测试配置 `configs/tests/legacy_off.yaml`。完整列表见 [docs/configuration.md](docs/configuration.md#已删除的字段)。
+- `TrackerBackend.inferTasks()` 和 `TaskKey` / `RoutedInferenceTask` / `RoutedLocalObservation`：为跨轮次混合 batch 准备的接口，运行时从未使用。
+- benchmark 方法 `b2`：它现在就是 `ours`。
+
+#### 变更
+
+- `TrackController` 协议改为 `beginFrame(frame) -> SearchPlan` 和 `consume(plan, observation) -> TrackResult`；`SearchPlan.views` 改为单个 `view`。
+- `backendTuning.singleViewHorizontalFovCapDeg` / `singleViewVerticalFovCapDeg` 改名为 `viewHorizontalFovCapDeg` / `viewVerticalFovCapDeg`。
+- 分数校准产物的格式升为 `track360.score-calibration.v2`，去掉了 `thresholds.fusionSourceMinConfidence`。
+- `geometry.maxFovDeg` 不再强制为 120。
+- 结果图的标签去掉了 `rounds=<轮数>`。
+
+#### 回归
+
+- 行为与删除前的单视图路径（`backendTuning.singleView: true`，即基线 `b2`）相同：合成序列的金标准摘要与删除前录制的 `single_view_caps` 逐字节一致。tune 集上的对比见评测记录 E003。
+- 默认配置的金标准轨迹重新录制（默认路径从 4 个视图变成 1 个视图，这是预期的行为变化）。
+
+### Phase 2：360VOT 评测打通与基线（进行中）
+
+#### 新增
+
+- 360VOT 数据加载器 `datasets/vot360.py`：序列发现、帧读取、四种真值标注（BBox / rBBox / BFoV / rBFoV）。可以直接读发布时的 zip，不需要解压；`groundTruth()` 返回与官方 toolkit 相同的数组布局，`annotation()` 返回本项目的类型。注册为数据格式 `360vot`。
+- 图像序列支持 JPG。
+- BFoV 初始化：`track360 track --init-bfov clon,clat,fov_h,fov_v`，控制器和 `runTracking()` 接受 `initialBfov`。
+- 360VOT 官方格式的结果写入器 `io/vot360_results.py`：每条序列同时输出 BBox 和 BFoV 两种结果文件。
+- 360VOT 评测 `evaluation/vot360_metrics.py`：直接调用官方 toolkit 的指标代码（放在 `third_party/vot360_toolkit/`）。与官方脚本交叉验证：24 条序列、两组结果、两种表示，官方打印的 12 个数字与本项目全部相同。
+- 批量运行工具 `tools/benchmark.py`：`run` 按方法批量跟踪（断点续跑、分片、失败隔离、记录 FPS 和延迟），`eval` 统一打分。
+- 基线方法 `b0`（ARTrackV2 直接在 ERP 上跟踪）和 `b2`（单个透视视图）。
+- 序列信息表解析 `datasets/vots_info.py` 和按挑战属性分层打分（`tools/benchmark.py eval --info`）。
+- 360VOS 训练序列的读取，以及从分割掩码拟合 360VOT 格式标注的 `datasets/mask_labels.py`。
+- tune 集：`configs/splits/360vos_tune.txt`（25 条，14,923 帧）和排除列表 `configs/splits/360vos_train_excluded.csv`，由 `tools/prepare_tune_set.py` 生成。
+
+#### 确认的事实
+
+- **360VOS 的 170 条训练序列里有 97 条就是 360VOT 的测试序列**，另有 5 条与测试序列剪自同一个源视频。这 102 条都不能用于调参。
+- 官方 toolkit 只对 BBox 结果计算 S<sub>dual</sub>；BFoV 结果给出的是 S<sub>sphere</sub>。V2Plan 的精度目标相应改为按 BBox 结果计算。
+- 官方 S<sub>dual</sub> 只把真值向左平移一个图像宽度。结果写入器把跨缝框写成负的 `x1`，这是唯一能同时匹配两种跨缝标注写法的位置。
+- 官方 S<sub>sphere</sub> 把纬度当作极角传入球面 IoU，几何有疑问，暂不用它下结论。详见 [docs/benchmark.md](docs/benchmark.md#官方指标实现的几个特点)。
+
+#### 变更
+
+- RGB 帧改用 OpenCV 解码。原来自己实现的 PNG 解码器解一帧 3840×1920 的图要约 10 秒，现在约 0.15 秒，解码结果逐像素相同。原解码器只保留给 AirSim360 分割掩码这类标签图使用。
+
+### Phase 1：配置收敛与工程底座
+
+#### 变更
+
+- **所有调参开关迁入 YAML**。原来由 `buildRuntime()` 用 `os.environ.setdefault` 写入、各模块再读取的 `TRACK360_ARTRACK_*` 环境变量，全部改为 `configs/default.yaml` 的 `backendTuning` 配置段；`src/` 中不再读取任何环境变量。默认值与迁移前实际生效的值相同，迁移前后逐帧结果一致（验证方式见下文“回归”）。
+- `TRACK360_GPU_GEOMETRY` 改为配置项 `geometry.resampler`（`cpu` / `cuda`）。
+- `TRACK360_PROFILE` 改为 `buildRuntime(profile=...)` 参数。
+- `runTracking()` 新增必填参数 `useMotionScore`，由 `RuntimeBundle.useMotionScore` 提供。
+- 单元测试与运行时使用同一份 `configs/default.yaml`。依赖“带门槛的两轮搜索”行为的 12 个控制器测试改为显式加载 `configs/tests/legacy_off.yaml`。
+
+#### 移除
+
+- 配置段 `decisionGate`、`runtime`（队列容量），以及从未被生产路径使用的 `DecisionGate` 类。
+- `model.precision: fp16`：推理一直是 FP32，该选项不生效，现在只接受 `fp32`（FP16 在 Phase 5 实现）。
+
+#### 新增
+
+- 端到端回归测试 `tests/regression/`：合成 ERP 序列（目标跨越经线接缝、短暂消失、出现同色干扰物）加一个按颜色定位的假后端，走真实的 `buildRuntime` / `runTracking` 路径，不需要 GPU 和权重。金标准结果在迁移前录制。
+- 可复现性：固定随机种子并启用确定性 cuDNN；每次运行在结果文件旁写入 `<结果名>.run.json`，记录 git commit、工作区是否干净、配置哈希、最终生效的配置、GPU / 驱动和依赖版本。
+- GitHub Actions CI（`ruff check`、Python 3.11 / 3.12 上的 `pytest`）和 pre-commit 配置。
+- `NOTICE` 中记录了 vendored ARTrackV2 代码对应的上游 commit。
+
+#### 回归
+
+- 合成序列 + 假后端：10 组开关组合 × 2 段序列，迁移前（环境变量）与迁移后（配置）的完整轨迹逐字节一致。
+- 真实 ARTrackV2 权重（RTX 4060 Laptop，CUDA）：合成序列 40 帧和一段 3840×1920 真实全景序列的前 59 帧，迁移前后的结果文件逐字节一致；迁移前的代码连续运行两次结果也一致，说明 GPU 推理本身是确定的。
+
+#### 迁移中确认的事实
+
+- **默认配置下每帧只做一轮搜索（4 个视图）**。`acceptAnyCandidate: true` 时评估器不会请求第二轮；之前的文档和注释把默认路径描述为“两轮 8 视图”，与实际不符，已更正。两轮搜索只在 `acceptAnyCandidate: false` 时出现。
+- 没有分数校准产物时，运动分的权重为 0，`useMotionScore` 的取值不影响结果。
+
+## V1
+
+面向比赛的版本，结论见 [docs/experiments.md](docs/experiments.md)，代码在提交 `20c42e1` 及更早的历史中。

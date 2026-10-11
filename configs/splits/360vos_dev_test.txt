@@ -1,0 +1,37 @@
+# Development test half of the 66 training sequences (tune and hold-out pooled): judging only: three uses in total, each recorded in docs/dev-test-ledger.md.
+# Made on 2026-10-09: within the old tune and hold-out sets the sequences were sorted by
+# their share of lost frames in E015 and each neighbouring pair was split by a seeded coin
+# (seed 20261009).  Do not edit by hand.
+005
+008
+015
+016
+024
+025
+027
+028
+030
+047
+048
+050
+051
+064
+069
+070
+080
+081
+082
+095
+097
+100
+101
+107
+108
+110
+111
+119
+149
+150
+151
+156
+160

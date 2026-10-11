@@ -1,0 +1,16 @@
+# Hard-regression sequences: tune sequences the tracker follows well and whose score
+# barely moves between configurations.  A change that lowers S_dual on any of them by
+# more than 0.03 broke something that worked (tools/benchmark.py compare --hard-file).
+#
+# Chosen on 2026-10-08 from the seven sequence-model runs of evaluation records
+# E010-E012 (docs/runs/): mean S_dual of at least 0.5 and a spread (max - min) of at
+# most 0.025 over those runs.  Revise the list when the tracker changes how it behaves
+# on them, for example once it recovers lost targets.
+# <id>  # frames, mean S_dual, spread over the seven runs
+156  # 981, 0.852, 0.001
+099  # 560, 0.816, 0.002
+160  # 400, 0.890, 0.007
+139  # 429, 0.754, 0.009
+149  # 800, 0.703, 0.016
+082  # 421, 0.692, 0.021
+068  # 503, 0.550, 0.023

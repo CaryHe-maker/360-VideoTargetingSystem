@@ -1,0 +1,81 @@
+Track360
+Copyright 2026 CaryHe-maker
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes software developed by third parties:
+
+------------------------------------------------------------------------------
+ARTrack / ARTrackV2
+https://github.com/MIV-XJTU/ARTrack
+Licensed under the Apache License, Version 2.0.
+
+Location in this repository: src/track360/third_party/artrackv2/
+The upstream license is reproduced in src/track360/third_party/artrackv2/LICENSE.
+
+Only the subset of the upstream code needed for inference is included (model
+definition, ViT backbone, configuration, and supporting utilities).
+
+Upstream revision: b2ed853a1d1c3ece2bbe74bb7927b2a338217045 (2025-07-31).
+The commit was not recorded when the code was copied; it was identified on
+2026-10-03 by comparing file contents (ignoring line endings) with the upstream
+history. These files are identical to upstream at that commit, and at every
+commit back to bdd93e7b9a7693c48e605f4a8f847fe4f4156700 (2024-10-23):
+
+  artrackv2_256_full.yaml (upstream: experiments/artrackv2/artrackv2_256_full.yaml)
+  lib/config/artrackv2/config.py
+  lib/models/artrackv2/artrackv2.py
+  lib/models/artrackv2/base_backbone.py
+  lib/models/artrackv2/utils.py
+  lib/models/layers/patch_embed.py
+  lib/utils/box_ops.py
+
+lib/models/artrackv2/artrackv2.py differs from the next upstream commit
+(7a9ebc1866254758d110885c1d0200fa2d663ba5), so the copy predates it.
+
+Added on 2026-10-07 from the same upstream revision, for the sequence-level
+model.  Identical to upstream:
+
+  artrackv2_seq_256_full.yaml (upstream: experiments/artrackv2_seq/artrackv2_seq_256_full.yaml)
+  lib/config/artrackv2_seq/config.py
+  lib/models/artrackv2_seq/__init__.py
+  lib/models/artrackv2_seq/utils.py
+  lib/models/artrackv2_seq/vit.py
+
+Modified from upstream, to keep only what inference needs:
+
+  lib/models/artrackv2/vit.py
+  lib/models/artrackv2_seq/artrackv2_seq.py
+      the training branch of forward() and the checkpoint loading inside
+      build_artrackv2_seq() are removed; the decoder's output is no longer
+      turned into an image and back into patches (2026-10-10; same values)
+  lib/models/artrackv2_seq/base_backbone.py
+      the attention mask and the command tokens, which depend only on the
+      token counts, are built once and kept instead of on every forward pass
+      (2026-10-10; same values)
+  lib/models/layers/mask_decoder.py
+      reduced to the inference path; the transformer block of
+      lib/models/mask_decoder/ is inlined, and PrRoIPool, the training loss and
+      the einops dependency are dropped.  Parameter names are unchanged
+  lib/train/admin/local.py, settings.py, stats.py
+  all __init__.py files
+
+The ARTrackV2-B-256 model weights are distributed by the upstream authors and
+are not part of this repository.
+------------------------------------------------------------------------------
+360VOT toolkit
+https://github.com/HuajianUP/360VOT
+Licensed under the MIT License. Copyright (c) 2023 Huajian.
+
+Location in this repository: src/track360/third_party/vot360_toolkit/
+The upstream license is reproduced in src/track360/third_party/vot360_toolkit/LICENSE.
+
+Upstream revision: a729a743d3f5c43c4ab409189620ceb35dda18d1 (2026-01-16).
+ope_benchmark.py (upstream: eval/OPEBenchmark_360VOT.py) and sphiou.py (upstream:
+eval/sphiou.py) hold the benchmark's metric code.  Two changes, neither of which
+alters a computed value: sphiou is imported relatively, and one assignment in
+SphIoU.interArea takes .item() so that it runs on NumPy 2.
+
+The 360VOT dataset is distributed by its authors under CC BY-NC-SA 4.0 and is not
+part of this repository.
+------------------------------------------------------------------------------

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from instatarget.core.types import (
+from track360.core.types import (
     BBoxXYWH,
     BFoV,
     FrameIndex,
@@ -13,10 +13,10 @@ from instatarget.core.types import (
     TrackResult,
     TrackStatus,
 )
-from instatarget.io.image_reader import readRgbImage
-from instatarget.io.result_sink import FileResultSink
-from instatarget.io.video_source import VideoFrameSource
-from instatarget.visualization.png import writeRgbPng
+from track360.io.image_reader import readRgbImage
+from track360.io.result_sink import FileResultSink
+from track360.io.video_source import VideoFrameSource
+from track360.visualization.png import writeRgbPng
 
 
 class IoRuntimeTest(unittest.TestCase):
@@ -45,6 +45,27 @@ class IoRuntimeTest(unittest.TestCase):
                 readRgbImage(root / "frame_0000.png")[0, 0],
                 np.array([0, 0, 0], dtype=np.uint8),
             )
+
+    def testVideoFrameSourceReadsJpegSequence(self) -> None:
+        import cv2
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(2):
+                bgr = np.zeros((8, 16, 3), dtype=np.uint8)
+                bgr[..., 2] = 200  # red channel in BGR order
+                self.assertTrue(cv2.imwrite(str(root / f"{index:06d}.jpg"), bgr))
+
+            source = VideoFrameSource()
+            source.open(str(root))
+            first = source.read()
+            source.close()
+
+            self.assertEqual(source.frameCount, 0)
+            assert first is not None
+            self.assertEqual(first.rgb.shape, (8, 16, 3))
+            self.assertGreater(int(first.rgb[0, 0, 0]), 190)
+            self.assertLess(int(first.rgb[0, 0, 2]), 10)
 
     def testResultSinkWritesAtomicTextFile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

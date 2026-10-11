@@ -1,0 +1,59 @@
+schemaVersion: 2
+model:
+  backend: pytorch
+  variant: artrackv2_b_256
+  weights: ../models/artrackv2_b_256.pth.tar
+  precision: tf32
+geometry:
+  viewWidthPx: 256
+  viewHeightPx: 256
+  boundarySamplesPerEdge: 65
+  minFovDeg: 20.0
+  maxFovDeg: 120.0
+motion:
+  minSamplesForVelocity: 2
+  maxTangentSpanRad: 1.20
+  huberDeltaRad: 0.15
+  processNoiseRadPerSec: 0.04
+  maxAngularSpeedRadPerSec: 2.0
+  maxLogScaleRatePerSec: 1.0
+tracking:
+  windowLength: 5
+  contextScale: 2.0
+  contextMarginRatio: 0.15
+  maxPredictionHorizon: 3
+backendTuning:
+  viewHorizontalFovCapDeg: 90.0
+  viewVerticalFovCapDeg: 90.0
+  alignedMinFovDeg: 2.0
+  sphericalSearch: true
+  sphericalSearchFovDeg: 120.0
+  templateFovScale: 2.5
+  lossHandling: false
+  stateBackendWeight: 0.40
+  stateAppearanceWeight: 0.55
+  stateMotionWeight: 0.05
+  motionOffsetScale: 0.5
+  motionSizeScale: 0.1
+  uncertainScore: 0.42
+  lostAfterFrames: 4
+  scanBudgetPerFrame: 0.0
+  scanBudgetBurst: 40.0
+  reacquireScore: 0.70
+  lossActions: jump
+  releaseFrames: 3
+  relativeGate: 0.05
+  relativeEnterDeviation: -0.53
+  zoomFirstScale: 2.0
+  zoomLastScale: 4.0
+  zoomLastAfterFrames: 20
+reproducibility:
+  seed: 0
+  deterministic: true
+visualization:
+  enabled: false
+  outputRoot: ../outputs/visualization
+  stages:
+    - local_rgb
+    - backend_box
+    - geometry_box

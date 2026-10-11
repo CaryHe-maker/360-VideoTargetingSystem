@@ -1,0 +1,37 @@
+# Development train half of the 66 training sequences (tune and hold-out pooled): every analysis, fit and choice is made on these.
+# Made on 2026-10-09: within the old tune and hold-out sets the sequences were sorted by
+# their share of lost frames in E015 and each neighbouring pair was split by a seeded coin
+# (seed 20261009).  Do not edit by hand.
+001
+006
+007
+009
+010
+011
+018
+022
+026
+029
+031
+049
+054
+055
+059
+061
+062
+063
+068
+076
+078
+093
+098
+099
+102
+109
+112
+118
+131
+139
+140
+159
+163
