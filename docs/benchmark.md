@@ -66,8 +66,10 @@ python scripts/eval_360VOT.py -d <dataset_dir> -b <results>/bbox -f <results>/bf
 | SimTrack | 0.400 | 0.373 | 0.424 |
 | MixFormer | 0.395 | 0.378 | 0.424 |
 | **AiATrack-360**（论文的 360 框架） | **0.534** | **0.506** | **0.574** |
+| LoRAT | 0.461 | 0.468 | 0.503 |
+| LoRAT（在 360VOTS 上微调） | 0.495 | 0.504 | 0.526 |
 
-> 数值摘自 [360VOTS 论文](https://arxiv.org/abs/2404.13953)，正式引用前请对照原文表格核实。
+> 数值摘自 [360VOTS 论文](https://arxiv.org/abs/2404.13953)。2026-10-11 对照 arXiv 网页版核对了 OSTrack、AiATrack、AiATrack-360 三行并补上 LoRAT；SimTrack、MixFormer 两行还没有核对。
 
 ## 评测协议（本项目）
 
@@ -149,7 +151,7 @@ python tools/benchmark.py archive --dataset-root <train> --label-root <labels/tr
 
 ### 运行记录
 
-`archive` 写出的记录在 [`docs/runs/`](runs/README.md)，随仓库提交。它保存逐条序列的分数和耗时、生效的配置、commit 和环境，用来代替“翻本地的 `outputs/`”和“重跑一遍”。`--timing` 必须如实填写：只有 `solo` 的延迟可以相互比较。
+`archive` 写出的记录在 `docs/runs/`，只保存在本地；随仓库提交的是自动生成的总表 [`docs/runs/README.md`](runs/README.md)。它保存逐条序列的分数和耗时、生效的配置、commit 和环境，用来代替“翻本地的 `outputs/`”和“重跑一遍”。`--timing` 必须如实填写：只有 `solo` 的延迟可以相互比较。
 
 ### 分数与 IoU 的关系
 

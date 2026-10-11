@@ -115,7 +115,7 @@ scores.perSequence      # 每条序列的分数
 
 ## 运行记录
 
-结果文件在本地的 `outputs/` 下，不随仓库提交。每跑完一次评测，用 `tools/benchmark.py archive` 把它写成一条记录放进 [`docs/runs/`](../runs/README.md)：逐条序列的分数、丢失帧数、FPS、P50 / P95、前向次数，以及生效的配置、配置哈希、commit 和环境。目录里的 `README.md` 是自动生成的总表。**需要某次运行的数字时先查这里，不要重跑。**
+结果文件在本地的 `outputs/` 下，不随仓库提交。每跑完一次评测，用 `tools/benchmark.py archive` 把它写成一条记录放进 `docs/runs/`（JSON 记录同样只保存在本地，随仓库提交的是总表 [`docs/runs/README.md`](../runs/README.md)）：逐条序列的分数、丢失帧数、FPS、P50 / P95、前向次数，以及生效的配置、配置哈希、commit 和环境。目录里的 `README.md` 是自动生成的总表。**需要某次运行的数字时先查这里，不要重跑。**
 
 `--timing` 标明这次运行的计时能不能用：`solo`（机器上没有别的评测任务）、`parallel`、`unknown`。只有 `solo` 的延迟可以相互比较。
 

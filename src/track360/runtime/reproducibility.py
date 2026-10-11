@@ -16,15 +16,23 @@ from typing import Any
 
 import numpy as np
 
-from track360.controller.score_calibration import sha256File
 from track360.core.config import AppConfig, ReproducibilityConfig
 
 RUN_METADATA_SUFFIX = ".run.json"
 _PACKAGES = ("track360", "torch", "torchvision", "numpy", "opencv-python-headless", "timm")
 # Machine-specific locations: recorded in the run metadata, excluded from the hash.
 _PATH_FIELDS = frozenset(
-    {"sourcePath", "model.weights", "scoring.calibrationArtifact", "visualization.outputRoot"}
+    {"sourcePath", "model.weights", "visualization.outputRoot"}
 )
+
+
+def sha256File(path: str | Path) -> str:
+    """SHA-256 of a file, read in blocks."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def seedEverything(config: ReproducibilityConfig) -> None:

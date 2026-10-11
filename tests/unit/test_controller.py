@@ -7,12 +7,12 @@ import numpy as np
 
 from track360.controller import (
     SphericalMotionEstimator,
-    TemplatePolicy,
     TrackControllerImpl,
     TrackStateMachine,
     ViewPlanner,
 )
-from track360.controller.state_model import ScoreGroup, TrackMode, TransitionReason
+from track360.controller.state_evaluator import fuseStateScore, motionAgreement
+from track360.controller.state_model import TrackMode, TransitionReason
 from track360.controller.view_planner import localBoxOfBfov
 from track360.core.config import loadConfig
 from track360.core.errors import ConfigError, ProtocolError
@@ -24,7 +24,6 @@ from track360.core.types import (
     ProjectedObservation,
     ResultSource,
     SequenceId,
-    TemplateCommandKind,
     TrackStatus,
     ViewProjection,
     ViewSpec,
@@ -144,49 +143,79 @@ class StateMachineTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = loadConfig(ROOT / "configs" / "default.yaml")
 
-    def _step(self, state: TrackStateMachine, mode: TrackMode, score: float):
-        decision = state.transition(mode, score, measurementAccepted=score > 0.0)
-        state.recordScore(score)
-        return decision
-
-    def testUsesScoreGroupThresholds(self) -> None:
-        state = TrackStateMachine(self.config.tracking)
+    def _machine(self, **tuning: object) -> TrackStateMachine:
+        state = TrackStateMachine(
+            replace(self.config.backendTuning, uncertainScore=0.6, lostAfterFrames=3, **tuning)
+        )
         state.initialize()
-        first = self._step(state, TrackMode.TRACKING, 0.5)
-        second = self._step(state, first.nextMode, 0.5)
-        uncertain = self._step(state, second.nextMode, 0.4)
-        recovered = self._step(state, uncertain.nextMode, 0.9)
+        return state
 
-        self.assertEqual(first.nextMode, TrackMode.TRACKING)
-        self.assertEqual(second.nextMode, TrackMode.TRACKING)
-        self.assertEqual(uncertain.nextMode, TrackMode.UNCERTAIN)
-        self.assertTrue(recovered.acceptMeasurement)
+    def testAFrameBelowTheUncertainScoreIsNotTrustedAndOneGoodFrameRestoresTracking(self) -> None:
+        state = self._machine()
+        modes = []
+        mode = TrackMode.TRACKING
+        for score in (0.8, 0.59, 0.9, 0.6):
+            mode = state.transition(mode, score, measurementAccepted=True).nextMode
+            modes.append(mode)
+
+        self.assertEqual(
+            modes,
+            [TrackMode.TRACKING, TrackMode.UNCERTAIN, TrackMode.TRACKING, TrackMode.TRACKING],
+        )
+        self.assertEqual(state.untrustedFrames, 0)
+
+    def testEnoughUntrustedFramesInARowMeanTheTargetIsLost(self) -> None:
+        state = self._machine()
+        mode = TrackMode.TRACKING
+        decisions = []
+        for score in (0.5, 0.4, 0.0, 0.3):
+            decision = state.transition(mode, score, measurementAccepted=score > 0.0)
+            mode = decision.nextMode
+            decisions.append(decision)
+
+        self.assertEqual(
+            [decision.nextMode for decision in decisions],
+            [TrackMode.UNCERTAIN, TrackMode.UNCERTAIN, TrackMode.LOST, TrackMode.LOST],
+        )
+        self.assertEqual(decisions[1].reason, TransitionReason.WEAK_MEASUREMENT)
+        self.assertEqual(decisions[2].reason, TransitionReason.HARD_MISS)
+        self.assertFalse(decisions[2].acceptMeasurement)
+        self.assertEqual(state.untrustedFrames, 4)
+        state.reset()
+        self.assertEqual(state.untrustedFrames, 0)
+        recovered = state.transition(TrackMode.LOST, 0.7, measurementAccepted=True)
         self.assertEqual(recovered.nextMode, TrackMode.TRACKING)
 
-    def testKeepsHardMissInUncertain(self) -> None:
-        state = TrackStateMachine(self.config.tracking)
-        state.initialize()
-        for _ in range(3):
-            self._step(state, TrackMode.TRACKING, 0.8)
+    def testStateScoreIsAWeightedMeanAndLeavesOutAMissingAppearanceScore(self) -> None:
+        tuning = replace(
+            self.config.backendTuning,
+            stateBackendWeight=0.5,
+            stateAppearanceWeight=0.3,
+            stateMotionWeight=0.2,
+        )
+        self.assertAlmostEqual(fuseStateScore(0.8, 0.4, 1.0, tuning), 0.4 + 0.12 + 0.2)
+        # Without an appearance score the other two keep their proportion.
+        self.assertAlmostEqual(fuseStateScore(0.8, None, 1.0, tuning), (0.4 + 0.2) / 0.7)
+        with self.assertRaises(ConfigError):
+            replace(tuning, stateBackendWeight=0.0, stateMotionWeight=0.0)
 
-        hardMiss = self._step(state, TrackMode.TRACKING, 0.0)
+    def testMotionScoreFallsWithDistanceFromThePredictionAndWithSizeChange(self) -> None:
+        estimator = SphericalMotionEstimator(windowLength=3, minSamplesForVelocity=2)
+        estimator.resetFromMeasurement(
+            makeSphericalPoint(0.0, 0.0), 0, 0, 1.0, horizontalSizeRad=0.2, verticalSizeRad=0.2
+        )
+        prediction = estimator.predictDetailed(1_000_000_000)
 
-        self.assertFalse(hardMiss.acceptMeasurement)
-        self.assertEqual(hardMiss.nextMode, TrackMode.UNCERTAIN)
-        self.assertEqual(hardMiss.reason, TransitionReason.HARD_MISS)
+        def score(yaw: float, size: float) -> float:
+            box = BFoV(makeSphericalPoint(yaw, 0.0), size, size)
+            return motionAgreement(box, prediction, 1.0, 0.3)
 
-    def testScoreGroupUsesWarmupAndRollingOrderStatistics(self) -> None:
-        group = ScoreGroup()
-        self.assertIsNone(group.thresholds())
-        group.append(0.2)
-        self.assertIsNone(group.thresholds())
-        group.append(0.8)
-        self.assertAlmostEqual(group.thresholds()[0], 0.5)
-        self.assertAlmostEqual(group.thresholds()[1], 0.32)
-        for value in (0.1, 0.3, 0.4, 0.5, 0.6, 0.7, 0.9, 0.95):
-            group.append(value)
-        self.assertEqual(group.thresholds(), (0.6, 0.3))
-        self.assertEqual(len(group.values), 10)
+        self.assertAlmostEqual(score(0.0, 0.2), 1.0)
+        # One target size away with an offset scale of one target size: exp(-1/2).
+        self.assertAlmostEqual(score(0.2, 0.2), math.exp(-0.5), places=5)
+        self.assertGreater(score(0.1, 0.2), score(0.3, 0.2))
+        # Twice as large: the log size ratio is log 2.
+        self.assertAlmostEqual(score(0.0, 0.4), math.exp(-0.5 * (math.log(2.0) / 0.3) ** 2))
 
 
 class ViewPlannerTest(unittest.TestCase):
@@ -201,36 +230,8 @@ class ViewPlannerTest(unittest.TestCase):
             replace(self.config.backendTuning, **tuning),
         )
 
-    def testViewIsCenteredAndThreeTimesTheTargetOnEachAxis(self) -> None:
-        view = self._planner(alignedSearch=False).searchView(
-            self.center, math.radians(20.0), math.radians(15.0)
-        )
-
-        self.assertEqual(view.bfov.center, self.center)
-        self.assertAlmostEqual(view.bfov.horizontalFovRad, math.radians(60.0))
-        self.assertAlmostEqual(view.bfov.verticalFovRad, math.radians(45.0))
-        self.assertEqual(
-            (view.outputWidthPx, view.outputHeightPx),
-            (self.config.geometry.viewWidthPx, self.config.geometry.viewHeightPx),
-        )
-
-    def testViewFovIsClampedToGeometryLimitsAndCaps(self) -> None:
-        legacy = self._planner(alignedSearch=False)
-        small = legacy.searchView(self.center, math.radians(2.0), math.radians(3.0))
-        large = legacy.searchView(self.center, math.radians(50.0), math.radians(50.0))
-        uncapped = self._planner(
-            alignedSearch=False, viewHorizontalFovCapRad=None, viewVerticalFovCapRad=None
-        ).searchView(self.center, math.radians(50.0), math.radians(50.0))
-
-        self.assertAlmostEqual(small.bfov.horizontalFovRad, self.config.geometry.minFovRad)
-        self.assertAlmostEqual(small.bfov.verticalFovRad, self.config.geometry.minFovRad)
-        self.assertAlmostEqual(large.bfov.horizontalFovRad, math.radians(90.0))
-        self.assertAlmostEqual(large.bfov.verticalFovRad, math.radians(90.0))
-        self.assertAlmostEqual(uncapped.bfov.horizontalFovRad, self.config.geometry.maxFovRad)
-
-
     def testAlignedViewIsSquareAndFourTimesTheMeanTargetSize(self) -> None:
-        planner = self._planner(alignedSearch=True)
+        planner = self._planner()
         view = planner.searchView(self.center, math.radians(12.0), math.radians(3.0))
 
         # On the image plane the target spans tan(6 deg) x tan(1.5 deg) half-extents.
@@ -245,11 +246,9 @@ class ViewPlannerTest(unittest.TestCase):
         self.assertLessEqual(math.ceil(4.0 * math.sqrt(prior.widthPx * prior.heightPx)), 256)
         self.assertAlmostEqual(prior.xPx + prior.widthPx / 2.0, 128.0)
         self.assertGreater(prior.widthPx / prior.heightPx, 3.9)
-        legacy = self._planner(alignedSearch=False)
-        self.assertIsNone(legacy.searchView(self.center, 0.2, 0.1).priorBox)
 
     def testAlignedViewFollowsSmallTargetsBelowTheGeometryMinimum(self) -> None:
-        planner = self._planner(alignedSearch=True, sphericalSearch=False)
+        planner = self._planner(sphericalSearch=False)
         small = planner.searchView(self.center, math.radians(2.0), math.radians(2.0))
         tiny = planner.searchView(self.center, math.radians(0.2), math.radians(0.2))
         large = planner.searchView(self.center, math.radians(60.0), math.radians(60.0))
@@ -344,17 +343,10 @@ class ViewPlannerTest(unittest.TestCase):
 
     def testAlignedTemplateViewIsSquareSoTheTargetKeepsItsAspect(self) -> None:
         target = BFoV(self.center, math.radians(12.0), math.radians(3.0))
-        legacy = self._planner(alignedSearch=False).templateBfov(target)
-        aligned = self._planner(alignedSearch=True).templateBfov(target)
+        aligned = self._planner().templateBfov(target)
 
-        self.assertAlmostEqual(legacy.horizontalFovRad, math.radians(30.0))
-        self.assertAlmostEqual(legacy.verticalFovRad, self.config.geometry.minFovRad)
         self.assertEqual(aligned.horizontalFovRad, aligned.verticalFovRad)
         self.assertEqual(aligned.center, target.center)
-
-    def testAlignedSearchExcludesFullViewSearch(self) -> None:
-        with self.assertRaisesRegex(ConfigError, "cannot both be enabled"):
-            replace(self.config.backendTuning, alignedSearch=True, fullViewSearch=True)
 
 
 class LocalBoxOfBfovTest(unittest.TestCase):
@@ -429,10 +421,6 @@ class LocalBoxOfBfovTest(unittest.TestCase):
 class ControllerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = loadConfig(ROOT / "configs" / "default.yaml")
-        self.gatedConfig = replace(
-            self.config,
-            backendTuning=replace(self.config.backendTuning, acceptAnyCandidate=False),
-        )
         self.geometry = SphericalGeometryImpl(
             boundarySamplesPerEdge=self.config.geometry.boundarySamplesPerEdge
         )
@@ -452,8 +440,6 @@ class ControllerTest(unittest.TestCase):
 
         plan = controller.beginFrame(_frame(1))
         self.assertEqual(plan.stateRevision, 1)
-        self.assertEqual(plan.templateCommand.expectedRevision, 1)
-        self.assertEqual(plan.templateCommand.kind, TemplateCommandKind.KEEP)
         self.assertAlmostEqual(plan.view.bfov.center.yawRad, initial.bfov.center.yawRad)
         self.assertAlmostEqual(plan.view.bfov.center.pitchRad, initial.bfov.center.pitchRad)
         # The default view is square: four times the mean target size, 90 degrees at most.
@@ -474,11 +460,14 @@ class ControllerTest(unittest.TestCase):
         self.assertEqual(result.resultSource, ResultSource.OBSERVED_CONFIRMED)
         self.assertEqual(result.bbox, _observation(0.95).bbox)
         assert controller.lastStateObservation is not None
-        self.assertAlmostEqual(controller.lastStateObservation.stateScore, 0.95)
+        # The published confidence is the backend's score; the state score also counts
+        # how well the box agrees with the motion prediction.
+        self.assertAlmostEqual(result.confidence, 0.95)
+        self.assertAlmostEqual(controller.lastStateObservation.backendScore, 0.95)
+        self.assertLessEqual(controller.lastStateObservation.stateScore, 0.95)
 
         nextPlan = controller.beginFrame(_frame(2))
         self.assertEqual(nextPlan.stateRevision, 2)
-        self.assertEqual(nextPlan.templateCommand.expectedRevision, 2)
 
     def testRejectsStalePlansAndForeignObservations(self) -> None:
         controller = self._controller()
@@ -499,16 +488,24 @@ class ControllerTest(unittest.TestCase):
         result = controller.consume(controller.beginFrame(_frame(1)), None)
 
         self.assertFalse(result.valid)
-        self.assertEqual(result.status, TrackStatus.TRACKING)
+        # A frame without a box has a state score of zero: it is not trusted.
+        self.assertEqual(result.status, TrackStatus.UNCERTAIN)
         self.assertEqual(result.resultSource, ResultSource.MOTION_PREDICTED)
         self.assertGreater(result.bbox.widthPx, 0.0)
 
-    def testRepeatedMissesStayUncertainAndNeverBecomeLost(self) -> None:
+    def testRepeatedMissesAreUncertainFirstAndLostAfterEnoughOfThem(self) -> None:
         controller = self._controller()
-        for index in range(1, 6):
-            result = controller.consume(controller.beginFrame(_frame(index)), None)
-            self.assertNotEqual(result.status, TrackStatus.LOST)
-        self.assertEqual(result.status, TrackStatus.UNCERTAIN)
+        statuses = [
+            controller.consume(controller.beginFrame(_frame(index)), None).status
+            for index in range(1, 7)
+        ]
+        patience = self.config.backendTuning.lostAfterFrames
+
+        self.assertEqual(statuses[: patience - 1], [TrackStatus.UNCERTAIN] * (patience - 1))
+        self.assertEqual(statuses[patience - 1 :], [TrackStatus.LOST] * (7 - patience))
+        # One trusted box brings the track back.
+        back = controller.consume(controller.beginFrame(_frame(7)), _observation(0.95))
+        self.assertEqual(back.status, TrackStatus.TRACKING)
 
     def testDefaultConfigAcceptsALowScoredBox(self) -> None:
         controller = self._controller()
@@ -517,78 +514,27 @@ class ControllerTest(unittest.TestCase):
         self.assertTrue(result.valid)
         self.assertEqual(result.resultSource, ResultSource.OBSERVED_CONFIRMED)
 
-    def testGatedConfigRejectsABoxBelowCandidateMinScore(self) -> None:
-        controller = self._controller(self.gatedConfig)
-        weak = controller.consume(controller.beginFrame(_frame(1)), _observation(0.10, xPx=20.0))
-
-        self.assertFalse(weak.valid)
-        self.assertEqual(weak.resultSource, ResultSource.OBSERVED_WEAK_BLEND)
-        self.assertAlmostEqual(weak.bbox.xPx, 20.0)
-
-        strong = controller.consume(controller.beginFrame(_frame(2)), _observation(0.90))
-        self.assertTrue(strong.valid)
-
-    def testWeakFirstObservationBootstrapsVelocityBeforeThirdFrame(self) -> None:
-        estimator = SphericalMotionEstimator(windowLength=3, minSamplesForVelocity=2)
-        controller = self._controller(self.gatedConfig, motionEstimator=estimator)
-
-        weak = controller.consume(controller.beginFrame(_frame(1)), _observation(0.10))
-        self.assertFalse(weak.valid)
-        self.assertEqual(len(estimator.samples), 2)
-
-        controller.beginFrame(_frame(2))
-        prediction = estimator.predictDetailed(_frame(2).timestampNs)
-        self.assertEqual(prediction.sampleCount, 2)
-        self.assertNotIn("insufficient_motion_samples", prediction.degradedReasons)
-
-    def testRejectedMeasurementHoldsTheBoxOfALargeTarget(self) -> None:
+    def testAFrameWithoutABoxHoldsTheBoxOfALargeTarget(self) -> None:
         largeBox = BBoxXYWH(100.0, 40.0, 150.0, 100.0)  # more than 10% of the frame
-
-        def track(config):
-            controller = TrackControllerImpl(self.geometry, config)
-            controller.commitInitialization(controller.buildInitialization(_frame(0), largeBox))
-            return controller.consume(
-                controller.beginFrame(_frame(1)), _observation(0.10, xPx=20.0)
-            )
-
-        held = track(self.gatedConfig)
-        released = track(
-            replace(
-                self.gatedConfig,
-                backendTuning=replace(self.gatedConfig.backendTuning, holdWeakBox=False),
-            )
-        )
+        controller = TrackControllerImpl(self.geometry, self.config)
+        controller.commitInitialization(controller.buildInitialization(_frame(0), largeBox))
+        held = controller.consume(controller.beginFrame(_frame(1)), None)
 
         self.assertTrue(held.valid)
         self.assertEqual(held.bbox, largeBox)
-        self.assertFalse(released.valid)
-        self.assertAlmostEqual(released.bbox.xPx, 20.0)
+        # A small target is not held: its frame without a box is not a valid result.
+        small = self._controller()
+        self.assertFalse(small.consume(small.beginFrame(_frame(1)), None).valid)
 
     def testFallbackAdvancesProtocolAndAllowsNextFrame(self) -> None:
         controller = self._controller()
         controller.beginFrame(_frame(1))
-        fallback = controller.commitFallback(_frame(1), backendRevision=1, reason="GeometryError")
+        fallback = controller.commitFallback(_frame(1), reason="GeometryError")
 
         self.assertFalse(fallback.valid)
         self.assertEqual(fallback.frameIndex, FrameIndex(1))
         self.assertEqual(controller.lastPipelineProfile["reason"], "GeometryError")
         self.assertEqual(controller.beginFrame(_frame(2)).frameIndex, FrameIndex(2))
-
-    def testConfidentObservationSchedulesARecentTemplateUpdate(self) -> None:
-        controller = self._controller(
-            replace(
-                self.config,
-                backendTuning=replace(self.config.backendTuning, sequenceModel=False),
-            )
-        )
-        controller.consume(controller.beginFrame(_frame(1)), _observation(0.95))
-        controller.consume(controller.beginFrame(_frame(2)), _observation(0.95))
-
-        command = controller.beginFrame(_frame(3)).templateCommand
-        self.assertEqual(command.kind, TemplateCommandKind.UPDATE_RECENT)
-        self.assertEqual(command.viewId, 0)
-        self.assertEqual(command.localBox, _observation(0.95).localBox)
-        self.assertEqual(command.expectedRevision, 3)
 
     def testPlansCarryTheLastSevenTargetBoxesInViewPixels(self) -> None:
         controller = self._controller()
@@ -620,49 +566,6 @@ class ControllerTest(unittest.TestCase):
         self.assertNotAlmostEqual(
             newest.xPx + newest.widthPx / 2.0, oldest.xPx + oldest.widthPx / 2.0, places=1
         )
-
-
-class TemplatePolicyTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.config = loadConfig(ROOT / "configs" / "default.yaml")
-        self.geometry = SphericalGeometryImpl()
-
-    def _decide(self, score: float, stableFrames: int, **tuning: object):
-        # Template updates belong to the frame-level model; see the last test.
-        tuning = {"sequenceModel": False, **tuning}
-        config = replace(
-            self.config, backendTuning=replace(self.config.backendTuning, **tuning)
-        )
-        controller = TrackControllerImpl(self.geometry, config)
-        controller.commitInitialization(controller.buildInitialization(_frame(0), INITIAL_BOX))
-        controller.consume(controller.beginFrame(_frame(1)), _observation(score))
-        return TemplatePolicy(config.tracking, config.backendTuning).decide(
-            TrackStatus.TRACKING, stableFrames, controller.lastStateObservation
-        )
-
-    def testKeepsTheAnchorWhenOnlineTemplatesAreDisabled(self) -> None:
-        period = self.config.tracking.stableFramesBeforeUpdate
-        decision = self._decide(0.99, 2 * period, onlineTemplate=False)
-
-        self.assertEqual(decision.kind, TemplateCommandKind.KEEP)
-        self.assertIsNone(decision.viewId)
-        self.assertIsNone(decision.localBox)
-
-    def testWeakObservationsNeverRefreshATemplate(self) -> None:
-        belowThreshold = self.config.backendTuning.templateMinConfidence - 0.01
-        self.assertEqual(self._decide(belowThreshold, 2).kind, TemplateCommandKind.KEEP)
-
-    def testSequenceModelTakesNoTemplateUpdates(self) -> None:
-        self.assertTrue(self.config.backendTuning.sequenceModel)
-        self.assertEqual(
-            self._decide(0.99, 2, sequenceModel=True).kind, TemplateCommandKind.KEEP
-        )
-
-    def testRecentRefreshesEveryOtherFrameAndStableOncePerPeriod(self) -> None:
-        period = self.config.tracking.stableFramesBeforeUpdate
-        self.assertEqual(self._decide(0.9, 1).kind, TemplateCommandKind.KEEP)
-        self.assertEqual(self._decide(0.9, 2).kind, TemplateCommandKind.UPDATE_RECENT)
-        self.assertEqual(self._decide(0.9, period).kind, TemplateCommandKind.UPDATE_STABLE)
 
 
 if __name__ == "__main__":

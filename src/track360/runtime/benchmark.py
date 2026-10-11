@@ -8,6 +8,7 @@ Output layout under one root, ready for the official toolkit as well::
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
 from collections import deque
@@ -60,6 +61,10 @@ class SequenceReport:
     # Images sent through the network, over all frames of the sequence.
     forwards: int = 0
     invalidFrames: int = 0
+    # Loss handling: doubted frames, frames with scan views, frames of each jump.
+    suspectFrames: int = 0
+    scanFrames: int = 0
+    reacquiredAt: tuple[int, ...] = ()
     error: str | None = None
 
 
@@ -108,10 +113,6 @@ class _CountingSession:
         self._session = session
         self.forwards = 0
 
-    @property
-    def supportsOnlineTemplates(self) -> bool:
-        return bool(self._session.supportsOnlineTemplates)
-
     def encodeTemplate(self, rgb: Any, bbox: BBoxXYWH) -> Any:
         return self._session.encodeTemplate(rgb, bbox)
 
@@ -142,10 +143,6 @@ class _SharedSession:
 
     # The protocol members are spelled out because runtime protocol checks do not
     # look through ``__getattr__``; optional batch methods are forwarded by it.
-    @property
-    def supportsOnlineTemplates(self) -> bool:
-        return bool(self._session.supportsOnlineTemplates)
-
     def encodeTemplate(self, rgb: Any, bbox: BBoxXYWH) -> Any:
         return self._session.encodeTemplate(rgb, bbox)
 
@@ -171,6 +168,7 @@ def runBenchmark(
     resume: bool = True,
     shard: tuple[int, int] = (0, 1),
     sessionFactory: SessionFactory | None = None,
+    probe: Sequence[str] | None = None,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -205,10 +203,30 @@ def runBenchmark(
         if sessionFactory is not None
         else createArtrackSession(config)
     )
+    probeModels = None
+    probeSignals = tuple(probe or ())
+    if probeSignals:
+        from track360.evaluation.appearance_probe import MODEL_SIGNALS, AppearanceModels
+
+        probeModels = AppearanceModels(
+            Path(config.model.weights).parent / "hub",
+            [name for name in MODEL_SIGNALS if name in probeSignals] or MODEL_SIGNALS[:1],
+        )
     reports: list[SequenceReport] = []
     try:
         for position, name in enumerate(names, start=1):
-            report = _runOne(dataset, output, method, config, name, session, maxFrames, resume)
+            report = _runOne(
+                dataset,
+                output,
+                method,
+                config,
+                name,
+                session,
+                maxFrames,
+                resume,
+                probeModels,
+                "clean" in probeSignals,
+            )
             reports.append(report)
             # A skipped sequence keeps the report of the run that tracked it.
             if report.status != "skipped" or not (reportRoot / f"{name}.json").is_file():
@@ -348,6 +366,8 @@ def _runOne(
     session: _CountingSession,
     maxFrames: int | None,
     resume: bool,
+    probeModels: Any | None = None,
+    probeClean: bool = True,
 ) -> SequenceReport:
     source = Vot360DataSource(maxFrames=maxFrames, labelRoot=dataset.labelRoot)
     try:
@@ -358,14 +378,27 @@ def _runOne(
         collector = _TimedCollector()
         session.forwards = 0
         started = perf_counter()
+        probe = None
+        if probeModels is not None and method != "b0":
+            from track360.evaluation.appearance_probe import AppearanceProbe
+
+            probe = AppearanceProbe(probeModels, session if probeClean else None)
+        loss: dict[str, object] = {}
         if method == "b0":
             _trackErpDirect(source, session, config, collector)
         else:
-            _trackSpherical(source, session, config, collector)
+            trace: list[dict[str, object]] | None = (
+                [] if config.backendTuning.lossHandling else None
+            )
+            loss = _trackSpherical(source, session, config, collector, probe, trace)
+            if trace is not None:
+                writeStateTrace(outputRoot, method, name, trace)
         seconds = perf_counter() - started
         collector.finalize(frameCount)
         frameWidthPx = source.sequence.frameSize[0]
         writeSequenceResults(outputRoot, method, name, collector.results, frameWidthPx)
+        if probe is not None:
+            probe.write(outputRoot, method, name, frameCount)
         latencies = np.diff(collector.writeTimes) * 1000.0
         return SequenceReport(
             sequence=name,
@@ -376,6 +409,9 @@ def _runOne(
             p50LatencyMs=float(np.percentile(latencies, 50)) if latencies.size else 0.0,
             p95LatencyMs=float(np.percentile(latencies, 95)) if latencies.size else 0.0,
             forwards=session.forwards,
+            suspectFrames=int(loss.get("suspectFrames", 0)),
+            scanFrames=int(loss.get("scanFrames", 0)),
+            reacquiredAt=tuple(loss.get("reacquiredAt", ())),
             invalidFrames=sum(1 for result in collector.results if not result.valid),
         )
     except Exception as error:
@@ -387,12 +423,63 @@ def _runOne(
         source.close()
 
 
+TRACE_COLUMNS = (
+    "frame",
+    "modeBefore",
+    "modeAfter",
+    "reason",
+    "action",
+    "memory",
+    "hasBox",
+    "backend",
+    "appearance",
+    "motion",
+    "motionOffset",
+    "motionLogScale",
+    "stateScore",
+    "untrusted",
+    "calm",
+    "yawDeg",
+    "pitchDeg",
+    "sizeDeg",
+    "forwards",
+    "scanViews",
+    "scan",
+    "relative",
+    "candidates",
+)
+
+
+def writeStateTrace(
+    outputRoot: Path, method: str, name: str, trace: Sequence[dict[str, object]]
+) -> Path:
+    """One row per frame: the scores, the state before and after, what was done.
+
+    ``candidates`` is a JSON list with one entry per scan candidate of the frame.
+    """
+    path = outputRoot / "trace" / method / f"{name}.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=TRACE_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        for row in trace:
+            record = dict(row)
+            for key, value in record.items():
+                if isinstance(value, float):
+                    record[key] = round(value, 6)
+            record["candidates"] = json.dumps(record.get("candidates") or [])
+            writer.writerow(record)
+    return path
+
+
 def _trackSpherical(
     source: Vot360DataSource,
     session: ARTrackSession,
     config: AppConfig,
     collector: ResultCollector,
-) -> None:
+    probe: Any | None = None,
+    trace: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     shared = _SharedSession(session)
     runtime = buildRuntime(config, artrackSessionFactory=lambda _: shared)
     try:
@@ -403,9 +490,11 @@ def _trackSpherical(
             controller=runtime.controller,
             backend=runtime.backend,
             sink=collector,
-            scoreCalibration=runtime.scoreCalibration,
-            useMotionScore=runtime.useMotionScore,
+            probe=probe,
+            verifier=runtime.verifier,
+            trace=trace,
         )
+        return runtime.controller.lossStatistics
     finally:
         closeRuntime(runtime)
 

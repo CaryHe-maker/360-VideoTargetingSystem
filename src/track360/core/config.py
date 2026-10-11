@@ -9,13 +9,22 @@ from typing import cast
 
 from track360.core.errors import ConfigError
 
-SUPPORTED_SCHEMA_VERSION = 1
+SUPPORTED_SCHEMA_VERSION = 2
 VISUALIZATION_STAGES = frozenset({"local_rgb", "backend_box", "geometry_box"})
-GEOMETRY_RESAMPLERS = frozenset({"cpu", "opencv", "cuda"})
+
+
+MODEL_PRECISIONS = ("fp32", "tf32")
 
 
 @dataclass(frozen=True, slots=True)
 class ModelConfig:
+    """``precision``: fp32 (the reference) or tf32 (float32 with TensorFloat-32
+    matrix products on the GPU: faster, results differ in the last digits).
+
+    Half precision was tried and dropped: the forward pass is bound by the work
+    of launching its many small operations, so it ran no faster than tf32 in the
+    pipeline and moved the boxes more (evaluation log E039)."""
+
     backend: str
     variant: str
     weights: Path
@@ -28,20 +37,11 @@ class ModelConfig:
             raise ConfigError("model.variant must be artrackv2_b_256")
         if not self.variant.strip():
             raise ConfigError("model.variant must be non-empty")
-        if self.precision != "fp32":
+        if self.precision not in MODEL_PRECISIONS:
             raise ConfigError(
-                f"unsupported model.precision: {self.precision}; only fp32 is implemented"
+                f"unsupported model.precision: {self.precision}; "
+                f"expected one of {', '.join(MODEL_PRECISIONS)}"
             )
-
-
-@dataclass(frozen=True, slots=True)
-class ScoringConfig:
-    calibrationArtifact: Path | None
-    requireCheckpointHashMatch: bool = True
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.requireCheckpointHashMatch, bool):
-            raise ConfigError("scoring.requireCheckpointHashMatch must be boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,13 +51,10 @@ class GeometryConfig:
     boundarySamplesPerEdge: int
     minFovRad: float
     maxFovRad: float
-    resampler: str = "opencv"
 
     def __post_init__(self) -> None:
         if self.viewWidthPx <= 0 or self.viewHeightPx <= 0:
             raise ConfigError("geometry view dimensions must be positive")
-        if self.resampler not in GEOMETRY_RESAMPLERS:
-            raise ConfigError(f"unsupported geometry.resampler: {self.resampler}")
         if self.boundarySamplesPerEdge < 2:
             raise ConfigError("geometry.boundarySamplesPerEdge must be at least 2")
         if not 0.0 < self.minFovRad < self.maxFovRad < pi:
@@ -89,17 +86,12 @@ class MotionConfig:
 
 @dataclass(frozen=True, slots=True)
 class TrackingConfig:
-    candidateMinScore: float
-    stableFramesBeforeUpdate: int
     windowLength: int
     contextScale: float = 2.0
     contextMarginRatio: float = 0.15
     maxPredictionHorizon: int = 3
 
     def __post_init__(self) -> None:
-        _requireProbability("tracking.candidateMinScore", self.candidateMinScore)
-        if self.stableFramesBeforeUpdate <= 0:
-            raise ConfigError("tracking.stableFramesBeforeUpdate must be positive")
         if self.windowLength < 2:
             raise ConfigError("tracking.windowLength must be at least 2")
         if not isfinite(self.contextScale) or self.contextScale < 2.0:
@@ -119,51 +111,91 @@ class BackendTuningConfig:
     applies.
     """
 
-    sequenceModel: bool = True
-    acceptAnyCandidate: bool = True
     viewHorizontalFovCapRad: float | None = pi / 2.0
     viewVerticalFovCapRad: float | None = pi / 2.0
-    fullViewSearch: bool = False
-    alignedSearch: bool = True
     alignedMinFovRad: float = pi / 90.0
     sphericalSearch: bool = True
     sphericalSearchFovRad: float = 2.0 * pi / 3.0
-    predictiveSearch: bool = True
-    useMotionScore: bool = False
     templateFovScale: float = 2.5
-    onlineTemplate: bool = True
-    templateMinConfidence: float = 0.515
-    holdWeakBox: bool = True
+    # State score: a weighted mean of the backend score, the appearance similarity
+    # and the motion score; a frame below ``uncertainScore`` is not trusted.  It is
+    # what the reported status follows when loss handling is off.
+    stateBackendWeight: float = 0.40
+    stateAppearanceWeight: float = 0.55
+    stateMotionWeight: float = 0.05
+    motionOffsetScale: float = 0.5
+    motionSizeScale: float = 0.1
+    uncertainScore: float = 0.42
+    lostAfterFrames: int = 4
+    # Loss handling: doubt a frame, search for the target, jump back to it.  The
+    # judgement compares each score with the median of the frames trusted so far (a
+    # frame is trusted while it is no more than ``relativeGate`` below it); the mean
+    # of the two deviations below ``relativeEnterDeviation`` raises a doubt that
+    # holds until ``releaseFrames`` calm frames.
+    lossHandling: bool = False
+    # none: only judge the state; jump: search and jump.
+    lossActions: str = "jump"
+    releaseFrames: int = 3
+    relativeGate: float = 0.05
+    relativeEnterDeviation: float = -0.53
+    # Search views a sequence may spend: this many are earned per frame and at most
+    # ``scanBudgetBurst`` are saved up.  0 per frame: no limit.
+    scanBudgetPerFrame: float = 0.0
+    scanBudgetBurst: float = 40.0
+    # A candidate is taken from this score of a pass without the tracker's memory.
+    reacquireScore: float = 0.70
+    # The enlarged search view: this many times the normal one, and after how many
+    # lost frames the larger one is used.
+    zoomFirstScale: float = 2.0
+    zoomLastScale: float = 4.0
+    zoomLastAfterFrames: int = 20
 
     def __post_init__(self) -> None:
-        for name in (
-            "sequenceModel",
-            "acceptAnyCandidate",
-            "fullViewSearch",
-            "alignedSearch",
-            "sphericalSearch",
-            "predictiveSearch",
-            "useMotionScore",
-            "onlineTemplate",
-            "holdWeakBox",
-        ):
+        for name in ("lossHandling", "sphericalSearch"):
             if not isinstance(getattr(self, name), bool):
                 raise ConfigError(f"backendTuning.{name} must be boolean")
         for name in ("viewHorizontalFovCapRad", "viewVerticalFovCapRad"):
             value = getattr(self, name)
             if value is not None and not 0.0 < value < pi:
                 raise ConfigError(f"backendTuning.{name} must be in (0, pi)")
-        if self.alignedSearch and self.fullViewSearch:
+        if min(self.zoomFirstScale, self.zoomLastScale) < 1.0:
+            raise ConfigError("backendTuning zoom scales must be at least 1")
+        if self.zoomLastAfterFrames < 0:
+            raise ConfigError("backendTuning.zoomLastAfterFrames must be non-negative")
+        if not 0.0 <= self.relativeGate <= 1.0 or not -1.0 <= self.relativeEnterDeviation < 0:
             raise ConfigError(
-                "backendTuning.alignedSearch and fullViewSearch cannot both be enabled"
+                "backendTuning.relativeGate must be in [0, 1] and "
+                "relativeEnterDeviation in [-1, 0)"
             )
+        if self.lossActions not in ("none", "jump"):
+            raise ConfigError("backendTuning.lossActions must be none or jump")
+        if self.releaseFrames < 1:
+            raise ConfigError("backendTuning.releaseFrames must be positive")
+        for name in ("uncertainScore", "reacquireScore"):
+            if not -1.0 <= getattr(self, name) <= 1.0:
+                raise ConfigError(f"backendTuning.{name} must be in [-1, 1]")
+        weights = (
+            self.stateBackendWeight,
+            self.stateAppearanceWeight,
+            self.stateMotionWeight,
+        )
+        if min(weights) < 0.0 or self.stateBackendWeight + self.stateMotionWeight <= 0.0:
+            raise ConfigError(
+                "backendTuning state weights must be non-negative, and the backend and "
+                "motion weights must not both be zero"
+            )
+        if self.motionOffsetScale <= 0.0 or self.motionSizeScale <= 0.0:
+            raise ConfigError("backendTuning motion scales must be positive")
+        if self.scanBudgetPerFrame < 0.0 or self.scanBudgetBurst < 0.0:
+            raise ConfigError("backendTuning scan budget values must be non-negative")
+        if self.lostAfterFrames < 1:
+            raise ConfigError("backendTuning.lostAfterFrames must be positive")
         if not 0.0 < self.sphericalSearchFovRad < 2.0 * pi:
             raise ConfigError("backendTuning.sphericalSearchFovDeg must be in (0, 360)")
         if not 0.0 < self.alignedMinFovRad < pi:
             raise ConfigError("backendTuning.alignedMinFovDeg must be in (0, 180)")
         if not isfinite(self.templateFovScale) or self.templateFovScale < 1.0:
             raise ConfigError("backendTuning.templateFovScale must be at least 1")
-        _requireProbability("backendTuning.templateMinConfidence", self.templateMinConfidence)
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,7 +228,6 @@ class VisualizationConfig:
 class AppConfig:
     schemaVersion: int
     model: ModelConfig
-    scoring: ScoringConfig
     geometry: GeometryConfig
     motion: MotionConfig
     tracking: TrackingConfig
@@ -229,7 +260,6 @@ def loadConfig(path: str | Path) -> AppConfig:
         {
             "schemaVersion",
             "model",
-            "scoring",
             "geometry",
             "motion",
             "tracking",
@@ -247,22 +277,10 @@ def loadConfig(path: str | Path) -> AppConfig:
         )
 
     modelRaw = _section(root, "model", {"backend", "variant", "weights", "precision"})
-    scoringRaw = _section(
-        root,
-        "scoring",
-        {"calibrationArtifact", "requireCheckpointHashMatch"},
-    )
     geometryRaw = _section(
         root,
         "geometry",
-        {
-            "viewWidthPx",
-            "viewHeightPx",
-            "boundarySamplesPerEdge",
-            "minFovDeg",
-            "maxFovDeg",
-            "resampler",
-        },
+        {"viewWidthPx", "viewHeightPx", "boundarySamplesPerEdge", "minFovDeg", "maxFovDeg"},
     )
     motionRaw = _section(
         root,
@@ -279,34 +297,38 @@ def loadConfig(path: str | Path) -> AppConfig:
     trackingRaw = _section(
         root,
         "tracking",
-        {
-            "candidateMinScore",
-            "stableFramesBeforeUpdate",
-            "windowLength",
-            "contextScale",
-            "contextMarginRatio",
-            "maxPredictionHorizon",
-        },
+        {"windowLength", "contextScale", "contextMarginRatio", "maxPredictionHorizon"},
     )
+    tuningFloats = (
+        "templateFovScale",
+        "stateBackendWeight",
+        "stateAppearanceWeight",
+        "stateMotionWeight",
+        "motionOffsetScale",
+        "motionSizeScale",
+        "uncertainScore",
+        "relativeGate",
+        "relativeEnterDeviation",
+        "scanBudgetPerFrame",
+        "scanBudgetBurst",
+        "reacquireScore",
+        "zoomFirstScale",
+        "zoomLastScale",
+    )
+    tuningInts = ("lostAfterFrames", "releaseFrames", "zoomLastAfterFrames")
     tuningRaw = _section(
         root,
         "backendTuning",
         {
-            "sequenceModel",
-            "acceptAnyCandidate",
             "viewHorizontalFovCapDeg",
             "viewVerticalFovCapDeg",
-            "fullViewSearch",
-            "alignedSearch",
             "alignedMinFovDeg",
             "sphericalSearch",
             "sphericalSearchFovDeg",
-            "predictiveSearch",
-            "useMotionScore",
-            "templateFovScale",
-            "onlineTemplate",
-            "templateMinConfidence",
-            "holdWeakBox",
+            "lossHandling",
+            "lossActions",
+            *tuningFloats,
+            *tuningInts,
         },
     )
     reproducibilityRaw = _section(root, "reproducibility", {"seed", "deterministic"})
@@ -316,16 +338,6 @@ def loadConfig(path: str | Path) -> AppConfig:
     weightsPath = Path(weightsValue).expanduser()
     if not weightsPath.is_absolute():
         weightsPath = (configPath.parent / weightsPath).resolve()
-
-    calibrationValue = scoringRaw["calibrationArtifact"]
-    if calibrationValue is None:
-        calibrationPath = None
-    else:
-        calibrationPath = Path(
-            _requireStr("scoring.calibrationArtifact", calibrationValue)
-        ).expanduser()
-        if not calibrationPath.is_absolute():
-            calibrationPath = (configPath.parent / calibrationPath).resolve()
 
     outputRootValue = _requireStr("visualization.outputRoot", visualizationRaw["outputRoot"])
     outputRoot = Path(outputRootValue).expanduser()
@@ -340,13 +352,6 @@ def loadConfig(path: str | Path) -> AppConfig:
             weights=weightsPath,
             precision=_requireStr("model.precision", modelRaw["precision"]),
         ),
-        scoring=ScoringConfig(
-            calibrationArtifact=calibrationPath,
-            requireCheckpointHashMatch=_requireBool(
-                "scoring.requireCheckpointHashMatch",
-                scoringRaw["requireCheckpointHashMatch"],
-            ),
-        ),
         geometry=GeometryConfig(
             viewWidthPx=_requireInt("geometry.viewWidthPx", geometryRaw["viewWidthPx"]),
             viewHeightPx=_requireInt("geometry.viewHeightPx", geometryRaw["viewHeightPx"]),
@@ -359,7 +364,6 @@ def loadConfig(path: str | Path) -> AppConfig:
             maxFovRad=_degreesToRadians(
                 "geometry.maxFovDeg", _requireFloat("geometry.maxFovDeg", geometryRaw["maxFovDeg"])
             ),
-            resampler=_requireStr("geometry.resampler", geometryRaw["resampler"]),
         ),
         motion=MotionConfig(
             minSamplesForVelocity=_requireInt(
@@ -380,12 +384,6 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
         ),
         tracking=TrackingConfig(
-            candidateMinScore=_requireFloat(
-                "tracking.candidateMinScore", trackingRaw["candidateMinScore"]
-            ),
-            stableFramesBeforeUpdate=_requireInt(
-                "tracking.stableFramesBeforeUpdate", trackingRaw["stableFramesBeforeUpdate"]
-            ),
             windowLength=_requireInt("tracking.windowLength", trackingRaw["windowLength"]),
             contextScale=_requireFloat("tracking.contextScale", trackingRaw["contextScale"]),
             contextMarginRatio=_requireFloat(
@@ -396,12 +394,6 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
         ),
         backendTuning=BackendTuningConfig(
-            sequenceModel=_requireBool(
-                "backendTuning.sequenceModel", tuningRaw["sequenceModel"]
-            ),
-            acceptAnyCandidate=_requireBool(
-                "backendTuning.acceptAnyCandidate", tuningRaw["acceptAnyCandidate"]
-            ),
             viewHorizontalFovCapRad=_optionalDegreesToRadians(
                 "backendTuning.viewHorizontalFovCapDeg",
                 tuningRaw["viewHorizontalFovCapDeg"],
@@ -410,17 +402,8 @@ def loadConfig(path: str | Path) -> AppConfig:
                 "backendTuning.viewVerticalFovCapDeg",
                 tuningRaw["viewVerticalFovCapDeg"],
             ),
-            fullViewSearch=_requireBool(
-                "backendTuning.fullViewSearch", tuningRaw["fullViewSearch"]
-            ),
-            alignedSearch=_requireBool(
-                "backendTuning.alignedSearch", tuningRaw["alignedSearch"]
-            ),
             sphericalSearch=_requireBool(
                 "backendTuning.sphericalSearch", tuningRaw["sphericalSearch"]
-            ),
-            predictiveSearch=_requireBool(
-                "backendTuning.predictiveSearch", tuningRaw["predictiveSearch"]
             ),
             sphericalSearchFovRad=_degreesToRadians(
                 "backendTuning.sphericalSearchFovDeg",
@@ -432,19 +415,18 @@ def loadConfig(path: str | Path) -> AppConfig:
                 "backendTuning.alignedMinFovDeg",
                 _requireFloat("backendTuning.alignedMinFovDeg", tuningRaw["alignedMinFovDeg"]),
             ),
-            useMotionScore=_requireBool(
-                "backendTuning.useMotionScore", tuningRaw["useMotionScore"]
+            lossHandling=_requireBool(
+                "backendTuning.lossHandling", tuningRaw["lossHandling"]
             ),
-            templateFovScale=_requireFloat(
-                "backendTuning.templateFovScale", tuningRaw["templateFovScale"]
-            ),
-            onlineTemplate=_requireBool(
-                "backendTuning.onlineTemplate", tuningRaw["onlineTemplate"]
-            ),
-            templateMinConfidence=_requireFloat(
-                "backendTuning.templateMinConfidence", tuningRaw["templateMinConfidence"]
-            ),
-            holdWeakBox=_requireBool("backendTuning.holdWeakBox", tuningRaw["holdWeakBox"]),
+            lossActions=_requireStr("backendTuning.lossActions", tuningRaw["lossActions"]),
+            **{
+                name: _requireFloat(f"backendTuning.{name}", tuningRaw[name])
+                for name in tuningFloats
+            },
+            **{
+                name: _requireInt(f"backendTuning.{name}", tuningRaw[name])
+                for name in tuningInts
+            },
         ),
         reproducibility=ReproducibilityConfig(
             seed=_requireInt("reproducibility.seed", reproducibilityRaw["seed"]),

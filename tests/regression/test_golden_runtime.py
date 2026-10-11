@@ -22,19 +22,12 @@ GOLDEN = Path(__file__).resolve().parent / "golden"
 FLOAT_TOLERANCE = 1e-6
 
 VARIANT_OVERRIDES: dict[str, dict[str, object]] = {
-    "gated": {"acceptAnyCandidate": False},
-    "gated_no_hold": {"acceptAnyCandidate": False, "holdWeakBox": False},
-    "motion_on": {"useMotionScore": True},
     "view_caps": {
         "viewHorizontalFovCapRad": 70.0 * pi / 180.0,
         "viewVerticalFovCapRad": 50.0 * pi / 180.0,
     },
-    "template_off": {"onlineTemplate": False},
-    "legacy_search": {"alignedSearch": False},
     # Large targets in a 90 degree perspective view with a padded crop, as before.
     "perspective_only": {"sphericalSearch": False},
-    # The fake backend is frame-level either way; this turns template updates back on.
-    "frame_model": {"sequenceModel": False},
 }
 
 

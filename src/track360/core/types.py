@@ -288,7 +288,6 @@ class LocalView:
 
     spec: ViewSpec
     rgb: NDArray[np.uint8]
-    deviceRgb: object | None = None
 
     def __post_init__(self) -> None:
         expectedShape = (self.spec.outputHeightPx, self.spec.outputWidthPx)
@@ -298,17 +297,6 @@ class LocalView:
             raise ProtocolError(
                 f"local rgb shape must be {(*expectedShape, 3)}, actual={self.rgb.shape}"
             )
-        if self.deviceRgb is not None:
-            shape = getattr(self.deviceRgb, "shape", None)
-            ndim = getattr(self.deviceRgb, "ndim", None)
-            if shape is None or ndim != 3:
-                raise ProtocolError("local deviceRgb must be a [C, H, W] tensor-like object")
-            if tuple(shape) != (3, self.spec.outputHeightPx, self.spec.outputWidthPx):
-                raise ProtocolError(
-                    "local deviceRgb shape must be "
-                    f"{(3, self.spec.outputHeightPx, self.spec.outputWidthPx)}, "
-                    f"actual={tuple(shape)}"
-                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,16 +348,13 @@ class LocalBoxProjection:
 
     bfov: BFoV
     bbox: BBoxXYWH
-    sphericalBoundary: tuple[SphericalPoint, ...]
     erpBoundary: tuple[tuple[float, float], ...]
     indirectBbox: BBoxXYWH
     envelopeInflation: float
 
     def __post_init__(self) -> None:
-        if len(self.sphericalBoundary) < 8:
+        if len(self.erpBoundary) < 8:
             raise ProtocolError("projected local boundary requires at least eight samples")
-        if len(self.sphericalBoundary) != len(self.erpBoundary):
-            raise ProtocolError("spherical and ERP boundaries must have equal length")
         for point in self.erpBoundary:
             if len(point) != 2:
                 raise ProtocolError("each ERP boundary point must contain x and y")
@@ -379,50 +364,24 @@ class LocalBoxProjection:
             raise ProtocolError("envelopeInflation must be positive")
 
 
-class TemplateCommandKind(Enum):
-    KEEP = auto()
-    UPDATE_RECENT = auto()
-    UPDATE_STABLE = auto()
-    RESET_TO_ANCHOR = auto()
-
-
-@dataclass(frozen=True, slots=True)
-class TemplateCommand:
-    kind: TemplateCommandKind
-    frameIndex: FrameIndex
-    viewId: int | None
-    localBox: BBoxXYWH | None
-    expectedRevision: int
-
-    def __post_init__(self) -> None:
-        if int(self.frameIndex) < 0 or self.expectedRevision < 0:
-            raise ProtocolError("template frameIndex and revision must be non-negative")
-        if self.viewId is not None and self.viewId < 0:
-            raise ProtocolError("template viewId must be non-negative")
-        hasSelection = self.viewId is not None and self.localBox is not None
-        if self.kind in {TemplateCommandKind.UPDATE_RECENT, TemplateCommandKind.UPDATE_STABLE}:
-            if not hasSelection:
-                raise ProtocolError("template update commands require viewId and localBox")
-        elif self.viewId is not None or self.localBox is not None:
-            raise ProtocolError("KEEP and RESET_TO_ANCHOR must not select a local box")
-
-
 @dataclass(frozen=True, slots=True)
 class SearchPlan:
-    """The one perspective view to search in a frame and the template command to apply."""
+    """The view to search in a frame, and the views to scan when the target is lost."""
 
     sequenceId: SequenceId
     frameIndex: FrameIndex
     stateRevision: int
     view: ViewSpec
-    templateCommand: TemplateCommand
     predictedMotion: MotionState3D | None
+    # Extra views searched without tracker state while the target is considered lost.
+    scanViews: tuple[ViewSpec, ...] = ()
+    # The scan views only point at where to look: each box found in one is followed
+    # by a view of the normal size around it, and that view's box is the candidate.
+    scanRefine: bool = False
 
     def __post_init__(self) -> None:
         if not str(self.sequenceId) or int(self.frameIndex) < 0 or self.stateRevision < 0:
             raise ProtocolError("search plan identity and revision must be valid")
-        if self.templateCommand.frameIndex != self.frameIndex:
-            raise ProtocolError("template command and search plan frameIndex must match")
 
 
 @dataclass(frozen=True, slots=True)
@@ -461,6 +420,8 @@ class ProjectedObservation:
     envelopeInflation: float = 1.0
     normalizedRadius: float = 0.0
     edgeMargin: float = 0.0
+    # Feature similarity of the box to the frame-0 template; None: not measured.
+    appearanceSimilarity: float | None = None
 
     def __post_init__(self) -> None:
         if self.viewId < 0:

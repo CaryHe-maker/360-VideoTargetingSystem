@@ -74,6 +74,14 @@ def buildParser() -> argparse.ArgumentParser:
         help="i/n: run every n-th sequence starting at i, to split a run across processes",
     )
     run.add_argument("--no-resume", action="store_true", help="rerun finished sequences")
+    run.add_argument(
+        "--probe",
+        nargs="?",
+        const="dinov2,dino,resnet18,clean",
+        default=None,
+        help="also record appearance signals per frame under probe/ (needs models/hub); "
+        "optionally a comma-separated subset of dinov2,dino,resnet18,clean",
+    )
 
     evaluate = commands.add_parser("eval", help="score the result files of every method")
     _addCommon(evaluate)
@@ -155,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
                 maxFrames=args.max_frames,
                 resume=not args.no_resume,
                 shard=_parseShard(args.shard),
+                probe=_split(args.probe),
             )
             return 1 if summary.failures else 0
         if args.command == "archive":

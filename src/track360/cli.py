@@ -13,7 +13,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = REPOSITORY_ROOT / "configs" / "default.yaml"
 
 COMMANDS: dict[str, str] = {
-    "track": "Track one target in a video or image sequence from an initial ERP box.",
+    "track": "Track one target in a video or image sequence; optionally write a demo video.",
+    "download": "Download the model weights and verify their SHA-256.",
+    "benchmark": "Run and score the tracker on a 360VOT-style dataset (tools/benchmark.py).",
     "airsim360": "Track one instance of an AirSim360 sequence with optional diagnostics.",
     "list-instances": "List the instance IDs visible in the first frame of an AirSim360 sequence.",
 }
@@ -27,6 +29,8 @@ def main(argv: list[str] | None = None) -> int:
     command, rest = args[0], args[1:]
     handlers: dict[str, Callable[[list[str]], int]] = {
         "track": _track,
+        "download": _download,
+        "benchmark": _benchmark,
         "airsim360": _airsim360,
         "list-instances": listInstancesMain,
     }
@@ -77,7 +81,31 @@ def listInstancesMain(argv: list[str]) -> int:
 def _track(argv: list[str]) -> int:
     from track360.runtime.track_video import main as trackMain
 
-    return trackMain(_withDefaultConfig(argv))
+    return trackMain(argv)
+
+
+def _download(argv: list[str]) -> int:
+    from track360.hub import main as downloadMain
+
+    return downloadMain(argv)
+
+
+def _benchmark(argv: list[str]) -> int:
+    """The benchmark tool of this checkout; it is not part of the installed package."""
+    import importlib.util
+
+    script = REPOSITORY_ROOT / "tools" / "benchmark.py"
+    if not script.is_file():
+        print(
+            f"track360 benchmark needs a source checkout: {script} does not exist",
+            file=sys.stderr,
+        )
+        return 2
+    spec = importlib.util.spec_from_file_location("track360_tools_benchmark", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return int(module.main(argv))
 
 
 def _airsim360(argv: list[str]) -> int:

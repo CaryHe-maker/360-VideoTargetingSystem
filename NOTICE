@@ -39,7 +39,6 @@ model.  Identical to upstream:
   artrackv2_seq_256_full.yaml (upstream: experiments/artrackv2_seq/artrackv2_seq_256_full.yaml)
   lib/config/artrackv2_seq/config.py
   lib/models/artrackv2_seq/__init__.py
-  lib/models/artrackv2_seq/base_backbone.py
   lib/models/artrackv2_seq/utils.py
   lib/models/artrackv2_seq/vit.py
 
@@ -48,7 +47,12 @@ Modified from upstream, to keep only what inference needs:
   lib/models/artrackv2/vit.py
   lib/models/artrackv2_seq/artrackv2_seq.py
       the training branch of forward() and the checkpoint loading inside
-      build_artrackv2_seq() are removed
+      build_artrackv2_seq() are removed; the decoder's output is no longer
+      turned into an image and back into patches (2026-10-10; same values)
+  lib/models/artrackv2_seq/base_backbone.py
+      the attention mask and the command tokens, which depend only on the
+      token counts, are built once and kept instead of on every forward pass
+      (2026-10-10; same values)
   lib/models/layers/mask_decoder.py
       reduced to the inference path; the transformer block of
       lib/models/mask_decoder/ is inlined, and PrRoIPool, the training loss and

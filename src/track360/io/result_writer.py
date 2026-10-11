@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from track360.core.errors import OutputError, ProtocolError
+from track360.core.errors import OutputError
 from track360.core.types import BBoxXYWH, TrackResult
 
 RESULT_PRECISION = 6
@@ -44,10 +44,5 @@ class TextResultWriter:
         return BBoxXYWH(xPx=xPx, yPx=yPx, widthPx=widthPx, heightPx=heightPx)
 
 
-def requireDestination(path: str | Path | None) -> Path:
-    if path is None:
-        raise ProtocolError("result destination is not open")
-    return Path(path)
 
-
-__all__ = ["RESULT_PRECISION", "TextResultWriter", "formatResultLine", "requireDestination"]
+__all__ = ["RESULT_PRECISION", "TextResultWriter", "formatResultLine"]

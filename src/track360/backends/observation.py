@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from time import perf_counter_ns
-
 from track360.backends.artrack_model import ARTrackPrediction
 from track360.core.errors import ModelError
 from track360.core.types import BBoxXYWH, LocalObservation, LocalView
@@ -45,9 +43,5 @@ def clipLocalBox(bbox: BBoxXYWH, widthPx: int, heightPx: int) -> BBoxXYWH:
     return BBoxXYWH(xPx=x0, yPx=y0, widthPx=x1 - x0, heightPx=y1 - y0)
 
 
-def startTimingNs() -> int:
-    """Return the monotonic timestamp used by backend latency measurements."""
-    return perf_counter_ns()
 
-
-__all__ = ["LocalObservation", "buildRgbObservation", "clipLocalBox", "startTimingNs"]
+__all__ = ["LocalObservation", "buildRgbObservation", "clipLocalBox"]

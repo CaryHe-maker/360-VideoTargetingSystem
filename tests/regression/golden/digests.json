@@ -1,11 +1,5 @@
 {
-  "default": "3ecd05e06092f16aa266ceba415f34af944ea8de21fa5d55c07d0ecda74bf05a",
-  "frame_model": "d7ee483e326b7c50140911e464e6df9b814c9850c39c25d3dbdbcb142790df86",
-  "gated": "b62193e42bb941048349006ae99f5e88b21113706b92c879f16b9523b297815b",
-  "gated_no_hold": "b07e512c9c37bac18195cc90aaf991b7d94acc4ba781f125688d586a82666ebe",
-  "legacy_search": "c44d724cf71879ae781b3c1723c0c07fdc60b322f9bf81830c1de98afb307a7c",
-  "motion_on": "3ecd05e06092f16aa266ceba415f34af944ea8de21fa5d55c07d0ecda74bf05a",
-  "perspective_only": "15f28c194c6cdd5f32a9c3136575163ecd8afc2552e5605c29f65ced476d444a",
-  "template_off": "3ecd05e06092f16aa266ceba415f34af944ea8de21fa5d55c07d0ecda74bf05a",
-  "view_caps": "e98646b88ba40761cb10ca02956f2283920abc0828093d11d31848efa8d1242f"
+  "default": "a550ca75f496efcde9e4e80c1cc30f7e5cbdf487cefd4bf537cad629f310573e",
+  "perspective_only": "d9a12da6a05d05e7656ace9afb7a8233ee276fc1a8304e222ecc061e3e69c12a",
+  "view_caps": "1bd7296376e1466d6460c12fe728662f8fdceb7dab45a9c05183ccaaa6fe6849"
 }

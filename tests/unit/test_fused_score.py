@@ -8,13 +8,10 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from track360.controller import (
-    BetaCalibration,
     MotionScore,
-    ScoreCalibration,
-    calibrateBackendFusedScore,
-    calibrateLocalAppearanceProbabilities,
-    composeSingleScore,
+    backendScoreProbability,
     scoreViewCenterMotion,
+    withScoreProbability,
 )
 from track360.core.errors import GeometryError
 from track360.core.types import (
@@ -31,49 +28,33 @@ from track360.core.types import (
 from track360.geometry import makeSphericalPoint
 from track360.runtime.driver import _projectObservation, _projectValidObservation
 
-TEST_CALIBRATION = ScoreCalibration(
-    format="track360.score-calibration.v2",
-    checkpointSha256="1" * 64,
-    manifestSha256="2" * 64,
-    split="calibration",
-    appearanceInput="presence_quality_product",
-    appearance=BetaCalibration(alpha=1.5, beta=0.75, intercept=-0.2),
-    appearanceWeight=0.8,
-    motionWeight=0.2,
-    candidateMinScore=0.35,
-)
-
 
 class FusedScoreRemappingTest(unittest.TestCase):
-    def testArtifactBetaCalibrationIsMonotonicAndKeepsEndpoints(self) -> None:
+    def testTheScoreProbabilityIsTheScoreUpToRounding(self) -> None:
         rawScores = (0.0, 0.1, 0.4, 0.8, 0.95, 1.0)
-        calibrated = tuple(
-            calibrateBackendFusedScore(score, TEST_CALIBRATION) for score in rawScores
-        )
+        mapped = tuple(backendScoreProbability(score) for score in rawScores)
 
-        self.assertEqual(calibrated, tuple(sorted(calibrated)))
-        self.assertEqual(calibrated[0], 0.0)
-        self.assertEqual(calibrated[-1], 1.0)
+        self.assertEqual(mapped, tuple(sorted(mapped)))
+        self.assertEqual(mapped[0], 0.0)
+        self.assertEqual(mapped[-1], 1.0)
+        for score, value in zip(rawScores, mapped, strict=True):
+            self.assertAlmostEqual(value, score, places=12)
+        # The round trip is not exact, which is why it is kept: the recorded
+        # baselines were made with these very numbers.
+        self.assertEqual(backendScoreProbability(0.9), 0.8999999999999999)
+        self.assertEqual(backendScoreProbability(0.7), 0.7)
 
     def testCreatesNewObservationsWithoutOverwritingBackendScore(self) -> None:
         original = _observation(0.85)
 
-        (remapped,) = calibrateLocalAppearanceProbabilities(
-            (original,), TEST_CALIBRATION
-        )
+        (remapped,) = withScoreProbability((original,))
 
         self.assertIsNot(remapped, original)
         self.assertEqual(original.fusedScore, 0.85)
         self.assertEqual(remapped.fusedScore, 0.85)
-        self.assertAlmostEqual(
-            remapped.appearanceProbability or 0.0,
-            calibrateBackendFusedScore(0.85, TEST_CALIBRATION),
-        )
+        self.assertAlmostEqual(remapped.appearanceProbability or 0.0, 0.85)
         self.assertEqual(remapped.bbox, original.bbox)
         self.assertEqual(remapped.appearanceScore, original.appearanceScore)
-
-    def testSingleScoreUsesArtifactWeights(self) -> None:
-        self.assertAlmostEqual(composeSingleScore(0.8, 0.2, TEST_CALIBRATION), 0.68)
 
     def testViewCenterMotionFallsContinuouslyByPointOnePerThirtyDegrees(self) -> None:
         prediction = MotionState3D(
@@ -147,12 +128,12 @@ class FusedScoreRemappingTest(unittest.TestCase):
                 observation=observation,
                 predictedMotion=predicted,
                 geometry=geometry,
-                scoreCalibration=TEST_CALIBRATION,
-                useMotionScore=True,
             )
 
         score.assert_called_once_with(view.spec.bfov.center, predicted)
         self.assertAlmostEqual(projected.motionScore, 0.8)
+        # The motion prior is recorded; the score the controller uses is the backend's.
+        self.assertAlmostEqual(projected.singleScore, 0.90)
 
     def testInvalidSphericalProjectionIsSkipped(self) -> None:
         view = LocalView(
@@ -179,8 +160,6 @@ class FusedScoreRemappingTest(unittest.TestCase):
                 observation=observation,
                 predictedMotion=None,
                 geometry=geometry,
-                scoreCalibration=TEST_CALIBRATION,
-                useMotionScore=True,
             )
 
         self.assertIsNone(projected)

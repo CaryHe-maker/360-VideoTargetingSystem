@@ -46,8 +46,11 @@ class ARTrackV2Seq(nn.Module):
 
         z_1_feat = z_1_feat.reshape(z_1_feat.shape[0], int(z_1_feat.shape[1] ** 0.5), int(z_1_feat.shape[1] ** 0.5),
                                     z_1_feat.shape[2]).permute(0, 3, 1, 2)
-        update_feat = self.cross_2_decoder(z_1_feat, eval=True)
-        update_feat = self.cross_2_decoder.patchify(update_feat)
+        # Track360: upstream turns the decoder's patches into an image and straight
+        # back into patches; the two steps only move values, so they are skipped.
+        update_feat = self.cross_2_decoder.forward_decoder(
+            z_1_feat.flatten(2).transpose(1, 2).contiguous()
+        )
         out['dz_feat'] = update_feat
 
         return out

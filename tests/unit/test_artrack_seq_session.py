@@ -7,14 +7,11 @@ import numpy as np
 from track360.backends import ARTrackBackend, ARTrackPrediction, TrackerBackendImpl
 from track360.backends.artrack_model import ARTrackTemplate
 from track360.backends.artrack_seq_session import padTrajectory, trajectoryTokens
-from track360.core.config import loadConfig
 from track360.core.types import (
     BBoxXYWH,
     BFoV,
     LocalView,
     SphericalPoint,
-    TemplateCommand,
-    TemplateCommandKind,
     ViewSpec,
 )
 
@@ -78,7 +75,6 @@ class TrajectoryTokensTest(unittest.TestCase):
 class _FakeSequenceSession:
     """A sequence-level session stand-in that records what the facade hands it."""
 
-    supportsOnlineTemplates = False
     trajectoryLength = 7
 
     def __init__(self) -> None:
@@ -117,14 +113,10 @@ class SequenceBackendTest(unittest.TestCase):
         backend = TrackerBackendImpl(ARTrackBackend(session))
         backend.initialize(view, BBoxXYWH(20.0, 20.0, 16.0, 16.0))
 
-        backend.infer((view,), TemplateCommand(TemplateCommandKind.KEEP, 1, None, None, 1))
+        backend.infer((view,))
 
         self.assertEqual(session.calls, [{"priors": (prior,), "trajectories": (trajectory,)}])
         backend.close()
-
-    def testDefaultConfigurationSelectsTheSequenceModel(self) -> None:
-        config = loadConfig(ROOT / "configs" / "default.yaml")
-        self.assertTrue(config.backendTuning.sequenceModel)
 
 
 if __name__ == "__main__":

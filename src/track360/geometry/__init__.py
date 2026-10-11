@@ -1,7 +1,6 @@
 """Geometry package public surface."""
 
 from track360.geometry.bfov_projector import BfovProjector
-from track360.geometry.gpu_geometry import GpuGeometryImpl
 from track360.geometry.projection_math import (
     angleToPixelOffsetPx,
     cameraBasis,
@@ -27,7 +26,6 @@ from track360.geometry.spherical_geometry import SphericalGeometryImpl
 
 __all__ = [
     "BfovProjector",
-    "GpuGeometryImpl",
     "SphericalGeometryImpl",
     "angleToPixelOffsetPx",
     "cameraBasis",
