@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.11-ee4c2c)](https://pytorch.org)
 [![Backend](https://img.shields.io/badge/backend-ARTrackV2--B--256-6f42c1)](https://github.com/MIV-XJTU/ARTrack)
-[![Status](https://img.shields.io/badge/status-V2.0%20开发中-orange)](docs/V2Plan.md)
+[![Status](https://img.shields.io/badge/status-V2.1%20开发中-orange)](docs/V2.1Plan.md)
 
 </div>
 
@@ -181,7 +181,7 @@ ruff check src tests tools
 [两条基线](docs/baselines.md) ·
 [Benchmark 数据集](docs/benchmark.md) ·
 [评测记录](docs/evaluation-log.md) ·
-[V2 计划](docs/V2Plan.md) ·
+[V2.1 计划](docs/V2.1Plan.md) ·
 [全部文档](docs/README.md)
 
 ## 路线图

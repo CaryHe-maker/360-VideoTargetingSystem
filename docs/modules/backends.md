@@ -65,7 +65,7 @@
 
 ## 已知限制
 
-- 推理始终是 FP32，`model.precision` 只接受 `fp32`。FP16 / TensorRT 是 [V2Plan](../V2Plan.md) Phase 5 的工作；
+- `model.precision` 接受 `fp32`（默认）和 `tf32`。FP16 试过没有收益（评测日志 E039），TensorRT 没有做，列在 [V2.1 计划](../V2.1Plan.md)的备选里；
 - 后端由 `createArtrackSession()` 按配置创建，还没有注册表机制；
 
 ## 接入新后端

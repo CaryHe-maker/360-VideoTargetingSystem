@@ -1,6 +1,6 @@
 # 更新日志
 
-格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。到 V2.0 发布前的工作计划见 [docs/V2Plan.md](docs/V2Plan.md)。
+格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。V2.1 的工作计划见 [docs/V2.1Plan.md](docs/V2.1Plan.md)。
 
 ## [未发布]
 
