@@ -162,6 +162,79 @@ def noticing(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def rollback(args: argparse.Namespace, steps: list[int]) -> dict[str, object]:
+    """Would the enlarged views have held the target had they been centred further back?
+
+    For every enlarged-view search made with the target in the picture, the distance from
+    the target to other centres the search could have used, in half-widths of the view
+    that was searched (at most 1: the target is inside it).  ``back K``: the tracker's
+    position K frames before the last trusted frame.  Two centres need the ground truth
+    and bound what a better judge could reach: the tracker's position at its last frame
+    with IoU >= 0.5, and the target's own position at that frame.  The searches are those
+    of the recorded run: with another centre the run itself would have gone differently.
+    """
+    dataset = Vot360Dataset(args.dataset_root, args.label_root)
+    results = loadTrackerResults(args.output_root / "bbox" / args.method)
+    labels = [f"back {step}" for step in steps] + ["last good box", "target at last good box"]
+    reach: dict[str, dict[str, list[float]]] = {
+        kind: {label: [] for label in labels} for kind in ("2x", "4x")
+    }
+    for name in sorted(results):
+        if args.only is not None and name not in args.only:
+            continue
+        path = args.output_root / "trace" / args.method / f"{name}.csv"
+        if not path.exists():
+            continue
+        sequence = dataset.sequence(name)
+        truthBox, present = sequence.groundTruth("bbox")
+        truthBfov, _ = sequence.groundTruth("bfov")
+        width = sequence.frameSize[0]
+        sequence.close()
+        count = len(results[name])
+        present = np.asarray(present, dtype=bool)[:count]
+        iou = np.zeros(count)
+        iou[present] = dualIou(truthBox[:count][present], results[name][present], width)
+        with path.open(encoding="utf-8") as stream:
+            rows = {int(row["frame"]): row for row in csv.DictReader(stream)}
+        first = min(rows)
+        trusted = good = None
+        for index in sorted(rows):
+            row = rows[index]
+            if row["scan"] in reach and trusted is not None and index < count and present[index]:
+                scale = float(row["scan"][:-1])
+                size = max(float(rows[trusted]["sizeDeg"]), 1e-3)
+                half = 0.5 * scale * max(
+                    search_outcomes.MIN_VIEW_DEG, search_outcomes.VIEW_FACTOR * size
+                )
+                truth = _direction(truthBfov[index, 0], truthBfov[index, 1])
+                for step in steps:
+                    anchor = rows[max(first, trusted - step)]
+                    centre = _direction(anchor["yawDeg"], anchor["pitchDeg"])
+                    reach[row["scan"]][f"back {step}"].append(_angle(truth, centre) / half)
+                if good is not None:
+                    centre = _direction(rows[good]["yawDeg"], rows[good]["pitchDeg"])
+                    reach[row["scan"]]["last good box"].append(_angle(truth, centre) / half)
+                    centre = _direction(truthBfov[good, 0], truthBfov[good, 1])
+                    reach[row["scan"]]["target at last good box"].append(
+                        _angle(truth, centre) / half
+                    )
+            if row["modeAfter"] == "TRACKING" and row["action"] != "jump":
+                trusted = index
+            if index < count and present[index] and iou[index] >= GOOD_IOU:
+                good = index
+    return {
+        kind: {
+            label: {
+                "count": len(values),
+                "inView": float((np.asarray(values) <= 1.0).mean()) if values else None,
+                "median": float(np.median(values)) if values else None,
+            }
+            for label, values in byLabel.items()
+        }
+        for kind, byLabel in reach.items()
+    }
+
+
 def gates(attempts: list[dict[str, object]]) -> dict[str, object]:
     """The three gates of an enlarged-view search made while the target was in the picture."""
     enlarged = [a for a in attempts if a["scan"] != "1x" and a["present"]]
@@ -294,6 +367,16 @@ def render(payload: dict[str, object]) -> str:
         f", worst sequence {costs['worstSequence']} {costs['worstForwardsPerFrame']:.3f}"
         f", median P50 latency {costs['p50LatencyMs']:.1f} ms",
     ]
+    for kind, byLabel in payload.get("rollback", {}).items():
+        lines.append(
+            f"{kind} views centred elsewhere: share with the target in view (median reach)"
+        )
+        for label, item in byLabel.items():
+            if item["count"]:
+                lines.append(
+                    f"  {label:<26}{_percent(item['inView'])}  ({item['median']:.2f})"
+                    f"  n={item['count']}"
+                )
     if "checks" in costs:
         marks = ", ".join(
             f"{name} {'ok' if passed else 'OVER'} (limit {costs['limits'][name]:.3g})"
@@ -320,6 +403,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="median latency of baseline 1 measured in the same session",
     )
+    parser.add_argument(
+        "--rollback",
+        default=None,
+        help="comma-separated frame counts: also report the enlarged searches re-centred "
+        "that many frames before the last trusted frame",
+    )
     parser.add_argument("--json", type=Path, default=None)
     args = parser.parse_args(argv)
     args.only = None if args.sequence_file is None else set(readSequenceFile(args.sequence_file))
@@ -334,6 +423,8 @@ def main(argv: list[str] | None = None) -> int:
             "jumps": jumpClasses(summary["jumps"]["events"]),
             "cost": cost(args),
         }
+        if args.rollback:
+            payload["rollback"] = rollback(args, [int(item) for item in args.rollback.split(",")])
     except Track360Error as error:
         print(f"{type(error).__name__}: {error}", file=sys.stderr)
         return 2
