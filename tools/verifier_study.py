@@ -79,9 +79,16 @@ def caught(scores: np.ndarray, positive: np.ndarray, rate: float) -> float:
 
 
 def fitLogistic(matrix: np.ndarray, positive: np.ndarray, ridge: float):
-    """Class-balanced logistic regression with an L2 penalty; returns a scoring function."""
-    mean, spread = matrix.mean(axis=0), matrix.std(axis=0) + 1e-6
-    design = np.column_stack([np.ones(len(matrix)), (matrix - mean) / spread])
+    """Class-balanced logistic regression with an L2 penalty; returns a scoring function.
+
+    Inputs are clipped to the bulk of the training values first (as in
+    ``loss_detector_study.Logistic``): the accumulated features have long tails, and
+    without the clip a few extreme frames set the threshold at low false-alarm rates.
+    """
+    low, high = np.percentile(matrix, [0.5, 99.5], axis=0)
+    clipped = np.clip(matrix, low, high)
+    mean, spread = clipped.mean(axis=0), clipped.std(axis=0) + 1e-6
+    design = np.column_stack([np.ones(len(matrix)), (clipped - mean) / spread])
     weight = np.where(positive, 0.5 / positive.sum(), 0.5 / (~positive).sum()) * len(positive)
     penalty = ridge * np.eye(design.shape[1])
     penalty[0, 0] = 0.0
@@ -96,7 +103,8 @@ def fitLogistic(matrix: np.ndarray, positive: np.ndarray, ridge: float):
             break
 
     def score(other: np.ndarray) -> np.ndarray:
-        return np.column_stack([np.ones(len(other)), (other - mean) / spread]) @ beta
+        scaled = (np.clip(other, low, high) - mean) / spread
+        return np.column_stack([np.ones(len(other)), scaled]) @ beta
 
     score.parameters = (mean, spread, beta)  # type: ignore[attr-defined]
     return score

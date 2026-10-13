@@ -11,8 +11,10 @@ the target was last seen.
 
 On every ``--step``-th frame with the target in the picture:
 
-- a reference pass, centred on the true target and starting from the bare template,
-  gives the appearance memory "as of this frame";
+- a reference pass, centred on the true target and starting from the memory the previous
+  reference pass left, gives the appearance memory "as of this frame": the memory a
+  tracker that followed the target faultlessly would have, updated every ``--step``
+  frames instead of every frame;
 - candidate views of the normal size are laid ``near`` the true target (shifted by up
   to 0.7 of the view's half-width), ``far`` from it (1.3 to 4 half-widths, target
   outside), and, when the finished run was lost on this frame, around the box it had
@@ -22,7 +24,8 @@ On every ``--step``-th frame with the target in the picture:
 
 The memories come from passes centred on the ground truth, so this is what recent
 appearance can give at best, not what a running system would have.  One row per pass
-goes to ``<out>/passes.csv``.
+goes to ``<out>/passes.csv``, written sequence by sequence; a run that is started again
+continues after the sequences already there.
 """
 
 from __future__ import annotations
@@ -62,7 +65,10 @@ NEAR_SHIFT, FAR_SHIFT = (0.0, 0.7), (1.3, 4.0)
 THRESHOLDS = (0.5, 0.6, 0.7, 0.8)
 
 
-def run(args: argparse.Namespace) -> list[dict[str, object]]:
+FIELDS = ("sequence", "frame", "kind", "memory", "lostRun", "found", "score", "iou")
+
+
+def run(args: argparse.Namespace, path: Path) -> None:
     config = loadConfig(args.config)
     dataset = Vot360Dataset(args.dataset_root, args.label_root)
     boxes = loadTrackerResults(args.run / "bbox" / args.method)
@@ -71,10 +77,20 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
     session = createArtrackSession(config)
     planner = ViewPlanner(config.geometry, config.tracking, config.backendTuning)
     rng = np.random.default_rng(args.seed)
-    rows: list[dict[str, object]] = []
     names = readSequenceFile(args.sequence_file)
+    done: set[str] = set()
+    if path.exists():
+        with path.open(encoding="utf-8") as stream:
+            done = {row["sequence"] for row in csv.DictReader(stream)}
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            csv.DictWriter(stream, fieldnames=FIELDS).writeheader()
     try:
         for number, name in enumerate(names, 1):
+            if name in done:
+                continue
+            rows: list[dict[str, object]] = []
             sequence = dataset.sequence(name)
             truthBox, present = sequence.groundTruth("bbox")
             truthBfov, _ = sequence.groundTruth("bfov")
@@ -118,6 +134,7 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                     )
 
                 memories: dict[int, Any] = {}
+                rolling: Any = None
                 for index in range(args.start, sequence.frameCount, args.step):
                     if not present[index]:
                         continue
@@ -201,9 +218,10 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
                                     )
                             rows.append(item)
                     # The reference of this frame, for the frames that follow.
-                    _, after = passWith(runtime.geometry.cropViews(frame, [base])[0], None)
+                    _, after = passWith(runtime.geometry.cropViews(frame, [base])[0], rolling)
                     if after is not None:
-                        memories[index] = after.detach().clone()
+                        rolling = after.detach().clone()
+                        memories[index] = rolling
                     for key in [key for key in memories if key < index - max(lags) - args.step]:
                         del memories[key]
                     releaseFrame = getattr(runtime.geometry, "releaseFrame", None)
@@ -212,10 +230,11 @@ def run(args: argparse.Namespace) -> list[dict[str, object]]:
             finally:
                 closeRuntime(runtime)
                 sequence.close()
-            print(f"[{number}/{len(names)}] {name}: {len(rows)} passes so far", flush=True)
+            with path.open("a", encoding="utf-8", newline="") as stream:
+                csv.DictWriter(stream, fieldnames=FIELDS).writerows(rows)
+            print(f"[{number}/{len(names)}] {name}: {len(rows)} passes", flush=True)
     finally:
         session.close()
-    return rows
 
 
 def report(rows: list[dict[str, object]]) -> dict[str, object]:
@@ -297,19 +316,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     warnings.filterwarnings("ignore")
     path = args.out / "passes.csv"
-    if args.report_only:
-        with path.open(encoding="utf-8") as stream:
-            rows: list[dict[str, object]] = list(csv.DictReader(stream))
-    else:
+    if not args.report_only:
         if args.run is None:
             print("--run is required unless --report-only", file=sys.stderr)
             return 2
-        rows = run(args)
-        args.out.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8", newline="") as stream:
-            writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
-            writer.writeheader()
-            writer.writerows(rows)
+        run(args, path)
+    with path.open(encoding="utf-8") as stream:
+        rows: list[dict[str, object]] = list(csv.DictReader(stream))
     summary = report(rows)
     (args.out / "passes.json").write_text(json.dumps(summary, indent=1) + "\n", encoding="utf-8")
     return 0

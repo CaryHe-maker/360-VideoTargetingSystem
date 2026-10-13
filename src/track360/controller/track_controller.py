@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from math import asin, atan2, degrees, pi, sqrt
+from math import acos, asin, atan2, degrees, pi, sqrt
 from typing import TYPE_CHECKING
 
 from track360.controller.motion_estimator import SphericalMotionEstimator
@@ -62,6 +62,8 @@ _MAX_HORIZONTAL_SIZE_RAD = 2.0 * pi - 1e-6
 _MAX_VERTICAL_SIZE_RAD = pi - 1e-6
 # Search views a lost frame may take when the budget is not limited.
 _UNLIMITED_SCAN_VIEWS = 4
+# The loss actions that look for the target and may jump to what they find.
+_SEARCHING_ACTIONS = ("jump", "move")
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,7 +325,9 @@ class TrackControllerImpl(TrackControllerProtocol):
                 self._scanTokens + self._backendTuning.scanBudgetPerFrame,
             )
             scanCount = min(scanCount, int(self._scanTokens))
-        searching = self._actions != "none" and lost and self._lastGoodBfov is not None
+        searching = (
+            self._actions in _SEARCHING_ACTIONS and lost and self._lastGoodBfov is not None
+        )
         if searching:
             scanViews, scanRefine = self._zoomScan(mainView, lostFrames, scanCount)
             if scanViews:
@@ -431,7 +435,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             frameHeightPx=pending.frame.rgb.shape[0],
         )
         trace = self._traceOf(pending, evaluation)
-        if self._actions != "none":
+        if self._actions in _SEARCHING_ACTIONS:
             chosen, trace["candidates"] = self._reacquisitionCandidate(candidates)
             if chosen is not None:
                 result = self._reacquire(pending, chosen)
@@ -525,6 +529,8 @@ class TrackControllerImpl(TrackControllerProtocol):
             similarity = candidate.appearanceSimilarity
             score = _observationScore(candidate)
             verdict = "low_score" if score < self._backendTuning.reacquireScore else "not_best"
+            if verdict == "not_best" and self._actions == "move" and self._onCurrentBox(candidate):
+                verdict = "same_place"
             record: dict[str, object] = {
                 "view": int(candidate.viewId),
                 "similarity": None if similarity is None else round(float(similarity), 4),
@@ -542,6 +548,20 @@ class TrackControllerImpl(TrackControllerProtocol):
         if bestRecord is not None:
             bestRecord["verdict"] = "accepted"
         return best, records
+
+    def _onCurrentBox(self, candidate: ProjectedObservation) -> bool:
+        """The candidate is the box the tracker already has: same place, similar size."""
+        current = self._currentBfov
+        if current is None:
+            return False
+        cosine = (
+            current.center.x * candidate.bfov.center.x
+            + current.center.y * candidate.bfov.center.y
+            + current.center.z * candidate.bfov.center.z
+        )
+        larger = max(_angularSize(current), _angularSize(candidate.bfov))
+        smaller = min(_angularSize(current), _angularSize(candidate.bfov))
+        return acos(max(-1.0, min(1.0, cosine))) < 0.5 * larger and larger < 1.5 * smaller
 
     def _reacquire(
         self, pending: _PendingFrame, candidate: ProjectedObservation

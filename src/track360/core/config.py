@@ -13,6 +13,7 @@ SUPPORTED_SCHEMA_VERSION = 2
 VISUALIZATION_STAGES = frozenset({"local_rgb", "backend_box", "geometry_box"})
 
 
+LOSS_ACTIONS = ("none", "freeze", "jump", "move")
 MODEL_PRECISIONS = ("fp32", "tf32")
 
 
@@ -133,7 +134,9 @@ class BackendTuningConfig:
     # of the two deviations below ``relativeEnterDeviation`` raises a doubt that
     # holds until ``releaseFrames`` calm frames.
     lossHandling: bool = False
-    # none: only judge the state; jump: search and jump.
+    # none: only judge the state; freeze: also keep untrusted frames out of the
+    # tracker's memory; jump: also search and jump; move: as jump, but a candidate on
+    # the box the tracker already has is not taken.
     lossActions: str = "jump"
     releaseFrames: int = 3
     relativeGate: float = 0.05
@@ -167,8 +170,10 @@ class BackendTuningConfig:
                 "backendTuning.relativeGate must be in [0, 1] and "
                 "relativeEnterDeviation in [-1, 0)"
             )
-        if self.lossActions not in ("none", "jump"):
-            raise ConfigError("backendTuning.lossActions must be none or jump")
+        if self.lossActions not in LOSS_ACTIONS:
+            raise ConfigError(
+                f"backendTuning.lossActions must be one of {', '.join(LOSS_ACTIONS)}"
+            )
         if self.releaseFrames < 1:
             raise ConfigError("backendTuning.releaseFrames must be positive")
         for name in ("uncertainScore", "reacquireScore"):

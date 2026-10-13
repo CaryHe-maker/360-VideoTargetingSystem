@@ -7,7 +7,7 @@ import numpy as np
 
 from track360.backends import ARTrackBackend, ARTrackPrediction, TrackerBackendImpl
 from track360.backends.appearance import histogramSimilarity, targetCrop
-from track360.backends.artrack_model import ARTrackTemplate
+from track360.backends.artrack_model import DETACHED_KEY, ARTrackTemplate
 from track360.controller import TrackControllerImpl
 from track360.core.config import loadConfig
 from track360.core.errors import ConfigError
@@ -138,7 +138,8 @@ class BackendStateTest(unittest.TestCase):
         # The view whose box left the image yields no observation.
         self.assertEqual([item.viewId for item in found], [1, 1])
         detached = self.session.calls[1:4]
-        self.assertTrue(all(call["memory"] == {} for call in detached))
+        # Nothing of the tracker's memory, only the mark that the pass is detached.
+        self.assertTrue(all(call["memory"] == {DETACHED_KEY: True} for call in detached))
         self.assertFalse(any(call["trajectory"] for call in detached))
         self.assertEqual(self.session.calls[4]["memory"], {"appearance": 1})
 
