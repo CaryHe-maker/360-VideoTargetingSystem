@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+
+import numpy as np
 
 from track360.core.errors import ProtocolError
 from track360.evaluation.bootstrap import (
@@ -48,6 +50,45 @@ class Comparison:
 
     def metric(self, name: str) -> MetricComparison:
         return next(item for item in self.metrics if item.name == name)
+
+
+def meanScores(runs: Sequence[Vot360Scores]) -> Vot360Scores:
+    """Average several runs of one configuration sequence by sequence.
+
+    The result stands in for a single run in ``compareScores``: per sequence, success
+    and angle precision are the mean over the runs and the frame counts are summed, so
+    the loss rate is the pooled one.  Only sequences every run has are kept.
+    """
+    if not runs:
+        raise ProtocolError("no runs to average")
+    if len(runs) == 1:
+        return runs[0]
+    names = sorted(set.intersection(*(set(run.perSequence) for run in runs)))
+    if not names:
+        raise ProtocolError("the runs share no sequence")
+    perSequence = {}
+    for name in names:
+        items = [run.perSequence[name] for run in runs]
+        perSequence[name] = replace(
+            items[0],
+            success=float(np.mean([item.success for item in items])),
+            anglePrecision=float(np.mean([item.anglePrecision for item in items])),
+            frames=sum(item.frames for item in items),
+            lostFrames=sum(item.lostFrames or 0 for item in items),
+            firstLostFrame=None,
+        )
+    frames = sum(item.frames for item in perSequence.values())
+    return replace(
+        runs[0],
+        sequenceCount=len(names),
+        frameCount=frames,
+        success=float(np.mean([item.success for item in perSequence.values()])),
+        anglePrecision=float(np.mean([item.anglePrecision for item in perSequence.values()])),
+        perSequence=perSequence,
+        lossRate=(
+            sum(item.lostFrames or 0 for item in perSequence.values()) / frames if frames else None
+        ),
+    )
 
 
 def compareScores(

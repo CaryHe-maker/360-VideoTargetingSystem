@@ -9,6 +9,7 @@ Output layout under one root, ready for the official toolkit as well::
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import logging
 from collections import deque
@@ -39,6 +40,8 @@ from track360.runtime.driver import buildRuntime, closeRuntime, runTracking
 from track360.runtime.reproducibility import collectRunMetadata, seedEverything
 
 LOGGER = logging.getLogger("track360.benchmark")
+# Standard deviation of the input noise of a seeded run, in normalised input units.
+DEFAULT_NOISE_STD = 0.001
 REPORT_DIRECTORY = "reports"
 
 METHODS: dict[str, str] = {
@@ -106,6 +109,12 @@ class _TimedCollector(ResultCollector):
         self.writeTimes.append(perf_counter())
 
 
+def sequenceNoiseSeed(seed: int, sequence: str) -> int:
+    """Seed of one sequence's noise stream: stable across runs, orders and platforms."""
+    digest = hashlib.sha256(f"{seed}:{sequence}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") >> 1
+
+
 class _CountingSession:
     """Count the images a session runs through the network."""
 
@@ -169,6 +178,8 @@ def runBenchmark(
     shard: tuple[int, int] = (0, 1),
     sessionFactory: SessionFactory | None = None,
     probe: Sequence[str] | None = None,
+    noiseSeed: int | None = None,
+    noiseStd: float = DEFAULT_NOISE_STD,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -176,6 +187,10 @@ def runBenchmark(
     split a run.  With ``resume`` a sequence whose result files are already complete is
     skipped.  ``labelRoot`` supplies labels for sequences shipped without them, such as
     the tune set.
+
+    ``noiseSeed`` adds Gaussian noise of ``noiseStd`` to the network inputs.  The stream
+    restarts for every sequence from the seed and the sequence name, so a sequence gets
+    the same noise whatever the order, the shard or the resume point of the run.
     """
     if method not in METHODS:
         raise ProtocolError(f"unknown method '{method}'; available: {', '.join(METHODS)}")
@@ -195,6 +210,7 @@ def runBenchmark(
             "sequences": list(names),
             "maxFrames": maxFrames,
             "shard": list(shard),
+            "inputNoise": None if noiseSeed is None else {"seed": noiseSeed, "std": noiseStd},
             **collectRunMetadata(config),
         },
     )
@@ -226,6 +242,8 @@ def runBenchmark(
                 resume,
                 probeModels,
                 "clean" in probeSignals,
+                noiseSeed,
+                noiseStd,
             )
             reports.append(report)
             # A skipped sequence keeps the report of the run that tracked it.
@@ -368,6 +386,8 @@ def _runOne(
     resume: bool,
     probeModels: Any | None = None,
     probeClean: bool = True,
+    noiseSeed: int | None = None,
+    noiseStd: float = DEFAULT_NOISE_STD,
 ) -> SequenceReport:
     source = Vot360DataSource(maxFrames=maxFrames, labelRoot=dataset.labelRoot)
     try:
@@ -377,6 +397,11 @@ def _runOne(
             return SequenceReport(sequence=name, status="skipped", frames=frameCount)
         collector = _TimedCollector()
         session.forwards = 0
+        setNoise = getattr(session, "setInputNoise", None)
+        if setNoise is not None:
+            setNoise(None if noiseSeed is None else sequenceNoiseSeed(noiseSeed, name), noiseStd)
+        elif noiseSeed is not None:
+            raise ProtocolError("this session cannot add input noise")
         started = perf_counter()
         probe = None
         if probeModels is not None and method != "b0":

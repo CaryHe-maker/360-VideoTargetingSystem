@@ -75,6 +75,8 @@ class PyTorchARTrackV2SeqSession:
         self._std = self._torch.tensor([0.229, 0.224, 0.225], device=self._device).view(
             3, 1, 1
         )
+        self._noiseGenerator: Any | None = None
+        self._noiseStd = 0.0
         self._bins = int(modelConfig.BINS)
         self._range = int(modelConfig.RANGE)
         self._trajectoryLength = int(modelConfig.PRENUM)
@@ -262,10 +264,28 @@ class PyTorchARTrackV2SeqSession:
                 f"cannot construct sequence-level ARTrackV2-B-256 from {self._weights}: {error}"
             ) from error
 
+    def setInputNoise(self, seed: int | None, std: float = 0.0) -> None:
+        """Add seeded Gaussian noise to every network input from now on; ``None`` stops it.
+
+        An evaluation instrument, not a tracking feature: repeated runs that differ only
+        in this seed show how far the scores move by numerical chance.
+        """
+        if seed is None or std <= 0.0:
+            self._noiseGenerator, self._noiseStd = None, 0.0
+            return
+        self._noiseGenerator = self._torch.Generator(device=self._device)
+        self._noiseGenerator.manual_seed(int(seed))
+        self._noiseStd = float(std)
+
     def _preprocess(self, image: NDArray[np.uint8]) -> Any:
         array = image.astype(np.float32) / 255.0
         tensor = self._torch.from_numpy(array).permute(2, 0, 1).to(self._device)
-        return (tensor - self._mean) / self._std
+        tensor = (tensor - self._mean) / self._std
+        if self._noiseGenerator is None:
+            return tensor
+        return tensor + self._noiseStd * self._torch.randn(
+            tensor.shape, generator=self._noiseGenerator, device=self._device, dtype=tensor.dtype
+        )
 
     def _requireOpen(self) -> None:
         if self._closed:

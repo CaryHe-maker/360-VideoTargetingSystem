@@ -10,6 +10,11 @@ an interrupted run.  ``eval`` scores every method found under the output root.
 ``compare`` gives the difference between two runs with bootstrap confidence intervals
 and, with ``--hard-file``, fails when a hard-regression sequence got worse.
 
+A run is deterministic, yet its scores move by about 0.01 S_dual when only the last
+digits of the network input change.  ``run --seeds 1,2,3,4,5`` repeats a run with seeded
+input noise into ``<output-root>_s<seed>``; ``compare`` takes several output roots per
+side, separated by commas, and compares the per-sequence means over the seeds.
+
 The tune set lives in the 360VOS training archives, which carry no labels of their
 own; pass ``--label-root`` (see ``tools/prepare_tune_set.py``) and
 ``--sequence-file configs/splits/360vos_tune.txt``.
@@ -36,9 +41,11 @@ from track360.evaluation.comparison import (
     compareScores,
     groupChange,
     hardRegressions,
+    meanScores,
 )
 from track360.evaluation.vot360_metrics import Vot360Scores
 from track360.runtime.benchmark import (
+    DEFAULT_NOISE_STD,
     METHODS,
     Efficiency,
     evaluateResults,
@@ -74,6 +81,18 @@ def buildParser() -> argparse.ArgumentParser:
         help="i/n: run every n-th sequence starting at i, to split a run across processes",
     )
     run.add_argument("--no-resume", action="store_true", help="rerun finished sequences")
+    run.add_argument(
+        "--seeds",
+        default=None,
+        help="comma-separated noise seeds; each runs into <output-root>_s<seed> with "
+        "Gaussian noise added to the network inputs",
+    )
+    run.add_argument(
+        "--noise-std",
+        type=float,
+        default=DEFAULT_NOISE_STD,
+        help="standard deviation of that noise, in normalised input units",
+    )
     run.add_argument(
         "--probe",
         nargs="?",
@@ -126,8 +145,12 @@ def buildParser() -> argparse.ArgumentParser:
         "compare", help="difference between two runs with bootstrap confidence intervals"
     )
     _addCommon(compare, outputRoot=False)
-    compare.add_argument("--baseline", required=True, help="<output-root>:<method>")
-    compare.add_argument("--candidate", required=True, help="<output-root>:<method>")
+    compare.add_argument(
+        "--baseline",
+        required=True,
+        help="<output-root>:<method>; several roots separated by commas are averaged",
+    )
+    compare.add_argument("--candidate", required=True, help="same form as --baseline")
     compare.add_argument(
         "--hard-file",
         type=Path,
@@ -153,19 +176,26 @@ def main(argv: list[str] | None = None) -> int:
     try:
         sequences = _sequences(args)
         if args.command == "run":
-            summary = runBenchmark(
-                datasetRoot=args.dataset_root,
-                outputRoot=args.output_root,
-                labelRoot=args.label_root,
-                method=args.method,
-                config=loadConfig(args.config),
-                sequences=sequences,
-                maxFrames=args.max_frames,
-                resume=not args.no_resume,
-                shard=_parseShard(args.shard),
-                probe=_split(args.probe),
-            )
-            return 1 if summary.failures else 0
+            failed = False
+            seeds: list[int | None] = [int(item) for item in _split(args.seeds) or []] or [None]
+            for seed in seeds:
+                root = args.output_root if seed is None else seedRoot(args.output_root, seed)
+                summary = runBenchmark(
+                    datasetRoot=args.dataset_root,
+                    outputRoot=root,
+                    labelRoot=args.label_root,
+                    method=args.method,
+                    config=loadConfig(args.config),
+                    sequences=sequences,
+                    maxFrames=args.max_frames,
+                    resume=not args.no_resume,
+                    shard=_parseShard(args.shard),
+                    probe=_split(args.probe),
+                    noiseSeed=seed,
+                    noiseStd=args.noise_std,
+                )
+                failed = failed or bool(summary.failures)
+            return 1 if failed else 0
         if args.command == "archive":
             path = archiveRun(
                 datasetRoot=args.dataset_root,
@@ -312,10 +342,10 @@ def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
     hard = None if args.hard_file is None else readSequenceFile(args.hard_file)
     scores = []
     efficiency: dict[str, Efficiency | None] = {}
+    perSeed: dict[str, list[float]] = {}
     for label, reference in (("baseline", args.baseline), ("candidate", args.candidate)):
-        root, method = _parseRun(reference)
-        efficiency[label] = loadEfficiency(root, method, sequences)
-        scores.append(
+        roots, method = _parseRun(reference)
+        runs = [
             evaluateResults(
                 datasetRoot=args.dataset_root,
                 outputRoot=root,
@@ -323,7 +353,12 @@ def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
                 methods=[method],
                 only=sequences,
             )[method]["bbox"]
-        )
+            for root in roots.split(",")
+        ]
+        # Cost is read from the first root: the timings of seeded repeats are not pooled.
+        efficiency[label] = loadEfficiency(roots.split(",")[0], method, sequences)
+        perSeed[label] = [run.success for run in runs]
+        scores.append(meanScores(runs))
     comparison = compareScores(scores[0], scores[1], samples=args.samples)
     failed = () if hard is None else hardRegressions(comparison, hard)
     fragile = (
@@ -332,6 +367,9 @@ def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
         else groupChange(comparison, readSequenceFile(args.fragile_file), samples=args.samples)
     )
     print(formatComparison(comparison, args.baseline, args.candidate))
+    if any(len(values) > 1 for values in perSeed.values()):
+        print()
+        print(formatSeeds(perSeed))
     print()
     print(formatEfficiency(efficiency))
     if hard is not None:
@@ -346,6 +384,7 @@ def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
             json.dumps(
                 {
                     **_comparisonPayload(comparison, args, failed),
+                    "sDualPerRun": perSeed,
                     "fragileGroup": None
                     if fragile is None
                     else {
@@ -395,6 +434,27 @@ def formatComparison(comparison: Comparison, baseline: str, candidate: str) -> s
     if len(comparison.changes) > 10:
         lines.append("    ...")
     lines += [_changeLine(change) for change in comparison.changes[5:][-5:]]
+    return "\n".join(lines)
+
+
+def seedRoot(outputRoot: str | Path, seed: int) -> Path:
+    """Output root of one seeded repeat of a run."""
+    root = Path(outputRoot)
+    return root.with_name(f"{root.name}_s{seed}")
+
+
+def formatSeeds(perSeed: dict[str, list[float]]) -> str:
+    """S_dual of every run on each side, with the mean and the spread between runs."""
+    lines = ["S_dual of each run (all the sequences that run has)"]
+    for label, values in perSeed.items():
+        mean = sum(values) / len(values)
+        spread = (
+            (sum((value - mean) ** 2 for value in values) / (len(values) - 1)) ** 0.5
+            if len(values) > 1
+            else 0.0
+        )
+        listed = " ".join(f"{value:.3f}" for value in values)
+        lines.append(f"  {label:<10}{listed}   mean {mean:.3f}  sd {spread:.3f}  n={len(values)}")
     return "\n".join(lines)
 
 
