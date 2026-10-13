@@ -75,6 +75,8 @@ class PyTorchARTrackV2SeqSession:
         self._std = self._torch.tensor([0.229, 0.224, 0.225], device=self._device).view(
             3, 1, 1
         )
+        self._diagnostics = False
+        self._lastDiagnostics: dict[str, Any] = {}
         self._noiseGenerator: Any | None = None
         self._noiseStd = 0.0
         self._bins = int(modelConfig.BINS)
@@ -201,6 +203,15 @@ class PyTorchARTrackV2SeqSession:
         logits = output["feat"][0:4, :, 0 : self._bins * self._range]
         soft = (logits.softmax(-1) * self._binCenters).sum(dim=-1).permute(1, 0)
         x0, y0, x1, y1 = (float(value) for value in ((hard + soft) / 2.0)[0].tolist())
+        if self._diagnostics:
+            probabilities = logits.softmax(-1)[:, 0]
+            entropy = -(probabilities * probabilities.clamp_min(1e-12).log()).sum(-1)
+            self._lastDiagnostics = {
+                "coordEntropy": [float(value) for value in entropy.tolist()],
+                "coordPeak": [float(value) for value in probabilities.max(-1).values.tolist()],
+                "hardSoftGap": [float(value) for value in (hard - soft).abs()[0].tolist()],
+                "scoreFeature": output["score_feat"].reshape(-1).float().cpu().numpy(),
+            }
         scale = _SEARCH_SIZE / resizeFactor
         width = max(1.0, (x1 - x0) * scale)
         height = max(1.0, (y1 - y0) * scale)
@@ -263,6 +274,20 @@ class PyTorchARTrackV2SeqSession:
             raise ModelError(
                 f"cannot construct sequence-level ARTrackV2-B-256 from {self._weights}: {error}"
             ) from error
+
+    def enableDiagnostics(self, enabled: bool = True) -> None:
+        """Keep, for the last image of every pass, what the network knew beyond its box.
+
+        ``lastDiagnostics`` then holds the entropy and the peak probability of the four
+        coordinate distributions, the gap between their arg-max and their expectation,
+        and the token the score head reads.  Off by default: it costs a copy per pass.
+        """
+        self._diagnostics = bool(enabled)
+        self._lastDiagnostics = {}
+
+    @property
+    def lastDiagnostics(self) -> dict[str, Any]:
+        return dict(self._lastDiagnostics)
 
     def setInputNoise(self, seed: int | None, std: float = 0.0) -> None:
         """Add seeded Gaussian noise to every network input from now on; ``None`` stops it.

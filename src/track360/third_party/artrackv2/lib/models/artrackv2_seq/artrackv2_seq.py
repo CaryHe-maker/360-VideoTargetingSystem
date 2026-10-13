@@ -43,6 +43,8 @@ class ARTrackV2Seq(nn.Module):
 
         score = self.score_mlp(score_feat)
         out['score'] = score
+        # Track360: the token the score is read from, kept for diagnostics.
+        out['score_feat'] = score_feat
 
         z_1_feat = z_1_feat.reshape(z_1_feat.shape[0], int(z_1_feat.shape[1] ** 0.5), int(z_1_feat.shape[1] ** 0.5),
                                     z_1_feat.shape[2]).permute(0, 3, 1, 2)

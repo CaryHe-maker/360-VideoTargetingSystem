@@ -49,6 +49,8 @@ Modified from upstream, to keep only what inference needs:
       the training branch of forward() and the checkpoint loading inside
       build_artrackv2_seq() are removed; the decoder's output is no longer
       turned into an image and back into patches (2026-10-10; same values)
+      forward() also returns the token its score head reads, under the key
+      score_feat (2026-10-13; the other outputs are unchanged)
   lib/models/artrackv2_seq/base_backbone.py
       the attention mask and the command tokens, which depend only on the
       token counts, are built once and kept instead of on every forward pass
