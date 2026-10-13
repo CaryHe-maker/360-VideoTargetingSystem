@@ -16,6 +16,11 @@ Part 2, search candidates (``<signals>/candidates.npz``): tell a stateless pass 
 boxed the target (IoU >= 0.5) from one that boxed something else (IoU < 0.1).  The
 baseline is the score of that pass.
 
+Part 3, the candidates of a real run (``<signals>/trace_candidates.npz``): the model of
+part 2 applied to the boxes the searches of a run with loss handling returned, each
+looked at once more with a pass centred on it.  The table shows how many candidates
+each rule would accept and how many of those are on the target.
+
 Every model is fitted on three quarters of the sequences and judged on the rest, so no
 sequence is in both.  Reported: AUROC, and the share of lost frames (or of true
 candidates) caught when 2% and 5% of the good frames (or of false candidates) are let
@@ -47,7 +52,7 @@ E025_FEATURES = (
 )
 RATES = (0.02, 0.05)
 FOLDS = 4
-RIDGES = (1.0, 10.0, 100.0)
+RIDGES = (10.0, 100.0, 1000.0, 10000.0)
 
 
 def auroc(scores: np.ndarray, positive: np.ndarray) -> float:
@@ -93,7 +98,34 @@ def fitLogistic(matrix: np.ndarray, positive: np.ndarray, ridge: float):
     def score(other: np.ndarray) -> np.ndarray:
         return np.column_stack([np.ones(len(other)), (other - mean) / spread]) @ beta
 
+    score.parameters = (mean, spread, beta)  # type: ignore[attr-defined]
     return score
+
+
+def exportHead(args: argparse.Namespace, ridge: float) -> None:
+    """Write the candidate model as a head file the session can load.
+
+    One model per fold, each fitted without the sequences it is listed for, and one
+    fitted on everything for sequences outside the folds.  A run over the same
+    sequences then judges every candidate with a model that never saw its sequence.
+    """
+    data = np.load(args.signals / "candidates.npz")
+    keep = (data["iou"] >= 0.5) | (data["iou"] < 0.1)
+    token = data["scoreFeature"][keep].astype(np.float32)
+    onTarget = data["iou"][keep] >= 0.5
+    sequences = data["sequence"][keep]
+    arrays: dict[str, np.ndarray] = {}
+    parts = [(f"fold{index}", held) for index, held in enumerate(folds(sequences))]
+    parts.append(("all", np.zeros(len(onTarget), dtype=bool)))
+    for label, held in parts:
+        mean, spread, beta = fitLogistic(token[~held], onTarget[~held], ridge).parameters
+        arrays[f"{label}_mean"] = mean.astype(np.float32)
+        arrays[f"{label}_spread"] = spread.astype(np.float32)
+        arrays[f"{label}_beta"] = beta.astype(np.float32)
+        arrays[f"{label}_sequences"] = np.unique(sequences[held])
+    args.export.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(args.export, ridge=np.float32(ridge), **arrays)
+    print(f"\nhead written to {args.export} (ridge {ridge:g}, {len(parts) - 1} folds and 'all')")
 
 
 def folds(sequences: np.ndarray, seed: int = 0) -> list[np.ndarray]:
@@ -282,6 +314,69 @@ def searchCandidates(args: argparse.Namespace) -> dict[str, object]:
     return result
 
 
+def realCandidates(args: argparse.Namespace, ridge: float) -> dict[str, object]:
+    train = np.load(args.signals / "candidates.npz")
+    keep = (train["iou"] >= 0.5) | (train["iou"] < 0.1)
+    trainToken = train["scoreFeature"][keep].astype(np.float32)
+    trainTarget = train["iou"][keep] >= 0.5
+    trainSequences = train["sequence"][keep]
+    real = np.load(args.signals / "trace_candidates.npz")
+    token = real["scoreFeature"].astype(np.float32)
+    onTarget = real["onTarget"]
+    sequences = real["sequence"]
+    # Each real candidate is judged by the model that did not see its sequence.
+    learned = np.full(len(onTarget), np.nan)
+    for held in folds(trainSequences):
+        heldNames = set(trainSequences[held])
+        rows = np.asarray([name in heldNames for name in sequences])
+        if rows.any():
+            learned[rows] = fitLogistic(trainToken[~held], trainTarget[~held], ridge)(token[rows])
+    known = ~np.isnan(learned)
+    onTarget, learned = onTarget[known], learned[known]
+    original = real["originalScore"][known].astype(np.float64)
+    again = real["score"][known].astype(np.float64)
+    print(
+        f"\npart 3: {int(known.sum())} candidates of a real run, {int(onTarget.sum())} on the"
+        f" target ({onTarget.mean():.1%}); model with ridge {ridge:g}"
+    )
+    result: dict[str, object] = {
+        "candidates": int(known.sum()),
+        "onTarget": int(onTarget.sum()),
+        "auroc": {},
+    }
+    signals = {
+        "score of the search": original,
+        "score of the pass centred on it": again,
+        "score token model": learned,
+    }
+    for label, values in signals.items():
+        result["auroc"][label] = auroc(values, onTarget)
+        print(f"  AUROC {label:<34}{result['auroc'][label]:.3f}")
+    inUse = int((original >= 0.70).sum())
+    print(f"  {'rule':<46}{'accepted':>9}{'on target':>10}{'precision':>10}{'recall':>8}")
+    table = {}
+
+    def row(label: str, accepted: np.ndarray) -> None:
+        count, right = int(accepted.sum()), int((accepted & onTarget).sum())
+        table[label] = {"accepted": count, "onTarget": right}
+        precision = right / count if count else float("nan")
+        print(
+            f"  {label:<46}{count:>9}{right:>10}{precision:>10.1%}"
+            f"{right / max(1, int(onTarget.sum())):>8.1%}"
+        )
+
+    row("search score >= 0.70 (in use)", original >= 0.70)
+    for label, values in list(signals.items())[1:]:
+        for count in (inUse, 2 * inUse, 4 * inUse):
+            threshold = np.sort(values)[::-1][min(count, len(values)) - 1]
+            row(f"{label}: top {count}", values >= threshold)
+    cut = np.sort(learned)[::-1][min(4 * inUse, len(learned)) - 1]
+    both = (original >= 0.50) & (learned >= cut)
+    row("search score >= 0.50 and model in its top " + str(4 * inUse), both)
+    result["rules"] = table
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -291,6 +386,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--signals", type=Path, required=True)
     parser.add_argument("--features", type=Path, action="append", default=None)
     parser.add_argument("--json", type=Path, default=None)
+    parser.add_argument(
+        "--export", type=Path, default=None, help="write the candidate model as a head file"
+    )
     args = parser.parse_args(argv)
     warnings.filterwarnings("ignore")
     payload: dict[str, object] = {}
@@ -298,6 +396,10 @@ def main(argv: list[str] | None = None) -> int:
         payload["trackedBox"] = trackedBox(args)
     if (args.signals / "candidates.npz").is_file():
         payload["candidates"] = searchCandidates(args)
+    if args.export is not None:
+        exportHead(args, 100.0)
+    if (args.signals / "trace_candidates.npz").is_file():
+        payload["realCandidates"] = realCandidates(args, 100.0)
     if args.json is not None:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")

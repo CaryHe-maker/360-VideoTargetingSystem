@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from time import perf_counter_ns
 
-from track360.backends.artrack_model import ARTrackBackend
+from track360.backends.artrack_model import DETACHED_KEY, ARTrackBackend
 from track360.backends.observation import buildRgbObservation
 from track360.core.errors import ModelError, ProtocolError
 from track360.core.protocols import TrackerBackend as TrackerBackendProtocol
@@ -100,6 +100,7 @@ class TrackerBackendImpl(TrackerBackendProtocol):
         for view in views:
             if memory is not None:
                 memory.clear()
+                memory[DETACHED_KEY] = True
             started = perf_counter_ns()
             prediction = self._artrackBackend.inferBatch(
                 (view.rgb,),

@@ -29,6 +29,10 @@ _SEARCH_FACTOR = 4.0
 _BINS = 400
 
 
+# Set in a template's memory for a pass that must not use or change the tracker's state.
+DETACHED_KEY = "track360.detached"
+
+
 @dataclass(frozen=True, slots=True)
 class ARTrackPrediction:
     bbox: BBoxXYWH

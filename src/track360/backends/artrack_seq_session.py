@@ -28,6 +28,7 @@ from track360.backends.artrack_model import (
     _SEARCH_SIZE,
     _TEMPLATE_FACTOR,
     _TEMPLATE_SIZE,
+    DETACHED_KEY,
     ARTrackPrediction,
     ARTrackSession,
     ARTrackTemplate,
@@ -75,6 +76,8 @@ class PyTorchARTrackV2SeqSession:
         self._std = self._torch.tensor([0.229, 0.224, 0.225], device=self._device).view(
             3, 1, 1
         )
+        self._heads: dict[str, tuple[Any, Any, tuple[str, ...]]] = {}
+        self._head: tuple[Any, Any] | None = None
         self._diagnostics = False
         self._lastDiagnostics: dict[str, Any] = {}
         self._noiseGenerator: Any | None = None
@@ -184,6 +187,7 @@ class PyTorchARTrackV2SeqSession:
             device=self._device,
         )
         appearance = anchor.memory.get(_APPEARANCE_KEY)
+        detached = bool(anchor.memory.get(DETACHED_KEY))
         started = perf_counter_ns()
         with torch.inference_mode():
             if appearance is None:
@@ -227,6 +231,10 @@ class PyTorchARTrackV2SeqSession:
         mapped = _clipBox(mapped, image.shape[1], image.shape[0])
         # The score head regresses the IoU of its own box directly.
         score = float(np.clip(float(output["score"].reshape(-1)[0].item()), 0.0, 1.0))
+        if detached and self._head is not None:
+            weight, offset = self._head
+            logit = (weight * output["score_feat"].reshape(-1).float()).sum() + offset
+            score = float(self._torch.sigmoid(logit).item())
         return ARTrackPrediction(mapped, score, score, score), int(elapsed)
 
     def _loadModel(self) -> tuple[Any, Any]:
@@ -274,6 +282,39 @@ class PyTorchARTrackV2SeqSession:
             raise ModelError(
                 f"cannot construct sequence-level ARTrackV2-B-256 from {self._weights}: {error}"
             ) from error
+
+    def loadTargetHead(self, path: str | Path) -> None:
+        """Load a linear model on the score token that judges stateless passes.
+
+        Experimental (V2.1, evaluation-log E045): with a head loaded, the score of a
+        stateless pass is the head's probability that the box is on the target, not
+        the network's own score.  The file holds one model per fold with the sequences
+        it must be used for, and one for all other sequences (``selectTargetHead``).
+        """
+        data = np.load(Path(path), allow_pickle=False)
+        labels = sorted({key.rsplit("_", 1)[0] for key in data.files if key.endswith("_beta")})
+        self._heads = {}
+        for label in labels:
+            spread = self._torch.tensor(data[f"{label}_spread"], device=self._device)
+            beta = self._torch.tensor(data[f"{label}_beta"], device=self._device)
+            mean = self._torch.tensor(data[f"{label}_mean"], device=self._device)
+            # logit = b0 + sum(b * (x - mean) / spread) = offset + weight . x
+            weight = beta[1:] / spread
+            offset = beta[0] - (weight * mean).sum()
+            names = tuple(str(name) for name in data[f"{label}_sequences"])
+            self._heads[label] = (weight, offset, names)
+        if "all" not in self._heads:
+            raise ModelError(f"target head {path} has no model named 'all'")
+        self.selectTargetHead(None)
+
+    def selectTargetHead(self, sequence: str | None) -> None:
+        """Use the model that was fitted without ``sequence``; ``None``: the one for all."""
+        if not self._heads:
+            return
+        label = next(
+            (key for key, (_, _, names) in self._heads.items() if sequence in names), "all"
+        )
+        self._head = self._heads[label][:2]
 
     def enableDiagnostics(self, enabled: bool = True) -> None:
         """Keep, for the last image of every pass, what the network knew beyond its box.

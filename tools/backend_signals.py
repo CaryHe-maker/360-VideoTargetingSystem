@@ -24,11 +24,18 @@ in the picture, with views of the normal size laid
 
 and writes them to ``<out>/candidates.npz`` with the IoU of each returned box.  It
 answers: can a search candidate be told from the target better than by its score?
+
+``trace`` does the same for the candidates a run with loss handling really met: every
+box its searches returned (read from the run's state trace) is looked at once more with
+a stateless pass of the normal size centred on it, and the result is written to
+``<out>/trace_candidates.npz`` with the candidate's original score and verdict.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
+import json
 import sys
 import warnings
 from collections.abc import Sequence
@@ -244,11 +251,128 @@ def candidates(args: argparse.Namespace) -> int:
     return 0
 
 
+def traceCandidates(args: argparse.Namespace) -> int:
+    config = loadConfig(args.config)
+    dataset = Vot360Dataset(args.dataset_root, args.label_root)
+    session = createArtrackSession(config)
+    session.enableDiagnostics(True)
+    planner = ViewPlanner(config.geometry, config.tracking, config.backendTuning)
+    rows: list[dict[str, Any]] = []
+    meta: list[tuple] = []
+    names = readSequenceFile(args.sequence_file)
+    try:
+        for number, name in enumerate(names, 1):
+            path = args.run / "trace" / args.method / f"{name}.csv"
+            if not path.exists():
+                continue
+            with path.open(encoding="utf-8") as stream:
+                searched = [
+                    (int(row["frame"]), row["scan"], json.loads(row["candidates"] or "[]"))
+                    for row in csv.DictReader(stream)
+                ]
+            searched = [item for item in searched if item[2]]
+            if not searched:
+                continue
+            sequence = dataset.sequence(name)
+            truthBox, present = sequence.groundTruth("bbox")
+            truthBfov, _ = sequence.groundTruth("bfov")
+            present = np.asarray(present, dtype=bool)
+            width = sequence.frameSize[0]
+            runtime = buildRuntime(config, artrackSessionFactory=lambda _: _SharedSession(session))
+            try:
+                first = FramePacket(SequenceId(name), FrameIndex(0), 0, sequence.readRgb(0))
+                plan = runtime.controller.buildInitialization(
+                    first, initialBfov=sequence.initialBfov()
+                )
+                template = runtime.geometry.cropViews(first, [plan.templateView])[0]
+                runtime.backend.initialize(template, plan.templateBox)
+                for index, scan, found in searched:
+                    frame = FramePacket(
+                        SequenceId(name), FrameIndex(index), index, sequence.readRgb(index)
+                    )
+                    height = frame.rgb.shape[0]
+                    for candidate in found:
+                        side = min(max(np.radians(float(candidate["sizeDeg"])), 1e-4), pi - 1e-3)
+                        centre = makeSphericalPoint(
+                            np.radians(float(candidate["yawDeg"])),
+                            np.radians(float(candidate["pitchDeg"])),
+                        )
+                        spec = planner._searchView(centre, side, side)
+                        again = runtime.backend.inferDetached(
+                            (runtime.geometry.cropViews(frame, [spec])[0],)
+                        )
+                        if not again:
+                            continue
+                        onTarget, overlap = False, 0.0
+                        if present[index]:
+                            yaw, pitch = np.radians(truthBfov[index, 0:2])
+                            truth = makeSphericalPoint(yaw, pitch)
+                            cosine = truth.x * centre.x + truth.y * centre.y + truth.z * centre.z
+                            size = sqrt(max(truthBfov[index, 2] * truthBfov[index, 3], 1e-6))
+                            onTarget = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))) < (
+                                0.5 * max(size, float(candidate["sizeDeg"]))
+                            )
+                            try:
+                                box = runtime.geometry.projectLocalBoxBoundary(
+                                    again[0].bbox, spec, width, height
+                                ).bbox
+                                overlap = float(
+                                    dualIou(
+                                        truthBox[index : index + 1],
+                                        np.asarray(
+                                            [[box.xPx, box.yPx, box.widthPx, box.heightPx]]
+                                        ),
+                                        width,
+                                    )[0]
+                                )
+                            except Exception:
+                                overlap = 0.0
+                        rows.append(
+                            {**session.lastDiagnostics, "score": float(again[0].fusedScore)}
+                        )
+                        meta.append(
+                            (
+                                name,
+                                index,
+                                scan,
+                                candidate["verdict"],
+                                float(candidate["score"]),
+                                int(bool(onTarget)),
+                                overlap,
+                                int(present[index]),
+                            )
+                        )
+                    releaseFrame = getattr(runtime.geometry, "releaseFrame", None)
+                    if callable(releaseFrame):
+                        releaseFrame()
+            finally:
+                closeRuntime(runtime)
+                sequence.close()
+            print(f"[{number}/{len(names)}] {name}: {len(rows)} passes so far", flush=True)
+    finally:
+        session.close()
+    args.out.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        args.out / "trace_candidates.npz",
+        **_stack(rows),
+        sequence=np.asarray([item[0] for item in meta]),
+        frame=np.asarray([item[1] for item in meta]),
+        scan=np.asarray([item[2] for item in meta]),
+        verdict=np.asarray([item[3] for item in meta]),
+        originalScore=np.asarray([item[4] for item in meta], dtype=np.float32),
+        onTarget=np.asarray([item[5] for item in meta], dtype=bool),
+        iou=np.asarray([item[6] for item in meta], dtype=np.float32),
+        present=np.asarray([item[7] for item in meta], dtype=bool),
+    )
+    print(f"{len(rows)} passes written to {args.out / 'trace_candidates.npz'}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("command", choices=("freerun", "candidates"))
+    parser.add_argument("command", choices=("freerun", "candidates", "trace"))
     parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--label-root", default=None)
     parser.add_argument("--sequence-file", type=Path, required=True)
@@ -264,9 +388,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "freerun":
         return freerun(args)
     if args.run is None:
-        print("candidates needs --run", file=sys.stderr)
+        print(f"{args.command} needs --run", file=sys.stderr)
         return 2
-    return candidates(args)
+    return traceCandidates(args) if args.command == "trace" else candidates(args)
 
 
 if __name__ == "__main__":
