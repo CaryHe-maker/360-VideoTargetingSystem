@@ -518,6 +518,7 @@ def detectionData(args: argparse.Namespace):
 
 
 def candidateData(args: argparse.Namespace):
+    """Real search candidates of the runs under ``--runs``; one row per candidate."""
     parts: dict[str, list] = {
         k: []
         for k in (
@@ -572,11 +573,37 @@ def candidateData(args: argparse.Namespace):
         "qRows": np.asarray(parts["qRows"], dtype=bool),
         "p": np.asarray(parts["p"], dtype=bool),
     }
+    scalars = np.concatenate(parts["scalars"])
+    token = np.concatenate(parts["token"])
     references = {
         "reference: search score": np.asarray(parts["search"], dtype=float),
+        # The pass the label is read from: the fair reference for the Q label.
+        "reference: recentred-pass score": scalars[:, 1].astype(float),
         "reference: DINOv2 similarity": np.asarray(parts["similarity"], dtype=float),
     }
-    return data, np.concatenate(parts["scalars"]), np.concatenate(parts["token"]), references
+    if args.relative_signals is not None:
+        # Each sequence's own stateless token on the target in its first frames: the
+        # stateless passes around the true target on frames 5-30 of E045 (a running
+        # tracker would make such a pass on the frames it trusts after initialisation).
+        base = np.load(args.relative_signals / "candidates.npz")
+        early = (base["kind"] == "near") & (base["frame"] <= 30) & (base["iou"] >= 0.5)
+        own = {
+            name: base["scoreFeature"][early & (base["sequence"] == name)]
+            .astype(np.float32)
+            .mean(0)
+            for name in np.unique(base["sequence"][early])
+        }
+        missing = sorted(set(np.unique(data["groups"])) - set(own))
+        if missing:
+            print(f"no early reference token for {missing}: those candidates are left out")
+        keep = np.isin(data["groups"], list(own))
+        token = token - np.stack(
+            [own.get(name, np.zeros(token.shape[1])) for name in data["groups"]]
+        )
+        data = {key: value[keep] for key, value in data.items()}
+        scalars, token = scalars[keep], token[keep]
+        references = {key: value[keep] for key, value in references.items()}
+    return data, scalars, token, references
 
 
 def runTransfer(data, scalars, token, out: Path) -> dict:
@@ -630,6 +657,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--grid", choices=sorted(GRIDS), default="first")
+    parser.add_argument(
+        "--relative-signals",
+        type=Path,
+        default=None,
+        help="candidates: subtract each sequence's early stateless token (from this E045 folder)",
+    )
     parser.add_argument(
         "--relative",
         type=int,
