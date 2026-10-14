@@ -11,10 +11,12 @@ The quantities (registered in evaluation-log E049 before this round ran):
     P1  classification: is the target's centre inside the normal-size view around the
         box (within one half-width, i.e. two sizes)?
     P2  regression: how likely the backend boxes the target from where it is in that
-        view.  Its label is the backend's measured success rate as a function of the
-        target's distance from the view's centre (in half-widths), estimated on the
-        training sequences of each fold only, falling with distance; 0 when the target
-        is not in the picture.
+        view.  Its label is a fixed function of the target's distance from the view's
+        centre (in half-widths of a normal-size view): 1 at the centre, the backend's
+        measured success rate at the middle of each ring (evaluation log E034, 1,559
+        searches of baseline 2 in normal-size views), straight lines in between, 0 at
+        the view's edge and beyond, and 0 when the target is not in the picture.  It
+        depends only on where the target really is, never on the box the pass returned.
     Q   regression: the IoU of the box with the ground truth, learned only on the rows
         whose target is inside the view.
 
@@ -45,7 +47,6 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
-from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import GroupKFold
@@ -58,7 +59,11 @@ from head_study import E025_SEVEN, Clip, TokenPca  # noqa: E402
 OUTER_FOLDS, INNER_FOLDS, SPLITS = 4, 3, (0, 1, 2)
 GAP_ALLOWANCE, GAP_LIMIT, OVERSHOOT_LIMIT, MARGIN = 0.03, 0.10, 2.0, 0.02
 SEQUENCE_DIRECTIONS = 8
-DISTANCE_EDGES = (0.0, 0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0, 1e9)
+# P2's nodes: distance from the view's centre in half-widths, and the share of the
+# E034 searches (normal-size view, stateless pass) whose box landed on the target.
+# The centre is set to 1 and the edge to 0 (a target outside the view cannot be boxed).
+P2_NODES = (0.0, 0.0625, 0.1875, 0.375, 0.625, 0.875, 1.0)
+P2_VALUES = (1.0, 33 / 33, 38 / 39, 55 / 67, 27 / 47, 13 / 56, 0.0)
 
 CLASSIFIER_C = (1e-2, 1e-3, 1e-4, 1e-5)
 RIDGE_ALPHA = (1e2, 1e3, 1e4, 1e5)
@@ -204,23 +209,17 @@ class Head:
             return data["inside"][rows].astype(float), np.ones(len(rows), dtype=bool)
         if self.quantity == "Q":
             return data["iou"][rows], data["inside"][rows]
-        # P2: the backend's measured success rate at that distance, from these rows only.
-        self.curve_ = successCurve(data, rows)
-        label = np.where(data["present"][rows], self.curve_(data["distance"][rows]), 0.0)
+        # P2: a fixed function of where the target really is (not refitted per fold).
+        label = np.where(data["present"][rows], successCurve(data["distance"][rows]), 0.0)
         return label, np.ones(len(rows), dtype=bool)
 
     def score(self, data: dict, rows: np.ndarray) -> np.ndarray:
         return predict(self.model_, self.task, self._features(data["x"][rows], data["nScalars"]))
 
 
-def successCurve(data: dict, rows: np.ndarray):
-    """Share of rows whose box is on the target, by distance from the view's centre."""
-    present = rows[data["present"][rows]]
-    distance = np.minimum(data["distance"][present], DISTANCE_EDGES[-2])
-    hit = (data["iou"][present] >= 0.5).astype(float)
-    curve = IsotonicRegression(increasing=False, out_of_bounds="clip", y_min=0.0, y_max=1.0)
-    curve.fit(distance, hit, sample_weight=weights(data["groups"][present]))
-    return lambda d: curve.predict(np.minimum(d, DISTANCE_EDGES[-2]))
+def successCurve(distance: np.ndarray) -> np.ndarray:
+    """P2's label: the backend's measured chance of boxing a target this far off centre."""
+    return np.interp(distance, P2_NODES, P2_VALUES, left=1.0, right=0.0)
 
 
 # ---------------------------------------------------------------- evaluation
@@ -291,7 +290,7 @@ def ownMetrics(head: Head, data: dict, held: np.ndarray, scores: np.ndarray) -> 
     if head.quantity == "Q":
         inside = data["inside"][held]
         return {"ownSpearman": ownScore("regress", data["iou"][held][inside], scores[inside])}
-    label = np.where(data["present"][held], head.curve_(data["distance"][held]), 0.0)
+    label = np.where(data["present"][held], successCurve(data["distance"][held]), 0.0)
     return {"ownSpearman": ownScore("regress", label, scores)}
 
 
