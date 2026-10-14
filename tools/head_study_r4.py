@@ -251,8 +251,17 @@ class Combo:
     def fresh(self) -> Combo:
         return Combo(self.mode)
 
+    # Round 6: the P head learned by trees (its threshold held on new sequences).
+    KINDS = {"P1treesxQ": {"P1": "trees"}, "P2treesxQ": {"P2": "trees"}}
+
+    def kindOf(self, quantity: str) -> str:
+        return self.KINDS.get(self.mode, {}).get(quantity, "linear")
+
     def fit(self, data: dict, rows: np.ndarray, seed: int) -> Combo:
-        self.heads_ = {q: Head(q, "linear", False).fit(data, rows, seed) for q in ("P1", "P2", "Q")}
+        needed = {"P1treesxQ": ("P1", "Q"), "P2treesxQ": ("P2", "Q")}.get(
+            self.mode, ("P1", "P2", "Q")
+        )
+        self.heads_ = {q: Head(q, self.kindOf(q), False).fit(data, rows, seed) for q in needed}
         self.params_ = {q: head.params_ for q, head in self.heads_.items()}
         if self.mode != "stack":
             return self
@@ -283,6 +292,11 @@ class Combo:
         return np.column_stack([columns[:, 2], np.log(p1 / (1 - p1)), columns[:, 1]])
 
     def score(self, data: dict, rows: np.ndarray) -> np.ndarray:
+        if self.mode in self.KINDS:
+            (pq, head), (_, qHead) = list(self.heads_.items())
+            return np.clip(head.score(data, rows), 0.0, 1.0) * np.clip(
+                qHead.score(data, rows), 0.0, 1.0
+            )
         columns = np.column_stack([self.heads_[q].score(data, rows) for q in ("P1", "P2", "Q")])
         q = np.clip(columns[:, 2], 0.0, 1.0)
         if self.mode == "P1xQ":
@@ -485,7 +499,7 @@ def run(
     out: Path,
     catchNegatives: bool,
     only: list[str] | None = None,
-    combos: bool = False,
+    combos: list[str] | None = None,
 ) -> None:
     print(
         f"decision rows: {int(data['decision'][data['decisionRows']].sum())} positive,"
@@ -511,7 +525,7 @@ def run(
             results[head.name], firsts[head.name] = evaluateHead(head, None, data, catchNegatives)
             print(line(head.name, results[head.name]), flush=True)
     if combos:
-        for mode in ("P1xQ", "P2xQ", "stack"):
+        for mode in combos:
             combo = Combo(mode)
             results[combo.name], firsts[combo.name] = evaluateHead(
                 combo, None, data, catchNegatives
@@ -735,8 +749,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--only", action="append", default=None, help="head names to run")
-    parser.add_argument("--combos", action="store_true", help="also the round-5 combinations")
+    parser.add_argument(
+        "--combos",
+        nargs="?",
+        const="P1xQ,P2xQ,stack",
+        default=None,
+        help="also these combinations (default: the three of round 5)",
+    )
     args = parser.parse_args(argv)
+    args.combos = args.combos.split(",") if args.combos else None
     warnings.filterwarnings("ignore")
     if args.side == "candidates":
         data, references = candidateData(args.runs)
