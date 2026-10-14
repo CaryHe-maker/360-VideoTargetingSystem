@@ -178,8 +178,14 @@ class Head:
         token = removeDirections(x[:, nScalars:], self.directions_, self.centre_)
         return np.column_stack([x[:, :nScalars], token])
 
-    def fit(self, data: dict, rows: np.ndarray, seed: int) -> Head:
-        """Fit on ``rows`` (indices of training rows), choosing parameters inside them."""
+    def fresh(self) -> Head:
+        return Head(self.quantity, self.kind, self.remove)
+
+    def fit(self, data: dict, rows: np.ndarray, seed: int, fixed: dict | None = None) -> Head:
+        """Fit on ``rows`` (indices of training rows), choosing parameters inside them.
+
+        With ``fixed`` the parameters are taken as given and nothing is chosen.
+        """
         x, groups, n = data["x"], data["groups"], data["nScalars"]
         if self.remove:
             self.directions_ = sequenceDirections(x[rows, n:], groups[rows], SEQUENCE_DIRECTIONS)
@@ -189,7 +195,7 @@ class Head:
         features = self._features(x[train], n)
         y, g = target[use], groups[train]
         best, bestScore = None, -np.inf
-        options = grid(self.kind, self.task)
+        options = [fixed] if fixed is not None else grid(self.kind, self.task)
         if len(options) > 1:
             for params in options:
                 values = []
@@ -224,6 +230,68 @@ class Head:
         return predict(self.model_, self.task, self._features(data["x"][rows], data["nScalars"]))
 
 
+class Combo:
+    """P1, P2 and Q (each a linear head) combined into one judgement of a box.
+
+    ``P1xQ`` and ``P2xQ`` multiply the clipped outputs.  ``stack`` fits a logistic
+    regression on (Q, logit P1, P2) to the decision label, using predictions the three
+    heads made for training sequences they had not seen (3 inner folds), so the
+    combiner learns how reliable each head is on new sequences, not on its own data.
+    """
+
+    quantity = "combo"
+
+    def __init__(self, mode: str):
+        self.mode = mode
+
+    @property
+    def name(self) -> str:
+        return f"combination: {self.mode}"
+
+    def fresh(self) -> Combo:
+        return Combo(self.mode)
+
+    def fit(self, data: dict, rows: np.ndarray, seed: int) -> Combo:
+        self.heads_ = {q: Head(q, "linear", False).fit(data, rows, seed) for q in ("P1", "P2", "Q")}
+        self.params_ = {q: head.params_ for q, head in self.heads_.items()}
+        if self.mode != "stack":
+            return self
+        groups = data["groups"][rows]
+        oof = np.full((len(rows), 3), np.nan)
+        for inner, valid in splits(groups, seed + 200, INNER_FOLDS):
+            for column, (q, head) in enumerate(self.heads_.items()):
+                part = Head(q, "linear", False).fit(data, rows[inner], seed, fixed=head.params_)
+                oof[valid, column] = part.score(data, rows[valid])
+        use = data["decisionRows"][rows]
+        self.combiner_ = Pipeline(
+            [
+                ("scale", StandardScaler()),
+                ("model", LogisticRegression(C=1.0, class_weight="balanced", max_iter=1000)),
+            ]
+        )
+        self.combiner_.fit(
+            self._inputs(oof[use]),
+            data["decision"][rows][use],
+            model__sample_weight=weights(groups[use]),
+        )
+        self.params_["combiner"] = self.combiner_.named_steps["model"].coef_.round(3).tolist()
+        return self
+
+    @staticmethod
+    def _inputs(columns: np.ndarray) -> np.ndarray:
+        p1 = np.clip(columns[:, 0], 1e-4, 1 - 1e-4)
+        return np.column_stack([columns[:, 2], np.log(p1 / (1 - p1)), columns[:, 1]])
+
+    def score(self, data: dict, rows: np.ndarray) -> np.ndarray:
+        columns = np.column_stack([self.heads_[q].score(data, rows) for q in ("P1", "P2", "Q")])
+        q = np.clip(columns[:, 2], 0.0, 1.0)
+        if self.mode == "P1xQ":
+            return np.clip(columns[:, 0], 0.0, 1.0) * q
+        if self.mode == "P2xQ":
+            return np.clip(columns[:, 1], 0.0, 1.0) * q
+        return self.combiner_.predict_proba(self._inputs(columns))[:, 1]
+
+
 def successCurve(distance: np.ndarray) -> np.ndarray:
     """P2's label: the backend's measured chance of boxing a target this far off centre."""
     return np.interp(distance, P2_NODES, P2_VALUES, left=1.0, right=0.0)
@@ -243,7 +311,7 @@ def evaluateHead(head: Head | None, reference: np.ndarray | None, data: dict, ca
             if seed == SPLITS[0]:
                 foldOf[heldIdx] = fold
             if head is not None:
-                fitted = Head(head.quantity, head.kind, head.remove).fit(data, rows[trainIdx], seed)
+                fitted = head.fresh().fit(data, rows[trainIdx], seed)
                 trainScores = fitted.score(data, rows[trainIdx])
                 heldScores = fitted.score(data, rows[heldIdx])
                 own = ownMetrics(fitted, data, rows[heldIdx], heldScores)
@@ -297,7 +365,7 @@ def evaluateHead(head: Head | None, reference: np.ndarray | None, data: dict, ca
 
 
 def ownMetrics(head: Head, data: dict, held: np.ndarray, scores: np.ndarray) -> dict:
-    if head.quantity == "E025":
+    if head.quantity in ("E025", "combo"):
         return {}
     if head.quantity == "P1":
         return {"ownAuc": auc(data["inside"][held], scores)}
@@ -417,6 +485,7 @@ def run(
     out: Path,
     catchNegatives: bool,
     only: list[str] | None = None,
+    combos: bool = False,
 ) -> None:
     print(
         f"decision rows: {int(data['decision'][data['decisionRows']].sum())} positive,"
@@ -441,6 +510,13 @@ def run(
                 continue
             results[head.name], firsts[head.name] = evaluateHead(head, None, data, catchNegatives)
             print(line(head.name, results[head.name]), flush=True)
+    if combos:
+        for mode in ("P1xQ", "P2xQ", "stack"):
+            combo = Combo(mode)
+            results[combo.name], firsts[combo.name] = evaluateHead(
+                combo, None, data, catchNegatives
+            )
+            print(line(combo.name, results[combo.name]), flush=True)
     best = max(references, key=lambda name: results[name]["penalised"])
     bar = results[best]["penalised"] + MARGIN
     print(f"\nbest reference '{best}' (penalised {results[best]['penalised']:.3f}); bar {bar:.3f}")
@@ -659,14 +735,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--only", action="append", default=None, help="head names to run")
+    parser.add_argument("--combos", action="store_true", help="also the round-5 combinations")
     args = parser.parse_args(argv)
     warnings.filterwarnings("ignore")
     if args.side == "candidates":
         data, references = candidateData(args.runs)
-        run(data, references, args.out, catchNegatives=False, only=args.only)
+        run(data, references, args.out, catchNegatives=False, only=args.only, combos=args.combos)
     else:
         data, references = detectionData(args)
-        run(data, references, args.out, catchNegatives=True, only=args.only)
+        run(data, references, args.out, catchNegatives=True, only=args.only, combos=args.combos)
     return 0
 
 
