@@ -292,7 +292,7 @@ def traceCandidates(args: argparse.Namespace) -> int:
                         SequenceId(name), FrameIndex(index), index, sequence.readRgb(index)
                     )
                     height = frame.rgb.shape[0]
-                    for candidate in found:
+                    for order, candidate in enumerate(found):
                         side = min(max(np.radians(float(candidate["sizeDeg"])), 1e-4), pi - 1e-3)
                         centre = makeSphericalPoint(
                             np.radians(float(candidate["yawDeg"])),
@@ -304,15 +304,16 @@ def traceCandidates(args: argparse.Namespace) -> int:
                         )
                         if not again:
                             continue
-                        onTarget, overlap = False, 0.0
+                        onTarget, overlap, distance = False, 0.0, float("inf")
                         if present[index]:
                             yaw, pitch = np.radians(truthBfov[index, 0:2])
                             truth = makeSphericalPoint(yaw, pitch)
                             cosine = truth.x * centre.x + truth.y * centre.y + truth.z * centre.z
                             size = sqrt(max(truthBfov[index, 2] * truthBfov[index, 3], 1e-6))
-                            onTarget = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))) < (
-                                0.5 * max(size, float(candidate["sizeDeg"]))
-                            )
+                            angle = float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+                            onTarget = angle < 0.5 * max(size, float(candidate["sizeDeg"]))
+                            # How far the target is from the candidate, in candidate sizes.
+                            distance = angle / max(float(candidate["sizeDeg"]), 1e-3)
                             try:
                                 box = runtime.geometry.projectLocalBoxBoundary(
                                     again[0].bbox, spec, width, height
@@ -341,6 +342,10 @@ def traceCandidates(args: argparse.Namespace) -> int:
                                 int(bool(onTarget)),
                                 overlap,
                                 int(present[index]),
+                                order,
+                                float(candidate["sizeDeg"]),
+                                float(candidate.get("similarity") or 0.0),
+                                distance,
                             )
                         )
                     releaseFrame = getattr(runtime.geometry, "releaseFrame", None)
@@ -364,6 +369,10 @@ def traceCandidates(args: argparse.Namespace) -> int:
         onTarget=np.asarray([item[5] for item in meta], dtype=bool),
         iou=np.asarray([item[6] for item in meta], dtype=np.float32),
         present=np.asarray([item[7] for item in meta], dtype=bool),
+        order=np.asarray([item[8] for item in meta], dtype=np.int16),
+        sizeDeg=np.asarray([item[9] for item in meta], dtype=np.float32),
+        similarity=np.asarray([item[10] for item in meta], dtype=np.float32),
+        truthDistanceSizes=np.asarray([item[11] for item in meta], dtype=np.float32),
     )
     print(f"{len(rows)} passes written to {args.out / 'trace_candidates.npz'}")
     return 0
