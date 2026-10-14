@@ -160,14 +160,19 @@ class Head:
 
     def __init__(self, quantity: str, kind: str, remove: bool):
         self.quantity, self.kind, self.remove = quantity, kind, remove
-        self.task = "classify" if quantity == "P1" else "regress"
+        self.task = "classify" if quantity in ("P1", "E025") else "regress"
 
     @property
     def name(self) -> str:
+        if self.quantity == "E025":
+            return "reference: E025 seven, linear (nested)"
         how = {"linear": "linear", "trees": "trees"}[self.kind]
         return f"{self.quantity}, {how}{', sequence directions removed' if self.remove else ''}"
 
     def _features(self, x: np.ndarray, nScalars: int) -> np.ndarray:
+        if self.quantity == "E025":
+            # The detection scalars end with E025's seven features.
+            return x[:, nScalars - len(E025_SEVEN) : nScalars]
         if not self.remove:
             return x
         token = removeDirections(x[:, nScalars:], self.directions_, self.centre_)
@@ -207,6 +212,8 @@ class Head:
         """The label of each training row, and which training rows learn it."""
         if self.quantity == "P1":
             return data["inside"][rows].astype(float), np.ones(len(rows), dtype=bool)
+        if self.quantity == "E025":
+            return data["decision"][rows].astype(float), data["decisionRows"][rows]
         if self.quantity == "Q":
             return data["iou"][rows], data["inside"][rows]
         # P2: a fixed function of where the target really is (not refitted per fold).
@@ -290,6 +297,8 @@ def evaluateHead(head: Head | None, reference: np.ndarray | None, data: dict, ca
 
 
 def ownMetrics(head: Head, data: dict, held: np.ndarray, scores: np.ndarray) -> dict:
+    if head.quantity == "E025":
+        return {}
     if head.quantity == "P1":
         return {"ownAuc": auc(data["inside"][held], scores)}
     if head.quantity == "Q":
@@ -420,6 +429,11 @@ def run(
     for name, values in references.items():
         results[name], firsts[name] = evaluateHead(None, values, data, catchNegatives)
         print(line(name, results[name]), flush=True)
+    if data.get("learnedReference"):
+        head = Head("E025", "linear", False)
+        results[head.name], firsts[head.name] = evaluateHead(head, None, data, catchNegatives)
+        print(line(head.name, results[head.name]), flush=True)
+        references = {**references, head.name: firsts[head.name]}
     for quantity in ("P1", "P2", "Q"):
         for kind, remove in (("linear", False), ("linear", True), ("trees", False)):
             head = Head(quantity, kind, remove)
@@ -624,6 +638,7 @@ def detectionData(args: argparse.Namespace):
         "decision": iou >= 0.5,
         "decisionRows": (iou >= 0.5) | lost,
         "referenceShare": None,
+        "learnedReference": True,
     }
     references = {
         "reference: backend score": np.asarray(parts["score"], dtype=float),
