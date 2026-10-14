@@ -230,8 +230,11 @@ def evaluateHead(head: Head | None, reference: np.ndarray | None, data: dict, ca
     decision, decisionRows, groups = data["decision"], data["decisionRows"], data["groups"]
     rows = np.arange(len(groups))
     records, first = [], np.full(len(groups), np.nan)
+    foldOf = np.full(len(groups), -1)
     for seed in SPLITS:
-        for trainIdx, heldIdx in splits(groups, seed, OUTER_FOLDS):
+        for fold, (trainIdx, heldIdx) in enumerate(splits(groups, seed, OUTER_FOLDS)):
+            if seed == SPLITS[0]:
+                foldOf[heldIdx] = fold
             if head is not None:
                 fitted = Head(head.quantity, head.kind, head.remove).fit(data, rows[trainIdx], seed)
                 trainScores = fitted.score(data, rows[trainIdx])
@@ -281,7 +284,9 @@ def evaluateHead(head: Head | None, reference: np.ndarray | None, data: dict, ca
             records.append(record)
             if seed == SPLITS[0]:
                 first[heldIdx] = heldScores
-    return summarise(records), first
+    summary = summarise(records)
+    summary["foldOf"] = foldOf
+    return summary, first
 
 
 def ownMetrics(head: Head, data: dict, held: np.ndarray, scores: np.ndarray) -> dict:
@@ -356,7 +361,54 @@ def bootstrapGain(data: dict, scores: np.ndarray, reference: np.ndarray, samples
     }
 
 
-def run(data: dict, references: dict[str, np.ndarray], out: Path, catchNegatives: bool) -> None:
+def foldGain(
+    data: dict, folds: np.ndarray, scores: np.ndarray, reference: np.ndarray, samples=2000
+):
+    """Gain over the reference measured inside each split-0 fold, then averaged.
+
+    The scores of different folds come from different models.  Pooling them into one
+    AUROC penalises a model whose outputs shift from fold to fold (a regression's
+    predicted IoU does), so the comparison is made within folds; sequences are resampled
+    within their fold.
+    """
+    rows = data["decisionRows"]
+    y, g, f = data["decision"][rows], data["groups"][rows], folds[rows]
+    s, r = scores[rows], reference[rows]
+    blocks = {}
+    for fold in np.unique(f):
+        names = np.unique(g[f == fold])
+        blocks[fold] = {name: np.flatnonzero((f == fold) & (g == name)) for name in names}
+
+    def gainOf(pick: dict) -> float:
+        values = []
+        for fold, chosen in pick.items():
+            idx = np.concatenate(chosen)
+            values.append(auc(y[idx], s[idx]) - auc(y[idx], r[idx]))
+        return float(np.nanmean(values))
+
+    point = gainOf({fold: list(b.values()) for fold, b in blocks.items()})
+    rng = np.random.default_rng(0)
+    gains = []
+    for _ in range(samples):
+        pick = {}
+        for fold, b in blocks.items():
+            names = list(b)
+            pick[fold] = [b[names[i]] for i in rng.integers(0, len(names), len(names))]
+        gains.append(gainOf(pick))
+    return {
+        "gain": point,
+        "low": float(np.nanpercentile(gains, 2.5)),
+        "high": float(np.nanpercentile(gains, 97.5)),
+    }
+
+
+def run(
+    data: dict,
+    references: dict[str, np.ndarray],
+    out: Path,
+    catchNegatives: bool,
+    only: list[str] | None = None,
+) -> None:
     print(
         f"decision rows: {int(data['decision'][data['decisionRows']].sum())} positive,"
         f" {int((~data['decision'][data['decisionRows']]).sum())} negative;"
@@ -371,6 +423,8 @@ def run(data: dict, references: dict[str, np.ndarray], out: Path, catchNegatives
     for quantity in ("P1", "P2", "Q"):
         for kind, remove in (("linear", False), ("linear", True), ("trees", False)):
             head = Head(quantity, kind, remove)
+            if only is not None and head.name not in only:
+                continue
             results[head.name], firsts[head.name] = evaluateHead(head, None, data, catchNegatives)
             print(line(head.name, results[head.name]), flush=True)
     best = max(references, key=lambda name: results[name]["penalised"])
@@ -386,16 +440,26 @@ def run(data: dict, references: dict[str, np.ndarray], out: Path, catchNegatives
             reasons.append(f"G3 {item['G3']:.2f}")
         if item["penalised"] < bar:
             reasons.append(f"penalised {item['penalised']:.3f}")
-        gain = bootstrapGain(data, firsts[name], firsts[best])
-        item["gainOverReference"] = {"reference": best, **gain}
-        if gain["low"] <= 0:
-            reasons.append("gain interval reaches 0")
+        pooled = bootstrapGain(data, firsts[name], firsts[best])
+        within = foldGain(data, item["foldOf"], firsts[name], firsts[best])
+        item["gainOverReference"] = {"reference": best, "pooled": pooled, "withinFolds": within}
+        if within["low"] <= 0:
+            reasons.append("within-fold gain interval reaches 0")
         item["verdict"] = "passes" if not reasons else "out: " + "; ".join(reasons)
         print(
-            f"  {name:<46}gain {gain['gain']:+.3f} [{gain['low']:+.3f}, {gain['high']:+.3f}]"
+            f"  {name:<46}gain within folds {within['gain']:+.3f}"
+            f" [{within['low']:+.3f}, {within['high']:+.3f}]"
+            f"  (pooled {pooled['gain']:+.3f} [{pooled['low']:+.3f}, {pooled['high']:+.3f}])"
             f"  {item['verdict']}"
         )
     out.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        out / "held_scores_split0.npz",
+        **{key.replace(" ", "_").replace(",", "").replace(":", ""): v for key, v in firsts.items()},
+        foldOf=next(iter(results.values()))["foldOf"],
+    )
+    for item in results.values():
+        item.pop("foldOf", None)
     (out / "results.json").write_text(
         json.dumps(results, indent=1, default=str) + "\n", encoding="utf-8"
     )
@@ -579,14 +643,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--features", type=Path, action="append")
     parser.add_argument("--runs", type=Path)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--only", action="append", default=None, help="head names to run")
     args = parser.parse_args(argv)
     warnings.filterwarnings("ignore")
     if args.side == "candidates":
         data, references = candidateData(args.runs)
-        run(data, references, args.out, catchNegatives=False)
+        run(data, references, args.out, catchNegatives=False, only=args.only)
     else:
         data, references = detectionData(args)
-        run(data, references, args.out, catchNegatives=True)
+        run(data, references, args.out, catchNegatives=True, only=args.only)
     return 0
 
 
