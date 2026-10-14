@@ -28,10 +28,15 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from head_study_r4 import Head, auc, candidateData, detectionData  # noqa: E402
+from head_study_r4 import Combo, Head, auc, candidateData, detectionData  # noqa: E402
 
 
-def parseHead(text: str) -> Head:
+def parseHead(text: str) -> Head | Combo:
+    """A head by its name in the round-4 tables, a combination, or the E025 reference."""
+    if text.startswith("combination:"):
+        return Combo(text.partition(":")[2].strip())
+    if text.startswith("reference: E025"):
+        return Head("E025", "linear", False)
     quantity, _, rest = text.partition(",")
     rest = rest.strip()
     kind = "trees" if rest.startswith("trees") else "linear"
@@ -105,7 +110,9 @@ def main(argv: list[str] | None = None) -> int:
         trainScores[head.name] = head.score(train, np.arange(len(train["groups"])))[rows]
         results[head.name] = {"params": head.params_}
     # The reference to beat is the best one on dev train: nothing is chosen on dev test.
-    best = max(testRefs, key=lambda name: auc(y, trainScores[name]))
+    # Learned references (the E025 seven) count as references too.
+    referenceNames = [name for name in scores if name.startswith("reference:")]
+    best = max(referenceNames, key=lambda name: auc(y, trainScores[name]))
     share = train.get("referenceShare")
     print(
         f"\n  {'judge':<46}{'AUROC':>7}{'catch@5%':>10}{'false':>8}{'worst':>8}"
@@ -140,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         print(line)
     print(f"\ngain over the best dev-train reference ('{best}'), dev-test sequences resampled:")
     for name in scores:
-        if name in testRefs:
+        if name in referenceNames:
             continue
         low, high = bootstrap(yt, g, scores[name], scores[best])
         gain = results[name]["auroc"] - results[best]["auroc"]
