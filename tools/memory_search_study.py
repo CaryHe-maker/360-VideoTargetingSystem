@@ -58,6 +58,7 @@ from track360.evaluation.vot360_metrics import loadTrackerResults  # noqa: E402
 from track360.geometry.projection_math import makeSphericalPoint  # noqa: E402
 from track360.runtime.benchmark import _SharedSession  # noqa: E402
 from track360.runtime.driver import buildRuntime, closeRuntime  # noqa: E402
+from track360.runtime.gpu_lock import exclusiveGpuRun  # noqa: E402
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
 APPEARANCE_KEY = "appearance"
@@ -320,7 +321,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.run is None:
             print("--run is required unless --report-only", file=sys.stderr)
             return 2
-        run(args, path)
+        with exclusiveGpuRun():
+            run(args, path)
     with path.open(encoding="utf-8") as stream:
         rows: list[dict[str, object]] = list(csv.DictReader(stream))
     summary = report(rows)

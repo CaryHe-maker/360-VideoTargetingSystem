@@ -14,6 +14,7 @@ import json
 import logging
 from collections import deque
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -37,6 +38,7 @@ from track360.io.vot360_results import (
     writeSequenceResults,
 )
 from track360.runtime.driver import buildRuntime, closeRuntime, runTracking
+from track360.runtime.gpu_lock import exclusiveGpuRun
 from track360.runtime.reproducibility import collectRunMetadata, seedEverything
 
 LOGGER = logging.getLogger("track360.benchmark")
@@ -194,6 +196,41 @@ def runBenchmark(
     """
     if method not in METHODS:
         raise ProtocolError(f"unknown method '{method}'; available: {', '.join(METHODS)}")
+    # Only the real model needs the machine to itself; tests bring their own sessions.
+    with exclusiveGpuRun() if sessionFactory is None else nullcontext():
+        return _runLocked(
+            datasetRoot=datasetRoot,
+            outputRoot=outputRoot,
+            method=method,
+            config=config,
+            labelRoot=labelRoot,
+            sequences=sequences,
+            maxFrames=maxFrames,
+            resume=resume,
+            shard=shard,
+            sessionFactory=sessionFactory,
+            probe=probe,
+            noiseSeed=noiseSeed,
+            noiseStd=noiseStd,
+        )
+
+
+def _runLocked(
+    *,
+    datasetRoot: str | Path,
+    outputRoot: str | Path,
+    method: str,
+    config: AppConfig,
+    labelRoot: str | Path | None,
+    sequences: Sequence[str] | None,
+    maxFrames: int | None,
+    resume: bool,
+    shard: tuple[int, int],
+    sessionFactory: SessionFactory | None,
+    probe: Sequence[str] | None,
+    noiseSeed: int | None,
+    noiseStd: float,
+) -> BenchmarkSummary:
     dataset = Vot360Dataset(datasetRoot, labelRoot)
     names = _selectSequences(dataset, sequences, shard)
     output = Path(outputRoot)

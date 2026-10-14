@@ -59,6 +59,7 @@ from track360.evaluation.vot360_metrics import loadTrackerResults  # noqa: E402
 from track360.geometry.projection_math import makeSphericalPoint  # noqa: E402
 from track360.runtime.benchmark import _SharedSession, runBenchmark  # noqa: E402
 from track360.runtime.driver import buildRuntime, closeRuntime  # noqa: E402
+from track360.runtime.gpu_lock import exclusiveGpuRun  # noqa: E402
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
 SCALARS = ("coordEntropy", "coordPeak", "hardSoftGap")
@@ -386,11 +387,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     warnings.filterwarnings("ignore")
     if args.command == "freerun":
+        # The benchmark run inside takes the GPU lock itself.
         return freerun(args)
     if args.run is None:
         print(f"{args.command} needs --run", file=sys.stderr)
         return 2
-    return traceCandidates(args) if args.command == "trace" else candidates(args)
+    with exclusiveGpuRun():
+        return traceCandidates(args) if args.command == "trace" else candidates(args)
 
 
 if __name__ == "__main__":

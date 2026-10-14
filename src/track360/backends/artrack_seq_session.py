@@ -245,15 +245,19 @@ class PyTorchARTrackV2SeqSession:
 
             update_config_from_file(str(self._root / "artrackv2_seq_256_full.yaml"))
             model = build_artrackv2_seq(cfg, training=False)
+            # Mapped, not read: the 1.6 GB archive holds training state the model does
+            # not need, and reading it whole doubled the memory a run needs to start.
             try:
-                checkpoint = self._torch.load(self._weights, map_location="cpu", weights_only=True)
+                checkpoint = self._torch.load(
+                    self._weights, map_location="cpu", weights_only=True, mmap=True
+                )
             except Exception as safeError:
                 # Official ARTrack archives include legacy training meters in addition to
                 # ``net``; the checkpoint path is explicit and local, so fall back to the
                 # compatible loader after the safe attempt fails.
                 try:
                     checkpoint = self._torch.load(
-                        self._weights, map_location="cpu", weights_only=False
+                        self._weights, map_location="cpu", weights_only=False, mmap=True
                     )
                 except Exception:
                     raise safeError from None
@@ -267,6 +271,8 @@ class PyTorchARTrackV2SeqSession:
             # Strict: a sequence-level model that silently drops or lacks parameters
             # would run, but not as the model that was trained.
             model.load_state_dict(state, strict=True)
+            # The model holds copies now; release the mapped archive before moving on.
+            del checkpoint, state
             # The coordinate embedding is declared with ``max_norm``: PyTorch rescales a
             # row in place the first time it is looked up, and the same table is the
             # output projection.  The checkpoint still holds rows above the limit (bins

@@ -44,6 +44,7 @@ from track360.core.types import (
 )
 from track360.geometry import SphericalGeometryImpl
 from track360.io.result_sink import FileResultSink
+from track360.runtime.gpu_lock import isDeviceFailure
 from track360.runtime.reproducibility import seedEverything
 
 if TYPE_CHECKING:
@@ -455,7 +456,13 @@ def _fallbackFrameResult(
     frame: FramePacket,
     error: BaseException,
 ):
-    """Convert any expected runtime failure into one invalid frame result."""
+    """Convert any expected runtime failure into one invalid frame result.
+
+    A failure of the GPU itself is not converted: every later frame would fail the
+    same way and the sequence would end looking complete (evaluation log, E047).
+    """
+    if isDeviceFailure(error):
+        raise error
     print(
         "[runtime] frame failed; emitted zero-confidence fallback: "
         f"sequence={frame.sequenceId}, frame={int(frame.frameIndex)}, reason={error}",

@@ -44,6 +44,7 @@ from track360.evaluation.vot360_metrics import loadTrackerResults
 from track360.geometry.projection_math import makeSphericalPoint
 from track360.runtime.benchmark import _SharedSession
 from track360.runtime.driver import buildRuntime, closeRuntime
+from track360.runtime.gpu_lock import exclusiveGpuRun
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
 GOOD_IOU, LOST_IOU = 0.5, 0.1
@@ -280,7 +281,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.run is None:
             print("--run is required unless --report-only", file=sys.stderr)
             return 2
-        rows = run(args)
+        with exclusiveGpuRun():
+            rows = run(args)
         args.out.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
