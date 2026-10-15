@@ -1,7 +1,7 @@
 """Event-level comparison of candidate-judge runs with base 2 (evaluation log E051).
 
     python tools/judge_report.py --dataset-root <dir> --label-root <dir> \\
-        --base outputs/E043_base2 --candidate outputs/E051_T1 --seeds 1,2,3,4,5
+        --base outputs/E043_base2_s{1..5} --candidate outputs/E051_T1_s{1..5}
 
 For every enlarged-view search made with the target in the picture and inside the
 view, whether any returned candidate was on the target (gate 2, any candidate) and,
@@ -9,8 +9,10 @@ of those, whether the search ended in a jump that held (gate 3: mean IoU of the 
 10 frames >= 0.1).  The gates of ``loss_report.py`` judge only the candidate with the
 highest search score; a judge may take another one, so here any candidate counts.
 Also the precision of the taken candidates: the share of jumps whose candidate was on
-the target (all searches, the look in place included).  Each side pools its seeds;
-the 95% interval of the difference comes from resampling sequences.
+the target (all searches, the look in place included).  Each side pools its runs.
+The 95% interval of the difference resamples both sequences and, within each side,
+runs: with sequences alone the interval leaves out how much the events move between
+seeds, and two seeds of base 2 against two others came out "different" (E051).
 """
 
 from __future__ import annotations
@@ -91,9 +93,9 @@ def counts(root: Path, args: argparse.Namespace, dataset: Vot360Dataset) -> dict
     return {name: np.asarray(values) for name, values in table.items()}
 
 
-def pooled(table: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
-    names = sorted(set().union(*table))
-    return {name: sum(t.get(name, np.zeros(7, int)) for t in table) for name in names}
+def stacked(tables: list[dict[str, np.ndarray]], names: list[str]) -> np.ndarray:
+    """Runs x sequences x counts."""
+    return np.stack([[t.get(name, np.zeros(7, int)) for name in names] for t in tables])
 
 
 def ratio(totals: np.ndarray, top: int, bottom: int) -> float:
@@ -106,21 +108,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--label-root", default=None)
-    parser.add_argument("--base", required=True, help="output root before _s<seed>")
-    parser.add_argument("--candidate", required=True, help="output root before _s<seed>")
-    parser.add_argument("--seeds", default="1,2,3,4,5")
+    parser.add_argument("--base", nargs="+", type=Path, required=True, help="output roots")
+    parser.add_argument("--candidate", nargs="+", type=Path, required=True, help="output roots")
     parser.add_argument("--method", default="ours")
     parser.add_argument("--json", type=Path, default=None)
     args = parser.parse_args(argv)
     warnings.filterwarnings("ignore")
     dataset = Vot360Dataset(args.dataset_root, args.label_root)
-    seeds = [int(s) for s in args.seeds.split(",")]
-    sides = {}
-    for label, root in (("base", args.base), ("candidate", args.candidate)):
-        sides[label] = pooled([counts(Path(f"{root}_s{s}"), args, dataset) for s in seeds])
-    names = sorted(set(sides["base"]) & set(sides["candidate"]))
-    a = np.stack([sides["base"][n] for n in names])
-    b = np.stack([sides["candidate"][n] for n in names])
+    tablesA = [counts(root, args, dataset) for root in args.base]
+    tablesB = [counts(root, args, dataset) for root in args.candidate]
+    names = sorted(set().union(*tablesA) & set().union(*tablesB))
+    a, b = stacked(tablesA, names), stacked(tablesB, names)
     metrics = {
         "gate2 (any candidate on target)": (1, 0),
         "gate3 (held jump | any on target)": (2, 1),
@@ -129,12 +127,24 @@ def main(argv: list[str] | None = None) -> int:
     }
     rng = np.random.default_rng(0)
     picks = rng.integers(0, len(names), size=(SAMPLES, len(names)))
-    result: dict[str, object] = {"sequences": len(names), "seeds": seeds, "metrics": {}}
-    print(f"{len(names)} sequences, seeds {seeds}; totals over seeds")
+
+    def resampled(side: np.ndarray) -> np.ndarray:
+        """Totals of every resample: sequences drawn, then runs drawn."""
+        perRun = side[:, picks].sum(2)  # runs x samples x counts
+        runs = rng.integers(0, len(side), size=(SAMPLES, len(side)))
+        return perRun[runs, np.arange(SAMPLES)[:, None]].sum(1)
+
+    sa, sb = resampled(a), resampled(b)
+    result: dict[str, object] = {
+        "sequences": len(names),
+        "base": [str(root) for root in args.base],
+        "candidate": [str(root) for root in args.candidate],
+        "metrics": {},
+    }
+    print(f"{len(names)} sequences; {len(args.base)} and {len(args.candidate)} runs pooled")
     for label, (top, bottom) in metrics.items():
-        ta, tb = a.sum(0), b.sum(0)
+        ta, tb = a.sum((0, 1)), b.sum((0, 1))
         va, vb = ratio(ta, top, bottom), ratio(tb, top, bottom)
-        sa, sb = a[picks].sum(1), b[picks].sum(1)
         with np.errstate(invalid="ignore", divide="ignore"):
             diff = sb[:, top] / sb[:, bottom] - sa[:, top] / sa[:, bottom]
         low, high = np.nanpercentile(diff, [2.5, 97.5])
