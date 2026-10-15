@@ -149,6 +149,8 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._lastScan = ""
         self._scanPrepaid = 0
         self._lastFrameTrace: dict[str, object] = {}
+        # With a learned candidate judge, the score a candidate needs from it.
+        self._judgeThreshold: float | None = None
 
     @property
     def lossStatistics(self) -> dict[str, object]:
@@ -389,6 +391,20 @@ class TrackControllerImpl(TrackControllerProtocol):
         )
         return (view,), True
 
+    def useCandidateJudge(self, threshold: float | None) -> None:
+        """Take search candidates by their judge score (experimental, E051); None: off."""
+        self._judgeThreshold = None if threshold is None else float(threshold)
+
+    @property
+    def currentScan(self) -> str:
+        """The scan of the frame being planned: "1x", "2x", "4x" or ""."""
+        return self._lastScan
+
+    def recentredView(self, center: SphericalPoint, sizeRad: float) -> ViewSpec:
+        """A normal-size search view centred on a candidate of angular size ``sizeRad``."""
+        side = min(max(sizeRad, 1e-4), pi - 1e-3)
+        return self._planner._searchView(center, side, side)
+
     def settleScan(self, forwards: int) -> None:
         """Charge the scan of the frame what it really cost."""
         if self._backendTuning.scanBudgetPerFrame > 0.0 and self._scanPrepaid:
@@ -525,10 +541,19 @@ class TrackControllerImpl(TrackControllerProtocol):
         best: ProjectedObservation | None = None
         records: list[dict[str, object]] = []
         bestRecord: dict[str, object] | None = None
+        judged = self._judgeThreshold is not None
         for candidate in candidates:
             similarity = candidate.appearanceSimilarity
             score = _observationScore(candidate)
-            verdict = "low_score" if score < self._backendTuning.reacquireScore else "not_best"
+            if judged:
+                # The learned judge decides instead of the score (evaluation log E051).
+                verdict = (
+                    "low_score"
+                    if candidate.judgeScore is None or candidate.judgeScore < self._judgeThreshold
+                    else "not_best"
+                )
+            else:
+                verdict = "low_score" if score < self._backendTuning.reacquireScore else "not_best"
             if verdict == "not_best" and self._actions == "move" and self._onCurrentBox(candidate):
                 verdict = "same_place"
             record: dict[str, object] = {
@@ -538,12 +563,12 @@ class TrackControllerImpl(TrackControllerProtocol):
                 "verdict": verdict,
                 **_place(candidate.bfov),
             }
+            if judged:
+                record["judge"] = (
+                    None if candidate.judgeScore is None else round(float(candidate.judgeScore), 6)
+                )
             records.append(record)
-            if verdict == "not_best" and (
-                best is None
-                or (similarity if similarity is not None else -1.0)
-                > (best.appearanceSimilarity if best.appearanceSimilarity is not None else -1.0)
-            ):
+            if verdict == "not_best" and (best is None or _preferred(candidate, best, judged)):
                 best, bestRecord = candidate, record
         if bestRecord is not None:
             bestRecord["verdict"] = "accepted"
@@ -758,6 +783,17 @@ class TrackControllerImpl(TrackControllerProtocol):
             raise ProtocolError(
                 f"frame index must be {self._lastFrameIndex + 1}, actual={frame.frameIndex}"
             )
+
+
+def _preferred(candidate: ProjectedObservation, best: ProjectedObservation, judged: bool) -> bool:
+    """Whether an accepted candidate beats the best one so far."""
+    if judged:
+        return float(candidate.judgeScore or 0.0) > float(best.judgeScore or 0.0)
+    similarity = candidate.appearanceSimilarity
+    bestSimilarity = best.appearanceSimilarity
+    return (similarity if similarity is not None else -1.0) > (
+        bestSimilarity if bestSimilarity is not None else -1.0
+    )
 
 
 def _observationScore(observation: ProjectedObservation) -> float:

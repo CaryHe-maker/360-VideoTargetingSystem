@@ -27,7 +27,7 @@ from track360.controller import (
     withScoreProbability,
 )
 from track360.core.config import AppConfig, ModelConfig
-from track360.core.errors import DecodeError, GeometryError
+from track360.core.errors import DecodeError, GeometryError, ProtocolError
 from track360.core.protocols import FrameSource as FrameSourceProtocol
 from track360.core.protocols import ResultSink as ResultSinkProtocol
 from track360.core.protocols import SphericalGeometry, TrackerBackend
@@ -63,6 +63,10 @@ class RuntimeBundle:
     sink: ResultSinkProtocol
     verifier: Any | None = None
     recorder: VisualizationRecorder | None = None
+    # Experimental (E051): a learned judge of search candidates and the session whose
+    # diagnostics it reads.
+    judge: Any | None = None
+    judgeSession: Any | None = None
 
 
 class _PrefetchReader:
@@ -152,6 +156,7 @@ def buildRuntime(
     artrackSessionFactory: Callable[[ModelConfig], ARTrackSession] | None = None,
     geometryFactory: Callable[[int], SphericalGeometry] | None = None,
     profile: bool = False,
+    candidateJudge: Any | None = None,
 ) -> RuntimeBundle:
     tuning = config.backendTuning
     seedEverything(config.reproducibility)
@@ -179,6 +184,10 @@ def buildRuntime(
         from track360.backends.appearance import AppearanceVerifier
 
         verifier = AppearanceVerifier("dinov2", Path(config.model.weights).parent / "hub")
+    if candidateJudge is not None:
+        if verifier is None:
+            raise ProtocolError("a candidate judge needs loss handling")
+        controller.useCandidateJudge(candidateJudge.threshold)
     return RuntimeBundle(
         geometry=geometry,
         controller=controller,
@@ -186,6 +195,8 @@ def buildRuntime(
         sink=sink,
         recorder=recorder,
         verifier=verifier,
+        judge=candidateJudge,
+        judgeSession=rgbSession if candidateJudge is not None else None,
     )
 
 
@@ -205,6 +216,8 @@ def runTracking(
     probe: Any | None = None,
     verifier: Any | None = None,
     trace: list[dict[str, object]] | None = None,
+    judge: Any | None = None,
+    judgeSession: Any | None = None,
 ) -> int:
     """Run the sequential tracking pipeline and publish one result per frame.
 
@@ -344,6 +357,19 @@ def runTracking(
                                     )
                                     forwardCount += scanForwards
                                     controller.settleScan(scanForwards)
+                                    if judge is not None and candidates:
+                                        # Not charged to the scan budget: the search
+                                        # stays as it was, only the decision changes.
+                                        candidates, judgeForwards = _judgeCandidates(
+                                            frame=frame,
+                                            candidates=candidates,
+                                            controller=controller,
+                                            geometry=geometry,
+                                            backend=backend,
+                                            judge=judge,
+                                            session=judgeSession,
+                                        )
+                                        forwardCount += judgeForwards
                             with _profile(profiler, "controller"):
                                 result = controller.consume(plan, projected, candidates)
                             if verifier is not None:
@@ -586,6 +612,59 @@ def _scanCandidates(
                 )
             )
     return tuple(candidates), forwards
+
+
+def _judgeCandidates(
+    *,
+    frame: FramePacket,
+    candidates: tuple[ProjectedObservation, ...],
+    controller: TrackControllerImpl,
+    geometry: SphericalGeometry,
+    backend: TrackerBackend,
+    judge: Any,
+    session: Any,
+) -> tuple[tuple[ProjectedObservation, ...], int]:
+    """Score each candidate with the learned judge, and the forward passes spent.
+
+    Each candidate gets one stateless pass on a normal-size view centred on it, as in
+    the judge's training data (``tools/backend_signals.py trace``).  A candidate below
+    the judge's search-score prefilter, or whose pass finds nothing, is not judged and
+    cannot be taken.
+    """
+    from track360.runtime.candidate_judge import judgeFeatures
+
+    judge.select(str(frame.sequenceId))
+    scan = controller.currentScan
+    judged = []
+    forwards = 0
+    for candidate in candidates:
+        raw = candidate.singleScore if candidate.singleScore is not None else candidate.fusedScore
+        search = float(min(1.0, max(0.0, raw)))
+        if search < judge.prefilter:
+            judged.append(candidate)
+            continue
+        size = math.sqrt(candidate.bfov.horizontalFovRad * candidate.bfov.verticalFovRad)
+        spec = controller.recentredView(candidate.bfov.center, size)
+        view = geometry.cropViews(frame, [spec])[0]
+        session.enableDiagnostics(True)
+        try:
+            again = backend.inferDetached((view,))  # type: ignore[attr-defined]
+            diagnostics = session.lastDiagnostics
+        finally:
+            session.enableDiagnostics(False)
+        forwards += 1
+        if not again or not diagnostics:
+            judged.append(candidate)
+            continue
+        features = judgeFeatures(
+            searchScore=search,
+            recentredScore=again[0].fusedScore,
+            similarity=candidate.appearanceSimilarity,
+            scan=scan,
+            diagnostics=diagnostics,
+        )
+        judged.append(replace(candidate, judgeScore=float(judge.score(features)[0])))
+    return tuple(judged), forwards
 
 
 def _projectValidObservation(

@@ -182,6 +182,7 @@ def runBenchmark(
     probe: Sequence[str] | None = None,
     noiseSeed: int | None = None,
     noiseStd: float = DEFAULT_NOISE_STD,
+    candidateJudge: Any | None = None,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -212,6 +213,7 @@ def runBenchmark(
             probe=probe,
             noiseSeed=noiseSeed,
             noiseStd=noiseStd,
+            candidateJudge=candidateJudge,
         )
 
 
@@ -230,6 +232,7 @@ def _runLocked(
     probe: Sequence[str] | None,
     noiseSeed: int | None,
     noiseStd: float,
+    candidateJudge: Any | None = None,
 ) -> BenchmarkSummary:
     dataset = Vot360Dataset(datasetRoot, labelRoot)
     names = _selectSequences(dataset, sequences, shard)
@@ -248,6 +251,7 @@ def _runLocked(
             "maxFrames": maxFrames,
             "shard": list(shard),
             "inputNoise": None if noiseSeed is None else {"seed": noiseSeed, "std": noiseStd},
+            "candidateJudge": None if candidateJudge is None else candidateJudge.describe(),
             **collectRunMetadata(config),
         },
     )
@@ -281,6 +285,7 @@ def _runLocked(
                 "clean" in probeSignals,
                 noiseSeed,
                 noiseStd,
+                candidateJudge,
             )
             reports.append(report)
             # A skipped sequence keeps the report of the run that tracked it.
@@ -425,6 +430,7 @@ def _runOne(
     probeClean: bool = True,
     noiseSeed: int | None = None,
     noiseStd: float = DEFAULT_NOISE_STD,
+    candidateJudge: Any | None = None,
 ) -> SequenceReport:
     source = Vot360DataSource(maxFrames=maxFrames, labelRoot=dataset.labelRoot)
     try:
@@ -452,7 +458,9 @@ def _runOne(
             trace: list[dict[str, object]] | None = (
                 [] if config.backendTuning.lossHandling else None
             )
-            loss = _trackSpherical(source, session, config, collector, probe, trace)
+            loss = _trackSpherical(
+                source, session, config, collector, probe, trace, candidateJudge
+            )
             if trace is not None:
                 writeStateTrace(outputRoot, method, name, trace)
         seconds = perf_counter() - started
@@ -541,9 +549,12 @@ def _trackSpherical(
     collector: ResultCollector,
     probe: Any | None = None,
     trace: list[dict[str, object]] | None = None,
+    candidateJudge: Any | None = None,
 ) -> dict[str, object]:
     shared = _SharedSession(session)
-    runtime = buildRuntime(config, artrackSessionFactory=lambda _: shared)
+    runtime = buildRuntime(
+        config, artrackSessionFactory=lambda _: shared, candidateJudge=candidateJudge
+    )
     try:
         runTracking(
             source=source,
@@ -555,6 +566,8 @@ def _trackSpherical(
             probe=probe,
             verifier=runtime.verifier,
             trace=trace,
+            judge=runtime.judge,
+            judgeSession=runtime.judgeSession,
         )
         return runtime.controller.lossStatistics
     finally:

@@ -102,6 +102,21 @@ def buildParser() -> argparse.ArgumentParser:
         "optionally a comma-separated subset of dinov2,dino,resnet18,clean",
     )
 
+    run.add_argument(
+        "--candidate-judge",
+        type=Path,
+        default=None,
+        help="experimental (E051): take search candidates by this learned judge "
+        "(tools/candidate_judge_export.py) instead of reacquireScore",
+    )
+    run.add_argument("--judge-threshold", type=float, default=None)
+    run.add_argument(
+        "--judge-prefilter",
+        type=float,
+        default=0.0,
+        help="candidates below this search score are not judged",
+    )
+
     evaluate = commands.add_parser("eval", help="score the result files of every method")
     _addCommon(evaluate)
     evaluate.add_argument("--methods", default=None, help="comma-separated; default: all found")
@@ -178,6 +193,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "run":
             failed = False
             seeds: list[int | None] = [int(item) for item in _split(args.seeds) or []] or [None]
+            judge = None
+            if args.candidate_judge is not None:
+                from track360.runtime.candidate_judge import CandidateJudge
+
+                if args.judge_threshold is None:
+                    raise SystemExit("--candidate-judge needs --judge-threshold")
+                judge = CandidateJudge(
+                    args.candidate_judge, args.judge_threshold, args.judge_prefilter
+                )
             for seed in seeds:
                 root = args.output_root if seed is None else seedRoot(args.output_root, seed)
                 summary = runBenchmark(
@@ -193,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
                     probe=_split(args.probe),
                     noiseSeed=seed,
                     noiseStd=args.noise_std,
+                    candidateJudge=judge,
                 )
                 failed = failed or bool(summary.failures)
             return 1 if failed else 0
