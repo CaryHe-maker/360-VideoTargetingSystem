@@ -95,5 +95,15 @@
 | `E048-train-base1-s3` | E048 | dev-train | `ours` | 2026-10-14 05:02 | `b23b004` | `25ea3065` | 33 | 0.506 | 0.602 | 0.310 | 1.00 | 28 | 38 | 33.2 | solo | 基线 1（默认配置），输入噪声种子 3（标准差 0.00001） |
 | `E048-train-base1-s4` | E048 | dev-train | `ours` | 2026-10-14 05:14 | `b23b004` | `25ea3065` | 33 | 0.493 | 0.585 | 0.335 | 1.00 | 28 | 37 | 33.5 | solo | 基线 1（默认配置），输入噪声种子 4（标准差 0.00001） |
 | `E048-train-base1-s5` | E048 | dev-train | `ours` | 2026-10-14 05:25 | `b23b004` | `25ea3065` | 33 | 0.481 | 0.570 | 0.353 | 1.00 | 27 | 31 | 35.7 | solo | 基线 1（默认配置），输入噪声种子 5（标准差 0.00001） |
+| `E051-train-judgeT1-s1` | E051 | dev-train | `ours` | 2026-10-15 01:08 | `b5e4216` | `1669b475` | 33 | 0.511 | 0.610 | 0.320 | 1.20 | 30 | 40 | 28.0 | unknown | candidate judge T1 (threshold 0.3855), seed 1 |
+| `E051-train-judgeT1-s2` | E051 | dev-train | `ours` | 2026-10-15 01:21 | `e7b3fec` | `1669b475` | 33 | 0.494 | 0.587 | 0.305 | 1.23 | 30 | 75 | 28.3 | unknown | candidate judge T1 (threshold 0.3855), seed 2 |
+| `E051-train-judgeT1-s3` | E051 | dev-train | `ours` | 2026-10-15 01:35 | `e7b3fec` | `1669b475` | 33 | 0.482 | 0.573 | 0.336 | 1.22 | 30 | 35 | 28.4 | unknown | candidate judge T1 (threshold 0.3855), seed 3 |
+| `E051-train-judgeT1-s4` | E051 | dev-train | `ours` | 2026-10-15 01:48 | `e7b3fec` | `1669b475` | 33 | 0.466 | 0.551 | 0.351 | 1.24 | 30 | 55 | 27.9 | unknown | candidate judge T1 (threshold 0.3855), seed 4 |
+| `E051-train-judgeT1-s5` | E051 | dev-train | `ours` | 2026-10-15 02:01 | `e7b3fec` | `1669b475` | 33 | 0.486 | 0.577 | 0.330 | 1.22 | 30 | 52 | 28.2 | unknown | candidate judge T1 (threshold 0.3855), seed 5 |
+| `E051-train-judgeT2-s1` | E051 | dev-train | `ours` | 2026-10-15 02:14 | `e7b3fec` | `1669b475` | 33 | 0.495 | 0.584 | 0.322 | 1.24 | 30 | 93 | 28.1 | unknown | candidate judge T2 (threshold 0.4839), seed 1 |
+| `E051-train-judgeT2-s2` | E051 | dev-train | `ours` | 2026-10-15 02:28 | `e7b3fec` | `1669b475` | 33 | 0.492 | 0.582 | 0.323 | 1.27 | 30 | 94 | 27.3 | unknown | candidate judge T2 (threshold 0.4839), seed 2 |
+| `E051-train-judgeT2-s3` | E051 | dev-train | `ours` | 2026-10-15 02:41 | `e7b3fec` | `1669b475` | 33 | 0.477 | 0.567 | 0.347 | 1.25 | 30 | 36 | 27.8 | unknown | candidate judge T2 (threshold 0.4839), seed 3 |
+| `E051-train-judgeT2-s4` | E051 | dev-train | `ours` | 2026-10-15 02:55 | `e7b3fec` | `1669b475` | 33 | 0.474 | 0.558 | 0.330 | 1.30 | 31 | 96 | 26.3 | unknown | candidate judge T2 (threshold 0.4839), seed 4 |
+| `E051-train-judgeT2-s5` | E051 | dev-train | `ours` | 2026-10-15 03:09 | `e7b3fec` | `1669b475` | 33 | 0.485 | 0.568 | 0.321 | 1.24 | 30 | 95 | 27.4 | unknown | candidate judge T2 (threshold 0.4839), seed 5 |
 
 Commit 后的 `*` 表示运行时工作区有未提交的改动。
