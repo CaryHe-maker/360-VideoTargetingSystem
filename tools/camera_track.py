@@ -26,7 +26,7 @@ from track360.datasets.vot360 import Vot360Dataset  # noqa: E402
 from track360.geometry import camera_rotation as cr  # noqa: E402
 
 
-def track(sequence, count: int) -> dict[str, np.ndarray]:
+def track(sequence, count: int, stride: int = 1) -> dict[str, np.ndarray]:
     matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
     orientation = np.zeros((count, 3, 3))
     orientation[0] = np.eye(3)
@@ -36,18 +36,21 @@ def track(sequence, count: int) -> dict[str, np.ndarray]:
     previous = None
     rng = np.random.default_rng(0)
     for index in range(count):
+        if index % stride:
+            orientation[index] = orientation[index - 1]
+            continue
         gray = cr._gray(sequence.readRgb(index))
         keys, desc = cr._features(gray)
         current = (keys, desc, gray.shape)
         if previous is not None:
             step = _step(previous, current, matcher, rng)
             if step is None or not step.reliable:
-                orientation[index] = orientation[index - 1]
+                orientation[index] = orientation[index - stride]
                 reliable[index] = False
                 if step is not None:
                     inliers[index], matches[index] = step.inliers, step.matches
             else:
-                orientation[index] = step.matrix @ orientation[index - 1]
+                orientation[index] = step.matrix @ orientation[index - stride]
                 inliers[index], matches[index] = step.inliers, step.matches
         previous = current
     return {
@@ -84,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--shard", default="0/1")
     parser.add_argument("--width", type=int, default=cr.WORK_WIDTH, help="working width")
+    parser.add_argument("--stride", type=int, default=1, help="measure every n-th frame")
     args = parser.parse_args(argv)
     cr.WORK_WIDTH = args.width
     index, count = (int(x) for x in args.shard.split("/"))
@@ -96,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         started = time.perf_counter()
         sequence = dataset.sequence(name)
-        result = track(sequence, sequence.frameCount)
+        result = track(sequence, sequence.frameCount, args.stride)
         sequence.close()
         np.savez_compressed(path, **result)
         turned = np.degrees(

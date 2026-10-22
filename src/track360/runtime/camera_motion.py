@@ -23,8 +23,12 @@ WORK_WIDTH = 512
 
 
 class CameraMotion:
-    def __init__(self, workWidth: int = WORK_WIDTH, seed: int = 0) -> None:
+    def __init__(self, workWidth: int = WORK_WIDTH, seed: int = 0, stride: int = 1) -> None:
         self._width = int(workWidth)
+        # Only every ``stride``-th frame is measured; the others take the last measured.
+        self._stride = max(1, int(stride))
+        self._measured: dict[int, int] = {}
+        self._last: int | None = None
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="track360-camera")
         self._jobs: dict[int, Future[np.ndarray]] = {}
         self._matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
@@ -35,10 +39,14 @@ class CameraMotion:
 
     def submit(self, frameIndex: int, rgb: np.ndarray) -> None:
         """Queue a frame; frames must come in order, starting anywhere."""
-        self._jobs[int(frameIndex)] = self._executor.submit(self._step, rgb)
+        index = int(frameIndex)
+        if self._last is None or index - self._last >= self._stride:
+            self._jobs[index] = self._executor.submit(self._step, rgb)
+            self._last = index
+        self._measured[index] = self._last
 
     def orientation(self, frameIndex: int) -> np.ndarray:
-        return self._jobs[int(frameIndex)].result()
+        return self._jobs[self._measured[int(frameIndex)]].result()
 
     def rotation(self, start: int, end: int) -> np.ndarray:
         """The rotation taking directions of frame ``start`` to frame ``end``."""

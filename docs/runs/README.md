@@ -140,5 +140,11 @@
 | `E054-train-global-g10-s5` | E054 | dev-train | `ours` | 2026-10-22 13:27 | `2973b4f` | `1669b475` | 33 | 0.497 | 0.597 | 0.309 | 1.13 | 37 | 64 | 18.3 | unknown | E053 + whole-sphere OWLv2 detection (g10), seed 5 |
 | `E054-train-global-late-s1` | E054 | dev-train | `ours` | 2026-10-22 13:48 | `2973b4f` | `1669b475` | 33 | 0.529 | 0.628 | 0.289 | 1.08 | 37 | 54 | 18.9 | unknown | E053 + whole-sphere OWLv2 detection (late), seed 1 |
 | `E054-train-global-late-s2` | E054 | dev-train | `ours` | 2026-10-22 14:08 | `2973b4f` | `1669b475` | 33 | 0.500 | 0.593 | 0.309 | 1.10 | 37 | 55 | 18.8 | unknown | E053 + whole-sphere OWLv2 detection (late), seed 2 |
+| `E053b-train-camera384-s1` | E053 | dev-train | `ours` | 2026-10-22 14:45 | `371d835` | `1669b475` | 33 | 0.532 | 0.629 | 0.286 | 1.13 | 37 | 51 | 22.0 | unknown | base 2 + camera rotation compensation at 384 px, seed 1 |
+| `E053b-train-camera384-s2` | E053 | dev-train | `ours` | 2026-10-22 15:02 | `371d835` | `1669b475` | 33 | 0.513 | 0.604 | 0.301 | 1.15 | 37 | 76 | 21.9 | unknown | base 2 + camera rotation compensation at 384 px, seed 2 |
+| `E053b-train-camera384-s3` | E053 | dev-train | `ours` | 2026-10-22 15:20 | `371d835` | `1669b475` | 33 | 0.499 | 0.595 | 0.314 | 1.13 | 37 | 53 | 22.6 | unknown | base 2 + camera rotation compensation at 384 px, seed 3 |
+| `E053b-train-camera384-s4` | E053 | dev-train | `ours` | 2026-10-22 15:36 | `371d835` | `1669b475` | 33 | 0.471 | 0.560 | 0.359 | 1.16 | 38 | 51 | 22.2 | unknown | base 2 + camera rotation compensation at 384 px, seed 4 |
+| `E053b-train-camera384-s5` | E053 | dev-train | `ours` | 2026-10-22 15:53 | `371d835` | `1669b475` | 33 | 0.490 | 0.586 | 0.325 | 1.15 | 37 | 78 | 22.2 | unknown | base 2 + camera rotation compensation at 384 px, seed 5 |
+| `E053b-train-base1-latency-s1` | E053 | dev-train | `ours` | 2026-10-22 16:10 | `371d835` | `25ea3065` | 33 | 0.509 | 0.609 | 0.306 | 1.00 | 26 | 34 | 35.9 | unknown | baseline 1, seed 1, latency reference run in the same session as E053b |
 
 Commit 后的 `*` 表示运行时工作区有未提交的改动。

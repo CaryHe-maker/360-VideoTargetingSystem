@@ -126,6 +126,12 @@ def buildParser() -> argparse.ArgumentParser:
         "estimated on frames this many pixels wide (default 512)",
     )
     run.add_argument(
+        "--camera-stride",
+        type=int,
+        default=1,
+        help="with --camera-motion: measure the rotation on every n-th frame only",
+    )
+    run.add_argument(
         "--sphere-scan-deg",
         type=float,
         default=None,
@@ -259,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
                     candidateJudge=judge,
                     oracle=oracle,
                     cameraMotion=args.camera_motion,
+                    cameraStride=args.camera_stride,
                     sphereScanDeg=args.sphere_scan_deg,
                     globalSearch=(
                         None

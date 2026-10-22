@@ -188,6 +188,7 @@ def runBenchmark(
     cameraMotion: int = 0,
     sphereScanDeg: float | None = None,
     globalSearch: tuple[int, ...] | None = None,
+    cameraStride: int = 1,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -223,6 +224,7 @@ def runBenchmark(
             cameraMotion=cameraMotion,
             sphereScanDeg=sphereScanDeg,
             globalSearch=globalSearch,
+            cameraStride=cameraStride,
         )
 
 
@@ -246,6 +248,7 @@ def _runLocked(
     cameraMotion: int = 0,
     sphereScanDeg: float | None = None,
     globalSearch: tuple[int, ...] | None = None,
+    cameraStride: int = 1,
 ) -> BenchmarkSummary:
     dataset = Vot360Dataset(datasetRoot, labelRoot)
     names = _selectSequences(dataset, sequences, shard)
@@ -269,6 +272,7 @@ def _runLocked(
             "oracle": None if oracle is None else oracle.describe(),
             # Experimental (E053): enlarged searches turned with the camera.
             "cameraMotion": cameraMotion,
+            "cameraStride": cameraStride,
             "sphereScanDeg": sphereScanDeg,
             # Experimental (E054): whole-sphere detection every N lost frames, K places.
             "globalSearch": None if globalSearch is None else list(globalSearch),
@@ -289,6 +293,8 @@ def _runLocked(
             Path(config.model.weights).parent / "hub",
             [name for name in MODEL_SIGNALS if name in probeSignals] or MODEL_SIGNALS[:1],
         )
+    global _CAMERA_STRIDE
+    _CAMERA_STRIDE = cameraStride
     globalSearcher = None
     if globalSearch is not None:
         from track360.runtime.global_search import GlobalSearcher
@@ -547,6 +553,9 @@ def _runOne(
         source.close()
 
 
+# Experimental (E053): measure the camera rotation on every n-th frame only.
+_CAMERA_STRIDE = 1
+
 TRACE_COLUMNS = (
     "frame",
     "modeBefore",
@@ -626,7 +635,7 @@ def _trackSpherical(
     if cameraMotion:
         from track360.runtime.camera_motion import CameraMotion
 
-        camera = CameraMotion(workWidth=cameraMotion)
+        camera = CameraMotion(workWidth=cameraMotion, stride=_CAMERA_STRIDE)
         runtime.controller.useCameraMotion(camera)
     try:
         runTracking(
