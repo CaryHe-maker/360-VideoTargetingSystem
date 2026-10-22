@@ -111,6 +111,18 @@ def buildParser() -> argparse.ArgumentParser:
     )
     run.add_argument("--judge-threshold", type=float, default=None)
     run.add_argument(
+        "--oracle",
+        default=None,
+        help="evaluation only (E052): stage=share,... with stages A-E; ground truth "
+        "corrects that share of the stage's mistakes",
+    )
+    run.add_argument(
+        "--oracle-data",
+        type=Path,
+        default=Path("outputs/E052/distributions.npz"),
+        help="distributions the oracle draws from",
+    )
+    run.add_argument(
         "--judge-prefilter",
         type=float,
         default=0.0,
@@ -204,6 +216,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
             for seed in seeds:
                 root = args.output_root if seed is None else seedRoot(args.output_root, seed)
+                oracle = None
+                if args.oracle is not None:
+                    from track360.evaluation.oracle import OracleSettings
+
+                    oracle = OracleSettings.parse(args.oracle, args.oracle_data, seed or 0)
                 summary = runBenchmark(
                     datasetRoot=args.dataset_root,
                     outputRoot=root,
@@ -218,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
                     noiseSeed=seed,
                     noiseStd=args.noise_std,
                     candidateJudge=judge,
+                    oracle=oracle,
                 )
                 failed = failed or bool(summary.failures)
             return 1 if failed else 0

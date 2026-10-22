@@ -218,6 +218,7 @@ def runTracking(
     trace: list[dict[str, object]] | None = None,
     judge: Any | None = None,
     judgeSession: Any | None = None,
+    oracle: Any | None = None,
 ) -> int:
     """Run the sequential tracking pipeline and publish one result per frame.
 
@@ -357,6 +358,18 @@ def runTracking(
                                     )
                                     forwardCount += scanForwards
                                     controller.settleScan(scanForwards)
+                                    if oracle is not None and plan.scanRefine:
+                                        # Evaluation only (E052): a box near the target.
+                                        scanView = plan.scanViews[0]
+                                        extra = oracle.extraCandidate(
+                                            int(frame.frameIndex),
+                                            scanView.bfov.center,
+                                            0.5 * scanView.bfov.horizontalFovRad,
+                                            candidates,
+                                            geometry,
+                                        )
+                                        if extra is not None:
+                                            candidates = (*candidates, extra)
                                     if judge is not None and candidates:
                                         # Not charged to the scan budget: the search
                                         # stays as it was, only the decision changes.

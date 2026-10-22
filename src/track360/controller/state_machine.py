@@ -78,6 +78,7 @@ class TrackStateMachine:
         measurementAccepted: bool,
         backendScore: float | None = None,
         appearanceScore: float | None = None,
+        forceUntrusted: bool = False,
     ) -> TransitionDecision:
         if not 0.0 <= float(stateScore) <= 1.0:
             raise ProtocolError("StateScore must be in [0, 1]")
@@ -88,7 +89,10 @@ class TrackStateMachine:
             )
         if self._tuning.lossHandling:
             nextMode, reason = self._relative(
-                backendScore, appearanceScore, hasBox=backendScore is not None
+                backendScore,
+                appearanceScore,
+                hasBox=backendScore is not None,
+                forced=forceUntrusted,
             )
         else:
             nextMode, reason = self._fused(float(stateScore))
@@ -106,7 +110,12 @@ class TrackStateMachine:
         return deviation
 
     def _relative(
-        self, backend: float | None, appearance: float | None, *, hasBox: bool
+        self,
+        backend: float | None,
+        appearance: float | None,
+        *,
+        hasBox: bool,
+        forced: bool = False,
     ) -> tuple[TrackMode, TransitionReason]:
         tuning = self._tuning
         if hasBox:
@@ -124,6 +133,8 @@ class TrackStateMachine:
             trusted = self._calmFrames >= tuning.releaseFrames
         else:
             trusted = signal >= threshold
+        # An evaluation oracle (E052) may declare the frame untrusted.
+        trusted = trusted and not forced
         return self._judged(
             trusted,
             latch=True,

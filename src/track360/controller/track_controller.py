@@ -6,7 +6,7 @@ from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from math import acos, asin, atan2, degrees, pi, sqrt
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from track360.controller.motion_estimator import SphericalMotionEstimator
 from track360.controller.state_evaluator import StateEvaluator
@@ -151,6 +151,8 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._lastFrameTrace: dict[str, object] = {}
         # With a learned candidate judge, the score a candidate needs from it.
         self._judgeThreshold: float | None = None
+        # Evaluation only (E052): a partial oracle that corrects some decisions.
+        self._oracle: Any | None = None
 
     @property
     def lossStatistics(self) -> dict[str, object]:
@@ -331,7 +333,9 @@ class TrackControllerImpl(TrackControllerProtocol):
             self._actions in _SEARCHING_ACTIONS and lost and self._lastGoodBfov is not None
         )
         if searching:
-            scanViews, scanRefine = self._zoomScan(mainView, lostFrames, scanCount)
+            scanViews, scanRefine = self._zoomScan(
+                mainView, lostFrames, scanCount, int(frame.frameIndex)
+            )
             if scanViews:
                 self._scanPrepaid = len(scanViews) + (1 if scanRefine else 0)
                 self._scanTokens -= self._scanPrepaid
@@ -355,7 +359,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         return plan
 
     def _zoomScan(
-        self, mainView: ViewSpec, lostFrames: int, budget: int
+        self, mainView: ViewSpec, lostFrames: int, budget: int, frameIndex: int = -1
     ) -> tuple[tuple[ViewSpec, ...], bool]:
         """The search views of a lost frame, and whether what they find is refined.
 
@@ -389,7 +393,23 @@ class TrackControllerImpl(TrackControllerProtocol):
             scale,
             SCAN_VIEW_ID_BASE,
         )
+        if self._oracle is not None:
+            centre = self._oracle.scanCentre(
+                frameIndex, trusted.center, 0.5 * view.bfov.horizontalFovRad
+            )
+            if centre is not trusted.center:
+                view = self._planner.probeView(
+                    centre,
+                    trusted.horizontalFovRad,
+                    trusted.verticalFovRad,
+                    scale,
+                    SCAN_VIEW_ID_BASE,
+                )
         return (view,), True
+
+    def useOracle(self, oracle: Any | None) -> None:
+        """Evaluation only (E052): let ground truth correct a share of the decisions."""
+        self._oracle = oracle
 
     def useCandidateJudge(self, threshold: float | None) -> None:
         """Take search candidates by their judge score (experimental, E051); None: off."""
@@ -451,8 +471,15 @@ class TrackControllerImpl(TrackControllerProtocol):
             frameHeightPx=pending.frame.rgb.shape[0],
         )
         trace = self._traceOf(pending, evaluation)
+        frameIndex = int(pending.frame.frameIndex)
+        trackerBox = observation.bbox if observation is not None else None
+        forced = (
+            self._oracle.forceDoubt(frameIndex, trackerBox) if self._oracle is not None else False
+        )
         if self._actions in _SEARCHING_ACTIONS:
-            chosen, trace["candidates"] = self._reacquisitionCandidate(candidates)
+            chosen, trace["candidates"] = self._reacquisitionCandidate(
+                candidates, frameIndex, trackerBox
+            )
             if chosen is not None:
                 result = self._reacquire(pending, chosen)
                 trace.update(
@@ -466,6 +493,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             measurementAccepted=evaluation.measurementAccepted,
             backendScore=evaluation.backendScore if evaluation.hasCandidate else None,
             appearanceScore=evaluation.appearanceScore,
+            forceUntrusted=forced,
         )
         result = self._commit(pending, evaluation, decision)
         trace.update(
@@ -528,7 +556,10 @@ class TrackControllerImpl(TrackControllerProtocol):
             self._motion.initialize(bfov.center, frame.timestampNs)
 
     def _reacquisitionCandidate(
-        self, candidates: Sequence[ProjectedObservation]
+        self,
+        candidates: Sequence[ProjectedObservation],
+        frameIndex: int = -1,
+        trackerBox: BBoxXYWH | None = None,
     ) -> tuple[ProjectedObservation | None, list[dict[str, object]]]:
         """The search candidate to jump to, if any, and what became of each one.
 
@@ -570,6 +601,18 @@ class TrackControllerImpl(TrackControllerProtocol):
             records.append(record)
             if verdict == "not_best" and (best is None or _preferred(candidate, best, judged)):
                 best, bestRecord = candidate, record
+        oracle = self._oracle
+        if oracle is not None and candidates:
+            if best is None:
+                taken = oracle.takeMissed(frameIndex, list(candidates))
+                if taken is not None:
+                    best = taken
+                    bestRecord = records[next(i for i, c in enumerate(candidates) if c is taken)]
+                    bestRecord["oracle"] = "D"
+            if best is not None and oracle.vetoJump(frameIndex, best, trackerBox):
+                assert bestRecord is not None
+                bestRecord["verdict"], bestRecord["oracle"] = "vetoed", "E"
+                return None, records
         if bestRecord is not None:
             bestRecord["verdict"] = "accepted"
         return best, records

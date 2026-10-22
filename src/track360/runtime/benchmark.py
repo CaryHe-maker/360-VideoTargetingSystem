@@ -183,6 +183,7 @@ def runBenchmark(
     noiseSeed: int | None = None,
     noiseStd: float = DEFAULT_NOISE_STD,
     candidateJudge: Any | None = None,
+    oracle: Any | None = None,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -214,6 +215,7 @@ def runBenchmark(
             noiseSeed=noiseSeed,
             noiseStd=noiseStd,
             candidateJudge=candidateJudge,
+            oracle=oracle,
         )
 
 
@@ -233,6 +235,7 @@ def _runLocked(
     noiseSeed: int | None,
     noiseStd: float,
     candidateJudge: Any | None = None,
+    oracle: Any | None = None,
 ) -> BenchmarkSummary:
     dataset = Vot360Dataset(datasetRoot, labelRoot)
     names = _selectSequences(dataset, sequences, shard)
@@ -252,6 +255,8 @@ def _runLocked(
             "shard": list(shard),
             "inputNoise": None if noiseSeed is None else {"seed": noiseSeed, "std": noiseStd},
             "candidateJudge": None if candidateJudge is None else candidateJudge.describe(),
+            # Evaluation only: ground truth corrected some decisions (E052).
+            "oracle": None if oracle is None else oracle.describe(),
             **collectRunMetadata(config),
         },
     )
@@ -286,6 +291,7 @@ def _runLocked(
                 noiseSeed,
                 noiseStd,
                 candidateJudge,
+                oracle,
             )
             reports.append(report)
             # A skipped sequence keeps the report of the run that tracked it.
@@ -431,6 +437,7 @@ def _runOne(
     noiseSeed: int | None = None,
     noiseStd: float = DEFAULT_NOISE_STD,
     candidateJudge: Any | None = None,
+    oracle: Any | None = None,
 ) -> SequenceReport:
     source = Vot360DataSource(maxFrames=maxFrames, labelRoot=dataset.labelRoot)
     try:
@@ -458,11 +465,21 @@ def _runOne(
             trace: list[dict[str, object]] | None = (
                 [] if config.backendTuning.lossHandling else None
             )
+            sequenceOracle = None
+            if oracle is not None:
+                from track360.evaluation.oracle import sequenceOracle as makeOracle
+
+                sequenceOracle = makeOracle(oracle, source.sequence, name)
             loss = _trackSpherical(
-                source, session, config, collector, probe, trace, candidateJudge
+                source, session, config, collector, probe, trace, candidateJudge, sequenceOracle
             )
             if trace is not None:
                 writeStateTrace(outputRoot, method, name, trace)
+            if sequenceOracle is not None:
+                (outputRoot / "oracle" / method).mkdir(parents=True, exist_ok=True)
+                _writeJson(
+                    outputRoot / "oracle" / method / f"{name}.json", sequenceOracle.report()
+                )
         seconds = perf_counter() - started
         collector.finalize(frameCount)
         frameWidthPx = source.sequence.frameSize[0]
@@ -550,11 +567,14 @@ def _trackSpherical(
     probe: Any | None = None,
     trace: list[dict[str, object]] | None = None,
     candidateJudge: Any | None = None,
+    oracle: Any | None = None,
 ) -> dict[str, object]:
     shared = _SharedSession(session)
     runtime = buildRuntime(
         config, artrackSessionFactory=lambda _: shared, candidateJudge=candidateJudge
     )
+    if oracle is not None:
+        runtime.controller.useOracle(oracle)
     try:
         runTracking(
             source=source,
@@ -568,6 +588,7 @@ def _trackSpherical(
             trace=trace,
             judge=runtime.judge,
             judgeSession=runtime.judgeSession,
+            oracle=oracle,
         )
         return runtime.controller.lossStatistics
     finally:
