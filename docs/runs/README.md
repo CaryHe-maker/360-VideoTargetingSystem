@@ -105,5 +105,26 @@
 | `E051-train-judgeT2-s3` | E051 | dev-train | `ours` | 2026-10-15 02:41 | `e7b3fec` | `1669b475` | 33 | 0.477 | 0.567 | 0.347 | 1.25 | 30 | 36 | 27.8 | unknown | candidate judge T2 (threshold 0.4839), seed 3 |
 | `E051-train-judgeT2-s4` | E051 | dev-train | `ours` | 2026-10-15 02:55 | `e7b3fec` | `1669b475` | 33 | 0.474 | 0.558 | 0.330 | 1.30 | 31 | 96 | 26.3 | unknown | candidate judge T2 (threshold 0.4839), seed 4 |
 | `E051-train-judgeT2-s5` | E051 | dev-train | `ours` | 2026-10-15 03:09 | `e7b3fec` | `1669b475` | 33 | 0.485 | 0.568 | 0.321 | 1.24 | 30 | 95 | 27.4 | unknown | candidate judge T2 (threshold 0.4839), seed 5 |
+| `E052-train-oracleAhi-s1` | E052 | dev-train | `ours` | 2026-10-22 02:43 | `cd6d61e` | `1669b475` | 21 | 0.359 | 0.429 | 0.436 | 1.25 | 31 | 78 | 26.9 | unknown | partial oracle A=0.55 (evaluation only), seed 1 |
+| `E052-train-oracleAhi-s2` | E052 | dev-train | `ours` | 2026-10-22 02:53 | `cd6d61e*` | `1669b475` | 21 | 0.388 | 0.473 | 0.401 | 1.28 | 31 | 79 | 26.1 | unknown | partial oracle A=0.55 (evaluation only), seed 2 |
+| `E052-train-oracleBhi-s1` | E052 | dev-train | `ours` | 2026-10-22 03:03 | `cd6d61e*` | `1669b475` | 21 | 0.410 | 0.501 | 0.397 | 1.15 | 35 | 75 | 25.7 | unknown | partial oracle B=0.43 (evaluation only), seed 1 |
+| `E052-train-oracleBhi-s2` | E052 | dev-train | `ours` | 2026-10-22 03:14 | `cd6d61e*` | `1669b475` | 21 | 0.435 | 0.543 | 0.356 | 1.17 | 32 | 76 | 27.8 | unknown | partial oracle B=0.43 (evaluation only), seed 2 |
+| `E052-train-oracleChi-s1` | E052 | dev-train | `ours` | 2026-10-22 03:23 | `cd6d61e*` | `1669b475` | 21 | 0.407 | 0.497 | 0.384 | 1.21 | 32 | 78 | 26.8 | unknown | partial oracle C=0.49 (evaluation only), seed 1 |
+| `E052-train-oracleChi-s2` | E052 | dev-train | `ours` | 2026-10-22 03:33 | `cd6d61e*` | `1669b475` | 21 | 0.419 | 0.523 | 0.362 | 1.21 | 32 | 80 | 25.8 | unknown | partial oracle C=0.49 (evaluation only), seed 2 |
+| `E052-train-oracleDhi-s1` | E052 | dev-train | `ours` | 2026-10-22 03:44 | `cd6d61e*` | `1669b475` | 21 | 0.386 | 0.463 | 0.414 | 1.19 | 38 | 85 | 23.2 | unknown | partial oracle D=0.45 (evaluation only), seed 1 |
+| `E052-train-oracleDhi-s2` | E052 | dev-train | `ours` | 2026-10-22 03:55 | `cd6d61e*` | `1669b475` | 21 | 0.386 | 0.475 | 0.420 | 1.21 | 39 | 91 | 22.5 | unknown | partial oracle D=0.45 (evaluation only), seed 2 |
+| `E052-train-oracleEhi-s1` | E052 | dev-train | `ours` | 2026-10-22 04:08 | `cd6d61e*` | `1669b475` | 33 | 0.496 | 0.578 | 0.316 | 1.17 | 39 | 86 | 22.7 | unknown | partial oracle E=0.75 (evaluation only), seed 1 |
+| `E052-train-oracleEhi-s2` | E052 | dev-train | `ours` | 2026-10-22 04:24 | `cd6d61e*` | `1669b475` | 33 | 0.496 | 0.594 | 0.314 | 1.18 | 40 | 88 | 22.3 | unknown | partial oracle E=0.75 (evaluation only), seed 2 |
+| `E052-train-oracleBlo-s1` | E052 | dev-train | `ours` | 2026-10-22 04:43 | `663fa6a` | `1669b475` | 21 | 0.412 | 0.502 | 0.394 | 1.15 | 38 | 79 | 24.2 | unknown | partial oracle B=0.21 (evaluation only), seed 1 |
+| `E052-train-oracleBlo-s2` | E052 | dev-train | `ours` | 2026-10-22 04:54 | `663fa6a` | `1669b475` | 21 | 0.445 | 0.552 | 0.339 | 1.20 | 39 | 89 | 23.0 | unknown | partial oracle B=0.21 (evaluation only), seed 2 |
+| `E052-train-oracleClo-s1` | E052 | dev-train | `ours` | 2026-10-22 05:06 | `663fa6a` | `1669b475` | 21 | 0.396 | 0.483 | 0.400 | 1.22 | 39 | 91 | 22.0 | unknown | partial oracle C=0.24 (evaluation only), seed 1 |
+| `E052-train-oracleClo-s2` | E052 | dev-train | `ours` | 2026-10-22 05:19 | `663fa6a` | `1669b475` | 21 | 0.409 | 0.509 | 0.379 | 1.22 | 39 | 90 | 22.5 | unknown | partial oracle C=0.24 (evaluation only), seed 2 |
+| `E052-train-oracleBCDlo-s1` | E052 | dev-train | `ours` | 2026-10-22 05:31 | `663fa6a` | `1669b475` | 21 | 0.488 | 0.596 | 0.279 | 1.17 | 39 | 83 | 23.3 | unknown | partial oracle B=0.21 C=0.24 D=0.21 (evaluation only), seed 1 |
+| `E052-train-oracleBCDlo-s2` | E052 | dev-train | `ours` | 2026-10-22 05:42 | `663fa6a` | `1669b475` | 21 | 0.476 | 0.576 | 0.293 | 1.17 | 38 | 83 | 23.8 | unknown | partial oracle B=0.21 C=0.24 D=0.21 (evaluation only), seed 2 |
+| `E052-train-oracleBCDlo-s3` | E052 | dev-train | `ours` | 2026-10-22 05:54 | `663fa6a` | `1669b475` | 21 | 0.472 | 0.582 | 0.278 | 1.17 | 39 | 82 | 22.5 | unknown | partial oracle B=0.21 C=0.24 D=0.21 (evaluation only), seed 3 |
+| `E052-train-oracleBCDhi-s1` | E052 | dev-train | `ours` | 2026-10-22 06:06 | `663fa6a` | `1669b475` | 21 | 0.519 | 0.644 | 0.215 | 1.15 | 33 | 77 | 26.0 | unknown | partial oracle B=0.43 C=0.49 D=0.45 (evaluation only), seed 1 |
+| `E052-train-oracleBCDhi-s2` | E052 | dev-train | `ours` | 2026-10-22 06:16 | `663fa6a` | `1669b475` | 21 | 0.499 | 0.618 | 0.227 | 1.10 | 32 | 57 | 28.7 | unknown | partial oracle B=0.43 C=0.49 D=0.45 (evaluation only), seed 2 |
+| `E052-train-oracleABCDhi-s1` | E052 | dev-train | `ours` | 2026-10-22 06:25 | `663fa6a` | `1669b475` | 21 | 0.514 | 0.630 | 0.205 | 1.17 | 32 | 58 | 27.6 | unknown | partial oracle A=0.55 B=0.43 C=0.49 D=0.45 (evaluation only), seed 1 |
+| `E052-train-oracleABCDhi-s2` | E052 | dev-train | `ours` | 2026-10-22 06:35 | `663fa6a` | `1669b475` | 21 | 0.535 | 0.668 | 0.146 | 1.14 | 31 | 56 | 29.0 | unknown | partial oracle A=0.55 B=0.43 C=0.49 D=0.45 (evaluation only), seed 2 |
 
 Commit 后的 `*` 表示运行时工作区有未提交的改动。
