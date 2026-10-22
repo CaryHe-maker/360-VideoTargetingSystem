@@ -101,6 +101,8 @@ def analyse(args: argparse.Namespace) -> list[dict[str, object]]:
                     else:
                         centre = _direction(anchor["yawDeg"], anchor["pitchDeg"])
                     item["reach"] = _angle(truth, centre) / half
+                    if row.get("scanSphere") == "1":
+                        item["reach"] = 0.0  # the whole sphere holds the target
                     if best is not None:
                         place = _direction(best["yawDeg"], best["pitchDeg"])
                         item["bestOnTarget"] = (

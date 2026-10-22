@@ -157,6 +157,14 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._camera: Any | None = None
         self._lastGoodFrame = 0
         self._lastScanCentre: SphericalPoint | None = None
+        # Experimental (E053): targets at least this large search the whole sphere.
+        self._sphereScanRad: float | None = None
+        self._lastScanSphere = False
+        # Experimental (E054): every this many lost frames, a detector looks at the
+        # whole sphere and normal views are taken at the best ``_globalCount`` places.
+        self._globalEvery = 0
+        self._globalCount = 0
+        self._globalPending = False
 
     @property
     def lossStatistics(self) -> dict[str, object]:
@@ -323,6 +331,8 @@ class TrackControllerImpl(TrackControllerProtocol):
         scanRefine = False
         self._lastScan = ""
         self._lastScanCentre = None
+        self._lastScanSphere = False
+        self._globalPending = False
         lost = self._mode is TrackMode.LOST
         lostFrames = self._lostFrames if lost else 0
         self._lostFrames = lostFrames + 1 if lost else 0
@@ -336,7 +346,21 @@ class TrackControllerImpl(TrackControllerProtocol):
             )
             scanCount = min(scanCount, int(self._scanTokens))
         searching = self._actions in _SEARCHING_ACTIONS and lost and self._lastGoodBfov is not None
-        if searching:
+        globalFrame = (
+            searching
+            and self._globalEvery > 0
+            and lostFrames > 0
+            and lostFrames % self._globalEvery == 0
+            and scanCount >= self._globalCount
+        )
+        if globalFrame:
+            # The views are chosen after the detector has looked (``refinementView``).
+            self._globalPending = True
+            self._lastScan = "global"
+            self._scanPrepaid = self._globalCount
+            self._scanTokens -= self._scanPrepaid
+            self._scanFrameCount += 1
+        elif searching:
             scanViews, scanRefine = self._zoomScan(
                 mainView, lostFrames, scanCount, int(frame.frameIndex)
             )
@@ -402,6 +426,11 @@ class TrackControllerImpl(TrackControllerProtocol):
             scale,
             SCAN_VIEW_ID_BASE,
         )
+        if self._sphereScanRad is not None and _angularSize(trusted) >= self._sphereScanRad:
+            view = self._planner.sphereView(
+                centre, trusted.horizontalFovRad, trusted.verticalFovRad, SCAN_VIEW_ID_BASE
+            )
+            self._lastScanSphere = True
         if self._oracle is not None:
             moved = self._oracle.scanCentre(frameIndex, centre, 0.5 * view.bfov.horizontalFovRad)
             if moved is not centre:
@@ -422,6 +451,24 @@ class TrackControllerImpl(TrackControllerProtocol):
         ``camera.rotation(a, b)`` takes a direction seen in frame ``a`` to frame ``b``.
         """
         self._camera = camera
+
+    def useGlobalSearch(self, every: int, count: int) -> None:
+        """Experimental (E054): a whole-sphere detection every ``every`` lost frames."""
+        self._globalEvery, self._globalCount = int(every), int(count)
+
+    @property
+    def globalSearchPending(self) -> bool:
+        """The frame being planned looks for the target on the whole sphere."""
+        return self._globalPending
+
+    @property
+    def trustedBfov(self) -> BFoV | None:
+        """Where and how large the target was when last trusted."""
+        return self._lastGoodBfov
+
+    def useSphereScan(self, minSizeRad: float | None) -> None:
+        """Experimental (E053): enlarged searches of targets this large take the whole sphere."""
+        self._sphereScanRad = None if minSizeRad is None else float(minSizeRad)
 
     def useOracle(self, oracle: Any | None) -> None:
         """Evaluation only (E052): let ground truth correct a share of the decisions."""
@@ -556,6 +603,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             "scanViews": len(pending.plan.scanViews),
             "scan": self._lastScan,
             **_scanPlace(self._lastScanCentre),
+            "scanSphere": int(self._lastScanSphere),
             "relative": None,
             "candidates": [],
         }

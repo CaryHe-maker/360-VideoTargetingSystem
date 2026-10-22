@@ -220,6 +220,7 @@ def runTracking(
     judgeSession: Any | None = None,
     oracle: Any | None = None,
     camera: Any | None = None,
+    globalSearcher: Any | None = None,
 ) -> int:
     """Run the sequential tracking pipeline and publish one result per frame.
 
@@ -234,6 +235,8 @@ def runTracking(
             frame0 = _requireFrame(source.read())
             if camera is not None:
                 camera.submit(int(frame0.frameIndex), frame0.rgb)
+            if globalSearcher is not None and initialBfov is not None:
+                globalSearcher.begin(frame0.rgb, initialBfov)
             _startProfileFrame(profiler, int(frame0.frameIndex), decodeStartedNs)
             with _profile(profiler, "controller"):
                 initPlan = controller.buildInitialization(
@@ -348,7 +351,18 @@ def runTracking(
                                             view, observation.bbox
                                         ),
                                     )
-                                if plan.scanViews:
+                                if globalSearcher is not None and controller.globalSearchPending:
+                                    candidates, scanForwards = _globalCandidates(
+                                        frame=frame,
+                                        controller=controller,
+                                        geometry=geometry,
+                                        backend=backend,
+                                        verifier=verifier,
+                                        searcher=globalSearcher,
+                                    )
+                                    forwardCount += scanForwards
+                                    controller.settleScan(scanForwards)
+                                elif plan.scanViews:
                                     candidates, scanForwards = _scanCandidates(
                                         frame=frame,
                                         plan=plan,
@@ -630,6 +644,43 @@ def _scanCandidates(
                 )
             )
     return tuple(candidates), forwards
+
+
+def _globalCandidates(
+    *,
+    frame: FramePacket,
+    controller: TrackControllerImpl,
+    geometry: SphericalGeometry,
+    backend: TrackerBackend,
+    verifier: Any,
+    searcher: Any,
+) -> tuple[tuple[ProjectedObservation, ...], int]:
+    """Normal views at the best places a whole-sphere detector found (E054)."""
+    trusted = controller.trustedBfov
+    if trusted is None:
+        return (), 0
+    size = math.sqrt(trusted.horizontalFovRad * trusted.verticalFovRad)
+    places = searcher.search(frame.rgb, controller._globalCount, max(size, math.radians(1.0)))
+    specs = [controller.refinementView(place, index) for index, place in enumerate(places)]
+    if not specs:
+        return (), 0
+    views = {view.spec.viewId: view for view in geometry.cropViews(frame, specs)}
+    found = backend.inferDetached(tuple(views.values()))  # type: ignore[attr-defined]
+    candidates = []
+    for local in withScoreProbability(found):
+        view = views[local.viewId]
+        projected = _projectValidObservation(
+            frame=frame,
+            view=view,
+            observation=local,
+            predictedMotion=None,
+            geometry=geometry,
+        )
+        if projected is not None:
+            candidates.append(
+                replace(projected, appearanceSimilarity=verifier.similarity(view, local.bbox))
+            )
+    return tuple(candidates), len(views)
 
 
 def _judgeCandidates(

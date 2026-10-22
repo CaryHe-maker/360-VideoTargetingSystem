@@ -50,18 +50,25 @@ def basis(yawDeg: float, pitchDeg: float) -> np.ndarray:
     return np.stack([right, up, forward])
 
 
+_MAPS: dict[tuple, tuple[np.ndarray, np.ndarray]] = {}
+
+
 def perspective(rgb: np.ndarray, axes: np.ndarray, fovDeg: float, size: int) -> np.ndarray:
     height, width = rgb.shape[:2]
-    half = np.tan(np.radians(fovDeg) / 2.0)
-    s = (np.arange(size) + 0.5) / size * 2.0 - 1.0
-    u, v = np.meshgrid(s * half, -s * half)
-    d = u[..., None] * axes[0] + v[..., None] * axes[1] + axes[2]
-    d /= np.linalg.norm(d, axis=-1, keepdims=True)
-    yaw = np.arctan2(d[..., 0], d[..., 2])
-    pitch = np.arcsin(np.clip(d[..., 1], -1.0, 1.0))
-    mapX = ((yaw + np.pi) / (2.0 * np.pi) * width - 0.5).astype(np.float32)
-    mapY = ((np.pi / 2.0 - pitch) / np.pi * height - 0.5).astype(np.float32)
-    return cv2.remap(rgb, mapX, mapY, cv2.INTER_AREA, borderMode=cv2.BORDER_WRAP)
+    key = (width, height, fovDeg, size, axes.tobytes())
+    if key not in _MAPS:
+        half = np.tan(np.radians(fovDeg) / 2.0)
+        s = (np.arange(size) + 0.5) / size * 2.0 - 1.0
+        u, v = np.meshgrid(s * half, -s * half)
+        d = u[..., None] * axes[0] + v[..., None] * axes[1] + axes[2]
+        d /= np.linalg.norm(d, axis=-1, keepdims=True)
+        yaw = np.arctan2(d[..., 0], d[..., 2])
+        pitch = np.arcsin(np.clip(d[..., 1], -1.0, 1.0))
+        mapX = ((yaw + np.pi) / (2.0 * np.pi) * width - 0.5).astype(np.float32)
+        mapY = ((np.pi / 2.0 - pitch) / np.pi * height - 0.5).astype(np.float32)
+        _MAPS[key] = cv2.convertMaps(mapX, mapY, cv2.CV_16SC2)
+    first, second = _MAPS[key]
+    return cv2.remap(rgb, first, second, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
 
 
 def faceDirection(axes: np.ndarray, fovDeg: float, x: float, y: float, size: int) -> np.ndarray:
@@ -73,31 +80,56 @@ def faceDirection(axes: np.ndarray, fovDeg: float, x: float, y: float, size: int
 
 
 class Detector:
-    def __init__(self) -> None:
+    """OWLv2 image-guided detection with the query embedded once and faces batched."""
+
+    def __init__(self, batch: int = 3) -> None:
         from transformers import Owlv2ForObjectDetection, Owlv2Processor
 
         name = "google/owlv2-base-patch16-ensemble"
-        self.processor = Owlv2Processor.from_pretrained(name)
-        self.model = Owlv2ForObjectDetection.from_pretrained(name).cuda().eval()
+        processor = Owlv2Processor.from_pretrained(name)
+        self.model = Owlv2ForObjectDetection.from_pretrained(name).cuda().eval().half()
+        self.mean = torch.tensor(processor.image_processor.image_mean, device="cuda").view(
+            1, 3, 1, 1
+        )
+        self.std = torch.tensor(processor.image_processor.image_std, device="cuda").view(1, 3, 1, 1)
+        self.batch = batch
+        self.query: torch.Tensor | None = None
+
+    def _pixels(self, images: list[np.ndarray]) -> torch.Tensor:
+        x = torch.from_numpy(np.stack(images)).cuda().permute(0, 3, 1, 2).float() / 255.0
+        if x.shape[-1] != FACE:
+            x = torch.nn.functional.interpolate(x, size=(FACE, FACE), mode="bilinear")
+        return ((x - self.mean) / self.std).half()
+
+    @torch.inference_mode()
+    def setQuery(self, query: np.ndarray) -> None:
+        feature_map = self.model.image_embedder(pixel_values=self._pixels([query]))[0]
+        b, h, w, d = feature_map.shape
+        feats = feature_map.reshape(b, h * w, d)
+        self.query, _, _ = self.model.embed_image_query(feats, feature_map)
 
     @torch.inference_mode()
     def detect(
-        self, faces: list[np.ndarray], query: np.ndarray
+        self, faces: list[np.ndarray], perFace: int = 30
     ) -> list[tuple[int, float, float, float]]:
-        """(face, x, y, score) of every detection, face pixel coordinates."""
+        """(face, x, y, score) of the best detections of every face, in face pixels."""
+        assert self.query is not None
         out = []
-        for index, face in enumerate(faces):
-            inputs = self.processor(images=face, query_images=query, return_tensors="pt").to("cuda")
-            result = self.model.image_guided_detection(**inputs)
-            # The processor pads to a square of the longer side; faces are square.
-            target = torch.tensor([[face.shape[0], face.shape[1]]], device="cuda")
-            post = self.processor.post_process_image_guided_detection(
-                outputs=result, threshold=0.0, nms_threshold=0.3, target_sizes=target
-            )[0]
-            for box, score in zip(post["boxes"].tolist(), post["scores"].tolist(), strict=True):
-                x = 0.5 * (box[0] + box[2])
-                y = 0.5 * (box[1] + box[3])
-                out.append((index, x, y, float(score)))
+        for start in range(0, len(faces), self.batch):
+            part = faces[start : start + self.batch]
+            feature_map = self.model.image_embedder(pixel_values=self._pixels(part))[0]
+            b, h, w, d = feature_map.shape
+            feats = feature_map.reshape(b, h * w, d)
+            logits, _ = self.model.class_predictor(feats, self.query.expand(b, -1, -1), None)
+            boxes = self.model.box_predictor(feats, feature_map)
+            scores = torch.sigmoid(logits[..., 0].float())
+            top = torch.topk(scores, perFace, dim=1)
+            for k in range(b):
+                for score, index in zip(
+                    top.values[k].tolist(), top.indices[k].tolist(), strict=True
+                ):
+                    cx, cy = boxes[k, index, 0].item(), boxes[k, index, 1].item()
+                    out.append((start + k, cx * FACE, cy * FACE, float(score)))
         return out
 
 
@@ -117,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     detector = Detector()
     axesOf = [basis(y, p) for y, p in FACES]
     queries: dict[str, np.ndarray] = {}
+    queryOf = None
     rows = []
     timings = []
     items = list(sp.searches(args, args.run, dataset))[:: args.every]
@@ -134,16 +167,25 @@ def main(argv: list[str] | None = None) -> int:
         sequence.close()
         started = time.perf_counter()
         faces = [perspective(rgb, axes, 90.0, FACE) for axes in axesOf]
-        found = detector.detect(faces, queries[name])
+        if detector.query is None or queryOf != name:
+            detector.setQuery(queries[name])
+            queryOf = name
+        found = detector.detect(faces)
         torch.cuda.synchronize()
         timings.append(time.perf_counter() - started)
         found.sort(key=lambda d: -d[3])
         truth = item["truth"]
         size = item["targetSize"]
-        hitsAt = []
-        for face, x, y, score in found[: max(TOPS)]:
+        # Keep detections at least one trusted target size apart (system information).
+        apart = max(float(item["trace"].size[item["trusted"]]), 1.0)
+        kept: list[np.ndarray] = []
+        for face, x, y, score in found:
             d = faceDirection(axesOf[face], 90.0, x, y, FACE)
-            hitsAt.append(sp.angle(d, truth) < size)
+            if all(sp.angle(d, other) >= apart for other in kept):
+                kept.append(d)
+            if len(kept) >= max(TOPS):
+                break
+        hitsAt = [sp.angle(d, truth) < size for d in kept]
         trace = item["trace"]
         centre = trace.pos[item["trusted"]]
         if sp.angle(centre, truth) <= item["half"]:

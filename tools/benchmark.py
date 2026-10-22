@@ -122,6 +122,18 @@ def buildParser() -> argparse.ArgumentParser:
         help="experimental (E053): turn enlarged searches with the camera's rotation",
     )
     run.add_argument(
+        "--sphere-scan-deg",
+        type=float,
+        default=None,
+        help="experimental (E053): targets at least this large (degrees) search the whole sphere",
+    )
+    run.add_argument(
+        "--global-search",
+        default=None,
+        help="experimental (E054): EVERY,COUNT: every EVERY lost frames a whole-sphere "
+        "detector (OWLv2) proposes COUNT places for normal views",
+    )
+    run.add_argument(
         "--oracle-data",
         type=Path,
         default=Path("outputs/E052/distributions.npz"),
@@ -242,6 +254,12 @@ def main(argv: list[str] | None = None) -> int:
                     candidateJudge=judge,
                     oracle=oracle,
                     cameraMotion=args.camera_motion,
+                    sphereScanDeg=args.sphere_scan_deg,
+                    globalSearch=(
+                        None
+                        if args.global_search is None
+                        else tuple(int(x) for x in args.global_search.split(","))
+                    ),
                 )
                 failed = failed or bool(summary.failures)
             return 1 if failed else 0

@@ -126,5 +126,10 @@
 | `E052-train-oracleBCDhi-s2` | E052 | dev-train | `ours` | 2026-10-22 06:16 | `663fa6a` | `1669b475` | 21 | 0.499 | 0.618 | 0.227 | 1.10 | 32 | 57 | 28.7 | unknown | partial oracle B=0.43 C=0.49 D=0.45 (evaluation only), seed 2 |
 | `E052-train-oracleABCDhi-s1` | E052 | dev-train | `ours` | 2026-10-22 06:25 | `663fa6a` | `1669b475` | 21 | 0.514 | 0.630 | 0.205 | 1.17 | 32 | 58 | 27.6 | unknown | partial oracle A=0.55 B=0.43 C=0.49 D=0.45 (evaluation only), seed 1 |
 | `E052-train-oracleABCDhi-s2` | E052 | dev-train | `ours` | 2026-10-22 06:35 | `663fa6a` | `1669b475` | 21 | 0.535 | 0.668 | 0.146 | 1.14 | 31 | 56 | 29.0 | unknown | partial oracle A=0.55 B=0.43 C=0.49 D=0.45 (evaluation only), seed 2 |
+| `E053-train-camera-s1` | E053 | dev-train | `ours` | 2026-10-22 09:23 | `4ec45b0` | `1669b475` | 33 | 0.538 | 0.638 | 0.277 | 1.14 | 40 | 62 | 17.9 | unknown | base 2 + enlarged searches turned with the camera rotation, seed 1 |
+| `E053-train-camera-s2` | E053 | dev-train | `ours` | 2026-10-22 09:44 | `4ec45b0*` | `1669b475` | 33 | 0.502 | 0.597 | 0.310 | 1.13 | 37 | 74 | 20.1 | unknown | base 2 + enlarged searches turned with the camera rotation, seed 2 |
+| `E053-train-camera-s3` | E053 | dev-train | `ours` | 2026-10-22 10:03 | `4ec45b0*` | `1669b475` | 33 | 0.509 | 0.610 | 0.303 | 1.14 | 38 | 65 | 18.3 | unknown | base 2 + enlarged searches turned with the camera rotation, seed 3 |
+| `E053-train-camera-s4` | E053 | dev-train | `ours` | 2026-10-22 10:23 | `4ec45b0*` | `1669b475` | 33 | 0.477 | 0.566 | 0.353 | 1.15 | 36 | 57 | 19.0 | unknown | base 2 + enlarged searches turned with the camera rotation, seed 4 |
+| `E053-train-camera-s5` | E053 | dev-train | `ours` | 2026-10-22 10:43 | `4ec45b0*` | `1669b475` | 33 | 0.492 | 0.590 | 0.323 | 1.15 | 36 | 80 | 18.9 | unknown | base 2 + enlarged searches turned with the camera rotation, seed 5 |
 
 Commit 后的 `*` 表示运行时工作区有未提交的改动。

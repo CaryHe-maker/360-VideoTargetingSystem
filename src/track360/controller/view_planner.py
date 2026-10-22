@@ -84,9 +84,7 @@ class ViewPlanner:
             return view
         return replace(
             view,
-            trajectory=tuple(
-                localBoxOfBfov(view, bfov) for bfov in history[-TRAJECTORY_LENGTH:]
-            ),
+            trajectory=tuple(localBoxOfBfov(view, bfov) for bfov in history[-TRAJECTORY_LENGTH:]),
         )
 
     def _searchView(
@@ -118,11 +116,15 @@ class ViewPlanner:
         # The tangent extent of a target grows without bound towards 180 degrees;
         # PRIOR_MAX_SIZE_RAD keeps the padded crop finite.
         scale = (1.0 - 1e-9) / tan(fov / 2.0)
-        widthPx = self._geometry.viewWidthPx * scale * _halfTangent(
-            min(horizontalSizeRad, PRIOR_MAX_SIZE_RAD)
+        widthPx = (
+            self._geometry.viewWidthPx
+            * scale
+            * _halfTangent(min(horizontalSizeRad, PRIOR_MAX_SIZE_RAD))
         )
-        heightPx = self._geometry.viewHeightPx * scale * _halfTangent(
-            min(verticalSizeRad, PRIOR_MAX_SIZE_RAD)
+        heightPx = (
+            self._geometry.viewHeightPx
+            * scale
+            * _halfTangent(min(verticalSizeRad, PRIOR_MAX_SIZE_RAD))
         )
         return ViewSpec(
             viewId=SEARCH_VIEW_ID,
@@ -149,11 +151,15 @@ class ViewPlanner:
             )
         bfov = self.templateBfov(target)
         widthPx, heightPx = self._geometry.viewWidthPx, self._geometry.viewHeightPx
-        boxWidth = 2.0 * fovToFocalLengthPx(bfov.horizontalFovRad, widthPx) * tan(
-            target.horizontalFovRad / 2.0
+        boxWidth = (
+            2.0
+            * fovToFocalLengthPx(bfov.horizontalFovRad, widthPx)
+            * tan(target.horizontalFovRad / 2.0)
         )
-        boxHeight = 2.0 * fovToFocalLengthPx(bfov.verticalFovRad, heightPx) * tan(
-            target.verticalFovRad / 2.0
+        boxHeight = (
+            2.0
+            * fovToFocalLengthPx(bfov.verticalFovRad, heightPx)
+            * tan(target.verticalFovRad / 2.0)
         )
         boxWidth = max(2.0, min(float(widthPx), boxWidth))
         boxHeight = max(2.0, min(float(heightPx), boxHeight))
@@ -219,6 +225,26 @@ class ViewPlanner:
             ),
             projection=ViewProjection.SPHERICAL,
         )
+
+    def sphereView(
+        self, center: SphericalPoint, horizontalSizeRad: float, verticalSizeRad: float, viewId: int
+    ) -> ViewSpec:
+        """The whole sphere as one view, centred on ``center`` (experimental, E053).
+
+        Laid out as a spherical view for a target so large that its search region is
+        the whole sphere; only targets of about ten degrees and more stay findable in
+        it (E028).
+        """
+        size = sqrt(horizontalSizeRad * verticalSizeRad)
+        factor = 2.0 * pi / (ALIGNED_SEARCH_FACTOR * max(size, 1e-6))
+        view = self._sphericalView(
+            center,
+            factor * horizontalSizeRad,
+            factor * verticalSizeRad,
+            ALIGNED_SEARCH_FACTOR,
+            self._geometry.viewWidthPx,
+        )
+        return replace(view, viewId=viewId)
 
     def templateBfov(self, target: BFoV) -> BFoV:
         """Return the view the frame-0 template is cropped from."""
@@ -292,12 +318,14 @@ def localBoxOfBfov(view: ViewSpec, bfov: BFoV) -> BBoxXYWH:
     halfViewY = tan(view.bfov.verticalFovRad / 2.0)
     centerX = view.outputWidthPx / 2.0 * (1.0 + across / depth / halfViewX)
     centerY = view.outputHeightPx / 2.0 * (1.0 - upward / depth / halfViewY)
-    widthPx = view.outputWidthPx * _halfTangent(
-        min(bfov.horizontalFovRad, PRIOR_MAX_SIZE_RAD)
-    ) / halfViewX
-    heightPx = view.outputHeightPx * _halfTangent(
-        min(bfov.verticalFovRad, PRIOR_MAX_SIZE_RAD)
-    ) / halfViewY
+    widthPx = (
+        view.outputWidthPx
+        * _halfTangent(min(bfov.horizontalFovRad, PRIOR_MAX_SIZE_RAD))
+        / halfViewX
+    )
+    heightPx = (
+        view.outputHeightPx * _halfTangent(min(bfov.verticalFovRad, PRIOR_MAX_SIZE_RAD)) / halfViewY
+    )
     return BBoxXYWH(
         xPx=centerX - widthPx / 2.0,
         yPx=centerY - heightPx / 2.0,

@@ -12,6 +12,7 @@ import csv
 import hashlib
 import json
 import logging
+import math
 from collections import deque
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
@@ -185,6 +186,8 @@ def runBenchmark(
     candidateJudge: Any | None = None,
     oracle: Any | None = None,
     cameraMotion: bool = False,
+    sphereScanDeg: float | None = None,
+    globalSearch: tuple[int, int] | None = None,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -218,6 +221,8 @@ def runBenchmark(
             candidateJudge=candidateJudge,
             oracle=oracle,
             cameraMotion=cameraMotion,
+            sphereScanDeg=sphereScanDeg,
+            globalSearch=globalSearch,
         )
 
 
@@ -239,6 +244,8 @@ def _runLocked(
     candidateJudge: Any | None = None,
     oracle: Any | None = None,
     cameraMotion: bool = False,
+    sphereScanDeg: float | None = None,
+    globalSearch: tuple[int, int] | None = None,
 ) -> BenchmarkSummary:
     dataset = Vot360Dataset(datasetRoot, labelRoot)
     names = _selectSequences(dataset, sequences, shard)
@@ -262,6 +269,9 @@ def _runLocked(
             "oracle": None if oracle is None else oracle.describe(),
             # Experimental (E053): enlarged searches turned with the camera.
             "cameraMotion": cameraMotion,
+            "sphereScanDeg": sphereScanDeg,
+            # Experimental (E054): whole-sphere detection every N lost frames, K places.
+            "globalSearch": None if globalSearch is None else list(globalSearch),
             **collectRunMetadata(config),
         },
     )
@@ -279,6 +289,12 @@ def _runLocked(
             Path(config.model.weights).parent / "hub",
             [name for name in MODEL_SIGNALS if name in probeSignals] or MODEL_SIGNALS[:1],
         )
+    globalSearcher = None
+    if globalSearch is not None:
+        from track360.runtime.global_search import GlobalSearcher
+
+        globalSearcher = GlobalSearcher(Path(config.model.weights).parent / "hf")
+        globalSearcher.schedule = tuple(globalSearch)
     reports: list[SequenceReport] = []
     try:
         for position, name in enumerate(names, start=1):
@@ -298,6 +314,8 @@ def _runLocked(
                 candidateJudge,
                 oracle,
                 cameraMotion,
+                sphereScanDeg,
+                globalSearcher,
             )
             reports.append(report)
             # A skipped sequence keeps the report of the run that tracked it.
@@ -445,6 +463,8 @@ def _runOne(
     candidateJudge: Any | None = None,
     oracle: Any | None = None,
     cameraMotion: bool = False,
+    sphereScanDeg: float | None = None,
+    globalSearcher: Any | None = None,
 ) -> SequenceReport:
     source = Vot360DataSource(maxFrames=maxFrames, labelRoot=dataset.labelRoot)
     try:
@@ -487,6 +507,8 @@ def _runOne(
                 candidateJudge,
                 sequenceOracle,
                 cameraMotion,
+                sphereScanDeg,
+                globalSearcher,
             )
             if trace is not None:
                 writeStateTrace(outputRoot, method, name, trace)
@@ -549,6 +571,7 @@ TRACE_COLUMNS = (
     "scan",
     "scanYawDeg",
     "scanPitchDeg",
+    "scanSphere",
     "relative",
     "candidates",
 )
@@ -586,6 +609,8 @@ def _trackSpherical(
     candidateJudge: Any | None = None,
     oracle: Any | None = None,
     cameraMotion: bool = False,
+    sphereScanDeg: float | None = None,
+    globalSearcher: Any | None = None,
 ) -> dict[str, object]:
     shared = _SharedSession(session)
     runtime = buildRuntime(
@@ -593,6 +618,10 @@ def _trackSpherical(
     )
     if oracle is not None:
         runtime.controller.useOracle(oracle)
+    if sphereScanDeg is not None:
+        runtime.controller.useSphereScan(math.radians(sphereScanDeg))
+    if globalSearcher is not None:
+        runtime.controller.useGlobalSearch(*globalSearcher.schedule)
     camera = None
     if cameraMotion:
         from track360.runtime.camera_motion import CameraMotion
@@ -614,6 +643,7 @@ def _trackSpherical(
             judgeSession=runtime.judgeSession,
             oracle=oracle,
             camera=camera,
+            globalSearcher=globalSearcher,
         )
         return runtime.controller.lossStatistics
     finally:
