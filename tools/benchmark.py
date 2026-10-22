@@ -117,6 +117,11 @@ def buildParser() -> argparse.ArgumentParser:
         "corrects that share of the stage's mistakes",
     )
     run.add_argument(
+        "--camera-motion",
+        action="store_true",
+        help="experimental (E053): turn enlarged searches with the camera's rotation",
+    )
+    run.add_argument(
         "--oracle-data",
         type=Path,
         default=Path("outputs/E052/distributions.npz"),
@@ -236,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
                     noiseStd=args.noise_std,
                     candidateJudge=judge,
                     oracle=oracle,
+                    cameraMotion=args.camera_motion,
                 )
                 failed = failed or bool(summary.failures)
             return 1 if failed else 0

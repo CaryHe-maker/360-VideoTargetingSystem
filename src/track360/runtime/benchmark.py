@@ -184,6 +184,7 @@ def runBenchmark(
     noiseStd: float = DEFAULT_NOISE_STD,
     candidateJudge: Any | None = None,
     oracle: Any | None = None,
+    cameraMotion: bool = False,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -216,6 +217,7 @@ def runBenchmark(
             noiseStd=noiseStd,
             candidateJudge=candidateJudge,
             oracle=oracle,
+            cameraMotion=cameraMotion,
         )
 
 
@@ -236,6 +238,7 @@ def _runLocked(
     noiseStd: float,
     candidateJudge: Any | None = None,
     oracle: Any | None = None,
+    cameraMotion: bool = False,
 ) -> BenchmarkSummary:
     dataset = Vot360Dataset(datasetRoot, labelRoot)
     names = _selectSequences(dataset, sequences, shard)
@@ -257,6 +260,8 @@ def _runLocked(
             "candidateJudge": None if candidateJudge is None else candidateJudge.describe(),
             # Evaluation only: ground truth corrected some decisions (E052).
             "oracle": None if oracle is None else oracle.describe(),
+            # Experimental (E053): enlarged searches turned with the camera.
+            "cameraMotion": cameraMotion,
             **collectRunMetadata(config),
         },
     )
@@ -292,6 +297,7 @@ def _runLocked(
                 noiseStd,
                 candidateJudge,
                 oracle,
+                cameraMotion,
             )
             reports.append(report)
             # A skipped sequence keeps the report of the run that tracked it.
@@ -438,6 +444,7 @@ def _runOne(
     noiseStd: float = DEFAULT_NOISE_STD,
     candidateJudge: Any | None = None,
     oracle: Any | None = None,
+    cameraMotion: bool = False,
 ) -> SequenceReport:
     source = Vot360DataSource(maxFrames=maxFrames, labelRoot=dataset.labelRoot)
     try:
@@ -471,7 +478,15 @@ def _runOne(
 
                 sequenceOracle = makeOracle(oracle, source.sequence, name)
             loss = _trackSpherical(
-                source, session, config, collector, probe, trace, candidateJudge, sequenceOracle
+                source,
+                session,
+                config,
+                collector,
+                probe,
+                trace,
+                candidateJudge,
+                sequenceOracle,
+                cameraMotion,
             )
             if trace is not None:
                 writeStateTrace(outputRoot, method, name, trace)
@@ -532,6 +547,8 @@ TRACE_COLUMNS = (
     "forwards",
     "scanViews",
     "scan",
+    "scanYawDeg",
+    "scanPitchDeg",
     "relative",
     "candidates",
 )
@@ -568,6 +585,7 @@ def _trackSpherical(
     trace: list[dict[str, object]] | None = None,
     candidateJudge: Any | None = None,
     oracle: Any | None = None,
+    cameraMotion: bool = False,
 ) -> dict[str, object]:
     shared = _SharedSession(session)
     runtime = buildRuntime(
@@ -575,6 +593,12 @@ def _trackSpherical(
     )
     if oracle is not None:
         runtime.controller.useOracle(oracle)
+    camera = None
+    if cameraMotion:
+        from track360.runtime.camera_motion import CameraMotion
+
+        camera = CameraMotion()
+        runtime.controller.useCameraMotion(camera)
     try:
         runTracking(
             source=source,
@@ -589,9 +613,12 @@ def _trackSpherical(
             judge=runtime.judge,
             judgeSession=runtime.judgeSession,
             oracle=oracle,
+            camera=camera,
         )
         return runtime.controller.lossStatistics
     finally:
+        if camera is not None:
+            camera.close()
         closeRuntime(runtime)
 
 

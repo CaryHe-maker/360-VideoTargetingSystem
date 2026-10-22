@@ -153,6 +153,10 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._judgeThreshold: float | None = None
         # Evaluation only (E052): a partial oracle that corrects some decisions.
         self._oracle: Any | None = None
+        # Experimental (E053): the camera's rotation, to turn the search centre with it.
+        self._camera: Any | None = None
+        self._lastGoodFrame = 0
+        self._lastScanCentre: SphericalPoint | None = None
 
     @property
     def lossStatistics(self) -> dict[str, object]:
@@ -264,6 +268,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._trajectory.clear()
         self._trajectory.extend([self._currentBfov] * TRAJECTORY_LENGTH)
         self._lastGoodBfov = self._currentBfov
+        self._lastGoodFrame = 0
         self._initialized = True
         self._initialPlan = None
         self._stateRevision = 0
@@ -317,6 +322,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         scanViews: tuple[ViewSpec, ...] = ()
         scanRefine = False
         self._lastScan = ""
+        self._lastScanCentre = None
         lost = self._mode is TrackMode.LOST
         lostFrames = self._lostFrames if lost else 0
         self._lostFrames = lostFrames + 1 if lost else 0
@@ -329,9 +335,7 @@ class TrackControllerImpl(TrackControllerProtocol):
                 self._scanTokens + self._backendTuning.scanBudgetPerFrame,
             )
             scanCount = min(scanCount, int(self._scanTokens))
-        searching = (
-            self._actions in _SEARCHING_ACTIONS and lost and self._lastGoodBfov is not None
-        )
+        searching = self._actions in _SEARCHING_ACTIONS and lost and self._lastGoodBfov is not None
         if searching:
             scanViews, scanRefine = self._zoomScan(
                 mainView, lostFrames, scanCount, int(frame.frameIndex)
@@ -386,18 +390,22 @@ class TrackControllerImpl(TrackControllerProtocol):
             else tuning.zoomFirstScale
         )
         self._lastScan = f"{scale:g}x"
+        centre = trusted.center
+        if self._camera is not None and frameIndex > self._lastGoodFrame + 1:
+            # The camera may have turned since the place was trusted; the frame before
+            # this one is the latest whose rotation is known when the search is planned.
+            centre = _turned(centre, self._camera.rotation(self._lastGoodFrame, frameIndex - 1))
         view = self._planner.probeView(
-            trusted.center,
+            centre,
             trusted.horizontalFovRad,
             trusted.verticalFovRad,
             scale,
             SCAN_VIEW_ID_BASE,
         )
         if self._oracle is not None:
-            centre = self._oracle.scanCentre(
-                frameIndex, trusted.center, 0.5 * view.bfov.horizontalFovRad
-            )
-            if centre is not trusted.center:
+            moved = self._oracle.scanCentre(frameIndex, centre, 0.5 * view.bfov.horizontalFovRad)
+            if moved is not centre:
+                centre = moved
                 view = self._planner.probeView(
                     centre,
                     trusted.horizontalFovRad,
@@ -405,7 +413,15 @@ class TrackControllerImpl(TrackControllerProtocol):
                     scale,
                     SCAN_VIEW_ID_BASE,
                 )
+        self._lastScanCentre = view.bfov.center
         return (view,), True
+
+    def useCameraMotion(self, camera: Any | None) -> None:
+        """Experimental (E053): centre enlarged searches where the trusted place has turned to.
+
+        ``camera.rotation(a, b)`` takes a direction seen in frame ``a`` to frame ``b``.
+        """
+        self._camera = camera
 
     def useOracle(self, oracle: Any | None) -> None:
         """Evaluation only (E052): let ground truth correct a share of the decisions."""
@@ -513,6 +529,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         if self._backendTuning.lossHandling:
             if decision.nextMode is TrackMode.TRACKING:
                 self._lastGoodBfov = self._currentBfov
+                self._lastGoodFrame = int(plan.frameIndex)
             else:
                 self._suspectFrameCount += 1
                 # Without actions the run must stay what it is without loss handling.
@@ -538,6 +555,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             "calm": self._stateMachine.calmFrames,
             "scanViews": len(pending.plan.scanViews),
             "scan": self._lastScan,
+            **_scanPlace(self._lastScanCentre),
             "relative": None,
             "candidates": [],
         }
@@ -631,13 +649,12 @@ class TrackControllerImpl(TrackControllerProtocol):
         smaller = min(_angularSize(current), _angularSize(candidate.bfov))
         return acos(max(-1.0, min(1.0, cosine))) < 0.5 * larger and larger < 1.5 * smaller
 
-    def _reacquire(
-        self, pending: _PendingFrame, candidate: ProjectedObservation
-    ) -> TrackResult:
+    def _reacquire(self, pending: _PendingFrame, candidate: ProjectedObservation) -> TrackResult:
         """Restart the track from a scan candidate."""
         plan, frame = pending.plan, pending.frame
         score = _observationScore(candidate)
         self._lastGoodBfov = candidate.bfov
+        self._lastGoodFrame = int(frame.frameIndex)
         self._stateMachine.reset()
         self._restartMotion(candidate.bfov, frame)
         self._currentBfov = candidate.bfov
@@ -771,9 +788,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             resultSource=source,
         )
 
-    def _recordMeasurement(
-        self, pending: _PendingFrame, bfov: BFoV, confidence: float
-    ) -> None:
+    def _recordMeasurement(self, pending: _PendingFrame, bfov: BFoV, confidence: float) -> None:
         if hasattr(self._motion, "recordMeasurement"):
             self._motion.recordMeasurement(  # type: ignore[attr-defined]
                 frameIndex=int(pending.frame.frameIndex),
@@ -828,6 +843,22 @@ class TrackControllerImpl(TrackControllerProtocol):
             )
 
 
+def _turned(point: SphericalPoint, rotation) -> SphericalPoint:
+    x, y, z = (float(value) for value in rotation @ (point.x, point.y, point.z))
+    norm = sqrt(x * x + y * y + z * z)
+    return makeSphericalPoint(atan2(x, z), asin(max(-1.0, min(1.0, y / norm))))
+
+
+def _scanPlace(centre: SphericalPoint | None) -> dict[str, object]:
+    """Where the enlarged search view of the frame was centred, for the state trace."""
+    if centre is None:
+        return {"scanYawDeg": "", "scanPitchDeg": ""}
+    return {
+        "scanYawDeg": round(degrees(atan2(centre.x, centre.z)), 3),
+        "scanPitchDeg": round(degrees(asin(max(-1.0, min(1.0, centre.y)))), 3),
+    }
+
+
 def _preferred(candidate: ProjectedObservation, best: ProjectedObservation, judged: bool) -> bool:
     """Whether an accepted candidate beats the best one so far."""
     if judged:
@@ -841,9 +872,7 @@ def _preferred(candidate: ProjectedObservation, best: ProjectedObservation, judg
 
 def _observationScore(observation: ProjectedObservation) -> float:
     value = (
-        observation.singleScore
-        if observation.singleScore is not None
-        else observation.fusedScore
+        observation.singleScore if observation.singleScore is not None else observation.fusedScore
     )
     return float(min(1.0, max(0.0, value)))
 

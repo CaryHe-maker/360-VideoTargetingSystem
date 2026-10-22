@@ -219,6 +219,7 @@ def runTracking(
     judge: Any | None = None,
     judgeSession: Any | None = None,
     oracle: Any | None = None,
+    camera: Any | None = None,
 ) -> int:
     """Run the sequential tracking pipeline and publish one result per frame.
 
@@ -231,6 +232,8 @@ def runTracking(
         try:
             decodeStartedNs = _profileNow(profiler)
             frame0 = _requireFrame(source.read())
+            if camera is not None:
+                camera.submit(int(frame0.frameIndex), frame0.rgb)
             _startProfileFrame(profiler, int(frame0.frameIndex), decodeStartedNs)
             with _profile(profiler, "controller"):
                 initPlan = controller.buildInitialization(
@@ -270,6 +273,8 @@ def runTracking(
                     frame = pipelineReader.read()
                     if frame is not None:
                         _startProfileFrame(profiler, int(frame.frameIndex), decodeStartedNs)
+                        if camera is not None:
+                            camera.submit(int(frame.frameIndex), frame.rgb)
                         _recordPipelineProfile(profiler, pipelineReader, controller)
                         try:
                             with _profile(profiler, "controller"):
