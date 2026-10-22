@@ -187,7 +187,7 @@ def runBenchmark(
     oracle: Any | None = None,
     cameraMotion: bool = False,
     sphereScanDeg: float | None = None,
-    globalSearch: tuple[int, int] | None = None,
+    globalSearch: tuple[int, ...] | None = None,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -245,7 +245,7 @@ def _runLocked(
     oracle: Any | None = None,
     cameraMotion: bool = False,
     sphereScanDeg: float | None = None,
-    globalSearch: tuple[int, int] | None = None,
+    globalSearch: tuple[int, ...] | None = None,
 ) -> BenchmarkSummary:
     dataset = Vot360Dataset(datasetRoot, labelRoot)
     names = _selectSequences(dataset, sequences, shard)

@@ -164,6 +164,8 @@ class TrackControllerImpl(TrackControllerProtocol):
         # whole sphere and normal views are taken at the best ``_globalCount`` places.
         self._globalEvery = 0
         self._globalCount = 0
+        # With ``_globalAfter`` > 0: from that many lost frames on, every search is one.
+        self._globalAfter = 0
         self._globalPending = False
 
     @property
@@ -346,13 +348,12 @@ class TrackControllerImpl(TrackControllerProtocol):
             )
             scanCount = min(scanCount, int(self._scanTokens))
         searching = self._actions in _SEARCHING_ACTIONS and lost and self._lastGoodBfov is not None
-        globalFrame = (
-            searching
-            and self._globalEvery > 0
-            and lostFrames > 0
-            and lostFrames % self._globalEvery == 0
-            and scanCount >= self._globalCount
-        )
+        periodic = self._globalEvery > 0 and lostFrames > 0 and lostFrames % self._globalEvery == 0
+        late = self._globalAfter > 0 and lostFrames >= self._globalAfter
+        globalFrame = searching and (periodic or late) and scanCount >= self._globalCount
+        if searching and late and not globalFrame:
+            # Saving up for the next detection: no enlarged search meanwhile.
+            searching = False
         if globalFrame:
             # The views are chosen after the detector has looked (``refinementView``).
             self._globalPending = True
@@ -452,9 +453,12 @@ class TrackControllerImpl(TrackControllerProtocol):
         """
         self._camera = camera
 
-    def useGlobalSearch(self, every: int, count: int) -> None:
-        """Experimental (E054): a whole-sphere detection every ``every`` lost frames."""
+    def useGlobalSearch(self, every: int, count: int, after: int = 0) -> None:
+        """Experimental (E054): a whole-sphere detection every ``every`` lost frames, or,
+        with ``after`` > 0, in place of every enlarged search once the track has been
+        lost that long."""
         self._globalEvery, self._globalCount = int(every), int(count)
+        self._globalAfter = int(after)
 
     @property
     def globalSearchPending(self) -> bool:

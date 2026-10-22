@@ -130,8 +130,9 @@ def buildParser() -> argparse.ArgumentParser:
     run.add_argument(
         "--global-search",
         default=None,
-        help="experimental (E054): EVERY,COUNT: every EVERY lost frames a whole-sphere "
-        "detector (OWLv2) proposes COUNT places for normal views",
+        help="experimental (E054): EVERY,COUNT[,AFTER]: every EVERY lost frames a whole-sphere "
+        "detector (OWLv2) proposes COUNT places for normal views; with AFTER, it replaces "
+        "every enlarged search once the track has been lost AFTER frames (EVERY 0)",
     )
     run.add_argument(
         "--oracle-data",
