@@ -118,8 +118,12 @@ def buildParser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "--camera-motion",
-        action="store_true",
-        help="experimental (E053): turn enlarged searches with the camera's rotation",
+        type=int,
+        nargs="?",
+        const=512,
+        default=0,
+        help="experimental (E053): turn enlarged searches with the camera's rotation, "
+        "estimated on frames this many pixels wide (default 512)",
     )
     run.add_argument(
         "--sphere-scan-deg",

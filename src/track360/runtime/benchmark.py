@@ -185,7 +185,7 @@ def runBenchmark(
     noiseStd: float = DEFAULT_NOISE_STD,
     candidateJudge: Any | None = None,
     oracle: Any | None = None,
-    cameraMotion: bool = False,
+    cameraMotion: int = 0,
     sphereScanDeg: float | None = None,
     globalSearch: tuple[int, ...] | None = None,
 ) -> BenchmarkSummary:
@@ -243,7 +243,7 @@ def _runLocked(
     noiseStd: float,
     candidateJudge: Any | None = None,
     oracle: Any | None = None,
-    cameraMotion: bool = False,
+    cameraMotion: int = 0,
     sphereScanDeg: float | None = None,
     globalSearch: tuple[int, ...] | None = None,
 ) -> BenchmarkSummary:
@@ -462,7 +462,7 @@ def _runOne(
     noiseStd: float = DEFAULT_NOISE_STD,
     candidateJudge: Any | None = None,
     oracle: Any | None = None,
-    cameraMotion: bool = False,
+    cameraMotion: int = 0,
     sphereScanDeg: float | None = None,
     globalSearcher: Any | None = None,
 ) -> SequenceReport:
@@ -608,7 +608,7 @@ def _trackSpherical(
     trace: list[dict[str, object]] | None = None,
     candidateJudge: Any | None = None,
     oracle: Any | None = None,
-    cameraMotion: bool = False,
+    cameraMotion: int = 0,
     sphereScanDeg: float | None = None,
     globalSearcher: Any | None = None,
 ) -> dict[str, object]:
@@ -626,7 +626,7 @@ def _trackSpherical(
     if cameraMotion:
         from track360.runtime.camera_motion import CameraMotion
 
-        camera = CameraMotion()
+        camera = CameraMotion(workWidth=cameraMotion)
         runtime.controller.useCameraMotion(camera)
     try:
         runTracking(

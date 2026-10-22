@@ -131,5 +131,14 @@
 | `E053-train-camera-s3` | E053 | dev-train | `ours` | 2026-10-22 10:03 | `4ec45b0*` | `1669b475` | 33 | 0.509 | 0.610 | 0.303 | 1.14 | 38 | 65 | 18.3 | unknown | base 2 + enlarged searches turned with the camera rotation, seed 3 |
 | `E053-train-camera-s4` | E053 | dev-train | `ours` | 2026-10-22 10:23 | `4ec45b0*` | `1669b475` | 33 | 0.477 | 0.566 | 0.353 | 1.15 | 36 | 57 | 19.0 | unknown | base 2 + enlarged searches turned with the camera rotation, seed 4 |
 | `E053-train-camera-s5` | E053 | dev-train | `ours` | 2026-10-22 10:43 | `4ec45b0*` | `1669b475` | 33 | 0.492 | 0.590 | 0.323 | 1.15 | 36 | 80 | 18.9 | unknown | base 2 + enlarged searches turned with the camera rotation, seed 5 |
+| `E054-train-global-g10-s1` | E054 | dev-train | `ours` | 2026-10-22 11:20 | `23093c4` | `1669b475` | 33 | 0.546 | 0.651 | 0.255 | 1.13 | 37 | 52 | 18.2 | unknown | E053 + whole-sphere OWLv2 detection (g10), seed 1 |
+| `E054-train-global-g10-s2` | E054 | dev-train | `ours` | 2026-10-22 11:41 | `23093c4` | `1669b475` | 33 | 0.510 | 0.608 | 0.293 | 1.13 | 37 | 65 | 18.2 | unknown | E053 + whole-sphere OWLv2 detection (g10), seed 2 |
+| `E054-train-global-g5-s1` | E054 | dev-train | `ours` | 2026-10-22 12:02 | `23093c4` | `1669b475` | 33 | 0.517 | 0.613 | 0.310 | 1.13 | 37 | 51 | 17.2 | unknown | E053 + whole-sphere OWLv2 detection (g5), seed 1 |
+| `E054-train-global-g5-s2` | E054 | dev-train | `ours` | 2026-10-22 12:23 | `23093c4` | `1669b475` | 33 | 0.503 | 0.594 | 0.307 | 1.14 | 37 | 62 | 17.5 | unknown | E053 + whole-sphere OWLv2 detection (g5), seed 2 |
+| `E054-train-global-g10-s3` | E054 | dev-train | `ours` | 2026-10-22 12:46 | `23093c4` | `1669b475` | 33 | 0.510 | 0.611 | 0.302 | 1.12 | 37 | 56 | 18.3 | unknown | E053 + whole-sphere OWLv2 detection (g10), seed 3 |
+| `E054-train-global-g10-s4` | E054 | dev-train | `ours` | 2026-10-22 13:07 | `2973b4f` | `1669b475` | 33 | 0.482 | 0.576 | 0.333 | 1.15 | 37 | 59 | 18.1 | unknown | E053 + whole-sphere OWLv2 detection (g10), seed 4 |
+| `E054-train-global-g10-s5` | E054 | dev-train | `ours` | 2026-10-22 13:27 | `2973b4f` | `1669b475` | 33 | 0.497 | 0.597 | 0.309 | 1.13 | 37 | 64 | 18.3 | unknown | E053 + whole-sphere OWLv2 detection (g10), seed 5 |
+| `E054-train-global-late-s1` | E054 | dev-train | `ours` | 2026-10-22 13:48 | `2973b4f` | `1669b475` | 33 | 0.529 | 0.628 | 0.289 | 1.08 | 37 | 54 | 18.9 | unknown | E053 + whole-sphere OWLv2 detection (late), seed 1 |
+| `E054-train-global-late-s2` | E054 | dev-train | `ours` | 2026-10-22 14:08 | `2973b4f` | `1669b475` | 33 | 0.500 | 0.593 | 0.309 | 1.10 | 37 | 55 | 18.8 | unknown | E053 + whole-sphere OWLv2 detection (late), seed 2 |
 
 Commit 后的 `*` 表示运行时工作区有未提交的改动。
