@@ -110,7 +110,7 @@ def onsets(args: argparse.Namespace) -> None:
     lines = ["stable size band   good frames  onsets  per 1000  escaped the normal view"]
     for band, (good, count, escaped) in table.items():
         lines.append(
-            f"  {band[0]:>4}-{band[1]:<5}deg {good:>10} {count:>7} {1000 * count / max(1, good):>8.2f}"
+            f"  {band[0]:>4}-{band[1]:<5}deg {good:>10} {count:>7} {1000 * count / max(1, good):>8.2f}"  # noqa: E501
             f"   {escaped / max(1, count):6.1%}"
         )
     _write(args.out, "\n".join(lines), {str(k): v for k, v in table.items()})

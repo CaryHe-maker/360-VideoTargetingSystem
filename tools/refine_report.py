@@ -42,11 +42,11 @@ def main(argv: list[str] | None = None) -> int:
         c2 = np.mean([(e["iou2"] >= 0.5) and e["score2"] >= TAKE for e in part])
         boxedIou = i1[i1 >= 0.5].mean() if (i1 >= 0.5).any() else float("nan")
         lines.append(
-            f"  {low:.2f}-{high:<4} n={len(part):>5} | {np.mean(i1 >= 0.5):6.1%}  {i1.mean():.3f} / {boxedIou:.3f}"
+            f"  {low:.2f}-{high:<4} n={len(part):>5} | {np.mean(i1 >= 0.5):6.1%}  {i1.mean():.3f} / {boxedIou:.3f}"  # noqa: E501
             f"  {c1:6.1%} | {np.mean(i2 >= 0.5):6.1%}  {i2.mean():.3f}  {c2:6.1%}"
         )
     lines.append(
-        "second look only when the first box is farther than d: caught, boxed, extra forwards per search"
+        "second look only when the first box is farther than d: caught, boxed, extra forwards per search"  # noqa: E501
     )
     base = np.mean([(e["iou1"] >= 0.5) and e["score1"] >= TAKE for e in looks])
     lines.append(
@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
             caught.append(iou >= 0.5 and score >= TAKE)
             boxed.append(iou >= 0.5)
         lines.append(
-            f"  d > {d:.1f}    caught {np.mean(caught):6.1%}  boxed {np.mean(boxed):6.1%}  extra {extra / len(looks):.2f}"
+            f"  d > {d:.1f}    caught {np.mean(caught):6.1%}  boxed {np.mean(boxed):6.1%}  extra {extra / len(looks):.2f}"  # noqa: E501
         )
     # Zoom scale for small targets.
     small = [

@@ -2,7 +2,7 @@
 
     python tools/confirm_study.py next-search --dataset-root <dir> --label-root <dir> \\
         --runs outputs/E053d_cam_s1 ... --camera outputs/E053/camera512 --out outputs/E058/search
-    python tools/confirm_study.py next-frame ... --runs outputs/E053d_cam_s1 --out outputs/E058/frame
+    python tools/confirm_study.py next-frame ... --runs outputs/E053d_cam_s1 --out outputs/E058/frame  # noqa: E501
 
 A candidate whose score is in [low, 0.70) is not taken now but held.  It is taken when
 it is seen again where it should be (its place turned with the camera's rotation, within
@@ -206,12 +206,12 @@ def nextFrame(args) -> None:
 
 def report(args, stats, rule, label: str) -> None:
     lines = [
-        f"{label}; current rule (>= {TAKE}): {rule[0]} candidates, on target {rule[1] / max(1, rule[0]):.1%}",
+        f"{label}; current rule (>= {TAKE}): {rule[0]} candidates, on target {rule[1] / max(1, rule[0]):.1%}",  # noqa: E501
         "  low   held  confirmed  on target | take all >= low: count  on target",
     ]
     for low, s in stats.items():
         lines.append(
-            f"  {low:.2f} {s['held']:>6} {s['confirmed']:>9}  {s['confirmedOn'] / max(1, s['confirmed']):8.1%}"
+            f"  {low:.2f} {s['held']:>6} {s['confirmed']:>9}  {s['confirmedOn'] / max(1, s['confirmed']):8.1%}"  # noqa: E501
             f" | {s['direct']:>20} {s['directOn'] / max(1, s['direct']):9.1%}"
         )
     text = "\n".join(lines)

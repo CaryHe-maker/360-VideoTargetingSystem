@@ -120,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{k} {np.mean([p[k] for p in part]):6.1%}" for k in ("follow", "frozen", "turned")
         )
         lines.append(
-            f"  {label:<20} n={len(part):>6}  {cells}   frames since trusted median {np.median(durations[label]):.0f}"
+            f"  {label:<20} n={len(part):>6}  {cells}   frames since trusted median {np.median(durations[label]):.0f}"  # noqa: E501
         )
     lines.append("all untrusted frames by frames since the place was trusted")
     for low, high in ((1, 4), (4, 10), (10, 30), (30, 100), (100, 10**6)):
