@@ -146,5 +146,18 @@
 | `E053b-train-camera384-s4` | E053 | dev-train | `ours` | 2026-10-22 15:36 | `371d835` | `1669b475` | 33 | 0.471 | 0.560 | 0.359 | 1.16 | 38 | 51 | 22.2 | unknown | base 2 + camera rotation compensation at 384 px, seed 4 |
 | `E053b-train-camera384-s5` | E053 | dev-train | `ours` | 2026-10-22 15:53 | `371d835` | `1669b475` | 33 | 0.490 | 0.586 | 0.325 | 1.15 | 37 | 78 | 22.2 | unknown | base 2 + camera rotation compensation at 384 px, seed 5 |
 | `E053b-train-base1-latency-s1` | E053 | dev-train | `ours` | 2026-10-22 16:10 | `371d835` | `25ea3065` | 33 | 0.509 | 0.609 | 0.306 | 1.00 | 26 | 34 | 35.9 | unknown | baseline 1, seed 1, latency reference run in the same session as E053b |
+| `E053c-train-camera384-lazy-s1` | E053 | dev-train | `ours` | 2026-10-23 00:25 | `d8699f1` | `1669b475` | 33 | 0.514 | 0.610 | 0.300 | 1.14 | 32 | 60 | 28.4 | unknown | camera compensation 384 px, lazy, 100 hypotheses, seed 1 |
+| `E053c-train-camera384-lazy-s2` | E053 | dev-train | `ours` | 2026-10-23 00:38 | `d8699f1` | `1669b475` | 33 | 0.500 | 0.598 | 0.309 | 1.17 | 32 | 76 | 27.4 | unknown | camera compensation 384 px, lazy, 100 hypotheses, seed 2 |
+| `E053c-train-camera384-lazy-s3` | E053 | dev-train | `ours` | 2026-10-23 00:52 | `d8699f1` | `1669b475` | 33 | 0.488 | 0.579 | 0.331 | 1.13 | 32 | 38 | 28.1 | unknown | camera compensation 384 px, lazy, 100 hypotheses, seed 3 |
+| `E053c-train-camera384-lazy-s4` | E053 | dev-train | `ours` | 2026-10-23 01:05 | `d8699f1` | `1669b475` | 33 | 0.469 | 0.558 | 0.356 | 1.16 | 32 | 75 | 27.5 | unknown | camera compensation 384 px, lazy, 100 hypotheses, seed 4 |
+| `E053c-train-camera384-lazy-s5` | E053 | dev-train | `ours` | 2026-10-23 01:19 | `d8699f1` | `1669b475` | 33 | 0.487 | 0.584 | 0.329 | 1.16 | 32 | 75 | 27.4 | unknown | camera compensation 384 px, lazy, 100 hypotheses, seed 5 |
+| `E053c_base1lat-train-s1` | E053 | dev-train | `ours` | 2026-10-23 01:32 | `d8699f1` | `25ea3065` | 33 | 0.509 | 0.609 | 0.306 | 1.00 | 26 | 29 | 38.0 | unknown | latency reference, seed 1 |
+| `E053c_base2lat-train-s1` | E053 | dev-train | `ours` | 2026-10-23 01:42 | `d8699f1` | `1669b475` | 33 | 0.499 | 0.590 | 0.332 | 1.15 | 32 | 76 | 27.9 | unknown | latency reference, seed 1 |
+| `E053d-train-camera512-lazy-s1` | E053 | dev-train | `ours` | 2026-10-23 02:30 | `0366139` | `1669b475` | 33 | 0.512 | 0.608 | 0.322 | 1.13 | 32 | 39 | 28.0 | unknown | camera compensation 512 px, lazy, 300 hypotheses (final), seed 1 |
+| `E053d-train-camera512-lazy-s2` | E053 | dev-train | `ours` | 2026-10-23 02:43 | `0366139` | `1669b475` | 33 | 0.518 | 0.618 | 0.287 | 1.15 | 32 | 77 | 27.2 | unknown | camera compensation 512 px, lazy, 300 hypotheses (final), seed 2 |
+| `E053d-train-camera512-lazy-s3` | E053 | dev-train | `ours` | 2026-10-23 02:57 | `0366139` | `1669b475` | 33 | 0.494 | 0.587 | 0.325 | 1.13 | 33 | 41 | 26.9 | unknown | camera compensation 512 px, lazy, 300 hypotheses (final), seed 3 |
+| `E053d-train-camera512-lazy-s4` | E053 | dev-train | `ours` | 2026-10-23 03:11 | `0366139` | `1669b475` | 33 | 0.478 | 0.564 | 0.354 | 1.14 | 32 | 43 | 27.3 | unknown | camera compensation 512 px, lazy, 300 hypotheses (final), seed 4 |
+| `E053d-train-camera512-lazy-s5` | E053 | dev-train | `ours` | 2026-10-23 03:25 | `0366139` | `1669b475` | 33 | 0.477 | 0.568 | 0.353 | 1.14 | 32 | 52 | 27.4 | unknown | camera compensation 512 px, lazy, 300 hypotheses (final), seed 5 |
+| `E053d_base1lat-train-s1` | E053 | dev-train | `ours` | 2026-10-23 03:38 | `0366139` | `25ea3065` | 33 | 0.509 | 0.609 | 0.306 | 1.00 | 27 | 31 | 36.3 | unknown | latency reference, seed 1 |
 
 Commit 后的 `*` 表示运行时工作区有未提交的改动。
