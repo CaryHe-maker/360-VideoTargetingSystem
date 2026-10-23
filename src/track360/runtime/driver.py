@@ -403,7 +403,11 @@ def runTracking(
                                         refinementView=(
                                             controller.refinementView if plan.scanRefine else None
                                         ),
-                                        secondLook=None if secondLook is None else secondLook[0],
+                                        secondLook=(
+                                            None
+                                            if secondLook is None or secondLook[0] <= 0.0
+                                            else secondLook[0]
+                                        ),
                                     )
                                     forwardCount += scanForwards
                                     controller.settleScan(scanForwards)
