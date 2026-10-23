@@ -461,6 +461,11 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._globalAfter = int(after)
 
     @property
+    def lastGoodFrame(self) -> int:
+        """The index of the last frame whose box was trusted (or jumped to)."""
+        return self._lastGoodFrame
+
+    @property
     def globalSearchPending(self) -> bool:
         """The frame being planned looks for the target on the whole sphere."""
         return self._globalPending

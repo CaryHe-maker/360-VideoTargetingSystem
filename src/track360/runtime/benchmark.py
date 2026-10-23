@@ -188,7 +188,7 @@ def runBenchmark(
     cameraMotion: int = 0,
     sphereScanDeg: float | None = None,
     globalSearch: tuple[int, ...] | None = None,
-    cameraStride: int = 1,
+    cameraOptions: dict | None = None,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -224,7 +224,7 @@ def runBenchmark(
             cameraMotion=cameraMotion,
             sphereScanDeg=sphereScanDeg,
             globalSearch=globalSearch,
-            cameraStride=cameraStride,
+            cameraOptions=cameraOptions,
         )
 
 
@@ -248,7 +248,7 @@ def _runLocked(
     cameraMotion: int = 0,
     sphereScanDeg: float | None = None,
     globalSearch: tuple[int, ...] | None = None,
-    cameraStride: int = 1,
+    cameraOptions: dict | None = None,
 ) -> BenchmarkSummary:
     dataset = Vot360Dataset(datasetRoot, labelRoot)
     names = _selectSequences(dataset, sequences, shard)
@@ -272,7 +272,7 @@ def _runLocked(
             "oracle": None if oracle is None else oracle.describe(),
             # Experimental (E053): enlarged searches turned with the camera.
             "cameraMotion": cameraMotion,
-            "cameraStride": cameraStride,
+            "cameraOptions": cameraOptions,
             "sphereScanDeg": sphereScanDeg,
             # Experimental (E054): whole-sphere detection every N lost frames, K places.
             "globalSearch": None if globalSearch is None else list(globalSearch),
@@ -293,8 +293,8 @@ def _runLocked(
             Path(config.model.weights).parent / "hub",
             [name for name in MODEL_SIGNALS if name in probeSignals] or MODEL_SIGNALS[:1],
         )
-    global _CAMERA_STRIDE
-    _CAMERA_STRIDE = cameraStride
+    global _CAMERA_OPTIONS
+    _CAMERA_OPTIONS = dict(cameraOptions or {})
     globalSearcher = None
     if globalSearch is not None:
         from track360.runtime.global_search import GlobalSearcher
@@ -553,8 +553,8 @@ def _runOne(
         source.close()
 
 
-# Experimental (E053): measure the camera rotation on every n-th frame only.
-_CAMERA_STRIDE = 1
+# Experimental (E053): options of the camera rotation (see CameraMotion).
+_CAMERA_OPTIONS: dict = {}
 
 TRACE_COLUMNS = (
     "frame",
@@ -635,7 +635,7 @@ def _trackSpherical(
     if cameraMotion:
         from track360.runtime.camera_motion import CameraMotion
 
-        camera = CameraMotion(workWidth=cameraMotion, stride=_CAMERA_STRIDE)
+        camera = CameraMotion(workWidth=cameraMotion, **_CAMERA_OPTIONS)
         runtime.controller.useCameraMotion(camera)
     try:
         runTracking(

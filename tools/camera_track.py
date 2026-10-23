@@ -62,19 +62,10 @@ def track(sequence, count: int, stride: int = 1) -> dict[str, np.ndarray]:
 
 
 def _step(previous, current, matcher, rng):
-    (k1, d1, shape), (k2, d2, _) = previous, current
-    if d1 is None or d2 is None or len(k1) < 10 or len(k2) < 10:
+    pairs = cr.matchedDirections(previous, current, matcher)
+    if pairs is None:
         return None
-    pairs = matcher.knnMatch(d1, d2, k=2)
-    good = [p[0] for p in pairs if len(p) == 2 and p[0].distance < 0.8 * p[1].distance]
-    if len(good) < 10:
-        return None
-    height, width = shape
-    p1 = np.asarray([k1[m.queryIdx].pt for m in good])
-    p2 = np.asarray([k2[m.trainIdx].pt for m in good])
-    a = cr.pixelsToUnit(p1[:, 0] - 0.5, p1[:, 1] - 0.5, width, height)
-    b = cr.pixelsToUnit(p2[:, 0] - 0.5, p2[:, 1] - 0.5, width, height)
-    return cr.fitRotation(a, b, rng)
+    return cr.fitRotation(*pairs, rng)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -88,8 +79,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--shard", default="0/1")
     parser.add_argument("--width", type=int, default=cr.WORK_WIDTH, help="working width")
     parser.add_argument("--stride", type=int, default=1, help="measure every n-th frame")
+    parser.add_argument("--fast", action="store_true", help="fast downsampling")
+    parser.add_argument("--iterations", type=int, default=cr.ITERATIONS)
     args = parser.parse_args(argv)
     cr.WORK_WIDTH = args.width
+    cr.FAST_DOWNSAMPLE = args.fast
+    cr.ITERATIONS = args.iterations
     index, count = (int(x) for x in args.shard.split("/"))
     dataset = Vot360Dataset(args.dataset_root, args.label_root)
     names = readSequenceFile(args.sequence_file)[index::count]

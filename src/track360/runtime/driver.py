@@ -251,6 +251,8 @@ def runTracking(
             if verifier is not None:
                 verifier.setTemplate(templateView, initPlan.templateBox)
             initialResult = controller.commitInitialization(initPlan)
+            if camera is not None:
+                camera.mark(int(frame0.frameIndex), True)
         finally:
             _stopProcessing(processingTimer)
         _finishProfileFrame(profiler, initializationStartedNs, batchSizes=[1], forwardCount=0)
@@ -404,6 +406,9 @@ def runTracking(
                                         forwardCount += judgeForwards
                             with _profile(profiler, "controller"):
                                 result = controller.consume(plan, projected, candidates)
+                            if camera is not None:
+                                index = int(frame.frameIndex)
+                                camera.mark(index, controller.lastGoodFrame == index)
                             if verifier is not None:
                                 # A doubted frame must not shape the tracker's appearance
                                 # memory; a jump to a candidate starts it afresh.

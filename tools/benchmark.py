@@ -126,10 +126,10 @@ def buildParser() -> argparse.ArgumentParser:
         "estimated on frames this many pixels wide (default 512)",
     )
     run.add_argument(
-        "--camera-stride",
-        type=int,
-        default=1,
-        help="with --camera-motion: measure the rotation on every n-th frame only",
+        "--camera-options",
+        default="",
+        help="with --camera-motion: key=value,... of CameraMotion (fast=0/1, iterations=N, "
+        "lazy=0/1)",
     )
     run.add_argument(
         "--sphere-scan-deg",
@@ -265,7 +265,12 @@ def main(argv: list[str] | None = None) -> int:
                     candidateJudge=judge,
                     oracle=oracle,
                     cameraMotion=args.camera_motion,
-                    cameraStride=args.camera_stride,
+                    cameraOptions={
+                        key: int(value)
+                        for key, _, value in (
+                            item.partition("=") for item in args.camera_options.split(",") if item
+                        )
+                    },
                     sphereScanDeg=args.sphere_scan_deg,
                     globalSearch=(
                         None
@@ -313,9 +318,7 @@ def main(argv: list[str] | None = None) -> int:
         print(formatEfficiency(efficiency))
         payload: dict[str, object] = {
             "overall": _payload(scores),
-            "efficiency": {
-                method: _efficiencyPayload(item) for method, item in efficiency.items()
-            },
+            "efficiency": {method: _efficiencyPayload(item) for method, item in efficiency.items()},
         }
         if args.info is not None:
             byAttribute = {}
@@ -374,9 +377,7 @@ def formatEfficiency(efficiency: dict[str, Efficiency | None]) -> str:
             lines.append(f"  {name:<16}{'no run reports':>16}")
             continue
         forwards = (
-            f"{'-':>16}"
-            if item.forwardsPerFrame is None
-            else f"{item.forwardsPerFrame:>16.2f}"
+            f"{'-':>16}" if item.forwardsPerFrame is None else f"{item.forwardsPerFrame:>16.2f}"
         )
         lines.append(
             f"  {name:<16}{forwards}{item.p50LatencyMs:>10.0f}{item.p95LatencyMs:>10.0f}"

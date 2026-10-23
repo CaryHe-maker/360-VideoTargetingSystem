@@ -1,13 +1,16 @@
-"""The camera's rotation over a sequence, estimated while tracking (experimental, E053).
+"""The camera's rotation while a track is in doubt (experimental, E053).
 
 A turning 360-degree camera moves every point of the image the same way on the sphere,
 so a place where the target was last trusted is no longer where it appears after the
-camera turned.  Each frame is handed to ``submit`` as soon as it is read; a worker
-thread matches its ORB features with the previous frame's and accumulates the
-orientation (``track360.geometry.camera_rotation``), alongside the tracker's own work.
-``rotation(a, b)`` waits for frame ``b`` and takes a direction seen in frame ``a`` to
-frame ``b``.  A step with too few inliers counts as no rotation.  Results do not depend
-on thread timing: every query waits for the frames it needs.
+camera turned.  The rotation is needed only from the last trusted frame on, so nothing
+is computed while the track is trusted: the latest trusted frame is only kept.  When
+a frame is not trusted (``mark``), a worker thread starts from that kept frame and
+from then on matches every new frame's ORB features with the previous frame's,
+accumulating the rotation (``track360.geometry.camera_rotation``) alongside the
+tracker's own work.  ``rotation(a, b)`` takes a direction seen in the last trusted
+frame ``a`` to frame ``b``, waiting for frame ``b``.  A step with too few inliers
+counts as no rotation.  All state changes go through the worker's queue in order, so
+results do not depend on thread timing.
 """
 
 from __future__ import annotations
@@ -19,50 +22,93 @@ import numpy as np
 
 from track360.geometry import camera_rotation as cr
 
-WORK_WIDTH = 512
+WORK_WIDTH = 384
+ITERATIONS = 100
 
 
 class CameraMotion:
-    def __init__(self, workWidth: int = WORK_WIDTH, seed: int = 0, stride: int = 1) -> None:
+    def __init__(
+        self,
+        workWidth: int = WORK_WIDTH,
+        seed: int = 0,
+        fast: bool = True,
+        iterations: int = ITERATIONS,
+        lazy: bool = True,
+    ) -> None:
         self._width = int(workWidth)
-        # Only every ``stride``-th frame is measured; the others take the last measured.
-        self._stride = max(1, int(stride))
-        self._measured: dict[int, int] = {}
-        self._last: int | None = None
+        self._fast = bool(fast)
+        self._iterations = int(iterations)
+        self._lazy = bool(lazy)
+        self._seed = int(seed)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="track360-camera")
-        self._jobs: dict[int, Future[np.ndarray]] = {}
         self._matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
+        self._jobs: dict[int, Future[np.ndarray]] = {}
+        # Main-thread view: the latest frame read, and the frame the chain starts from.
+        self._latest: tuple[int, np.ndarray] | None = None
+        self._kept: tuple[int, np.ndarray] | None = None
+        self._anchor: int | None = None
+        self._active = not self._lazy
+        # Worker-thread state.
         self._rng = np.random.default_rng(seed)
         self._previous: tuple | None = None
         self._orientation = np.eye(3)
         self.unreliableSteps = 0
+        self.measuredFrames = 0
 
+    # ---------------------------------------------------------------- main thread
     def submit(self, frameIndex: int, rgb: np.ndarray) -> None:
-        """Queue a frame; frames must come in order, starting anywhere."""
+        """Hand over a frame as soon as it is read; frames come in order."""
         index = int(frameIndex)
-        if self._last is None or index - self._last >= self._stride:
+        self._latest = (index, rgb)
+        if self._active:
             self._jobs[index] = self._executor.submit(self._step, rgb)
-            self._last = index
-        self._measured[index] = self._last
 
-    def orientation(self, frameIndex: int) -> np.ndarray:
-        return self._jobs[self._measured[int(frameIndex)]].result()
+    def mark(self, frameIndex: int, trusted: bool) -> None:
+        """After the frame's decision: is it now the last trusted frame?"""
+        if not self._lazy:
+            return
+        index = int(frameIndex)
+        if self._latest is None or self._latest[0] != index:
+            return
+        if trusted:
+            self._kept = self._latest
+            if self._active:
+                self._active = False
+                self._jobs = {}
+            return
+        if self._active or self._kept is None:
+            return
+        # The first frame in doubt: the chain starts at the last trusted frame.
+        anchor, anchorRgb = self._kept
+        self._anchor = anchor
+        self._active = True
+        self._jobs = {anchor: self._executor.submit(self._start, anchor, anchorRgb)}
+        self._jobs[index] = self._executor.submit(self._step, self._latest[1])
 
     def rotation(self, start: int, end: int) -> np.ndarray:
         """The rotation taking directions of frame ``start`` to frame ``end``."""
-        return self.orientation(end) @ self.orientation(start).T
+        start, end = int(start), int(end)
+        if start not in self._jobs or end not in self._jobs:
+            return np.eye(3)  # no chain from that frame: leave the place where it is
+        return self._jobs[end].result() @ self._jobs[start].result().T
 
     def close(self) -> None:
         self._executor.shutdown(wait=True)
 
+    # ---------------------------------------------------------------- worker thread
+    def _start(self, anchor: int, rgb: np.ndarray) -> np.ndarray:
+        self._rng = np.random.default_rng(self._seed + anchor)
+        self._orientation = np.eye(3)
+        self._previous = self._describe(rgb)
+        self.measuredFrames += 1
+        return self._orientation.copy()
+
     def _step(self, rgb: np.ndarray) -> np.ndarray:
-        height = self._width // 2
-        small = cv2.resize(rgb, (self._width, height), interpolation=cv2.INTER_AREA)
-        gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
-        keys, desc = cr._features(gray)
-        current = (keys, desc, gray.shape)
+        current = self._describe(rgb)
+        self.measuredFrames += 1
         if self._previous is not None:
-            step = self._estimate(self._previous, current)
+            pairs = cr.matchedDirections(self._previous, current, self._matcher)
+            step = None if pairs is None else cr.fitRotation(*pairs, self._rng, self._iterations)
             if step is None or not step.reliable:
                 self.unreliableSteps += 1
             else:
@@ -70,17 +116,7 @@ class CameraMotion:
         self._previous = current
         return self._orientation.copy()
 
-    def _estimate(self, previous: tuple, current: tuple) -> cr.RotationEstimate | None:
-        (k1, d1, shape), (k2, d2, _) = previous, current
-        if d1 is None or d2 is None or len(k1) < 10 or len(k2) < 10:
-            return None
-        pairs = self._matcher.knnMatch(d1, d2, k=2)
-        good = [p[0] for p in pairs if len(p) == 2 and p[0].distance < 0.8 * p[1].distance]
-        if len(good) < 10:
-            return None
-        height, width = shape
-        p1 = np.asarray([k1[m.queryIdx].pt for m in good])
-        p2 = np.asarray([k2[m.trainIdx].pt for m in good])
-        a = cr.pixelsToUnit(p1[:, 0] - 0.5, p1[:, 1] - 0.5, width, height)
-        b = cr.pixelsToUnit(p2[:, 0] - 0.5, p2[:, 1] - 0.5, width, height)
-        return cr.fitRotation(a, b, self._rng)
+    def _describe(self, rgb: np.ndarray) -> tuple:
+        gray = cr.downsample(rgb, self._width, self._fast)
+        keys, desc = cr._features(gray)
+        return (keys, desc, gray.shape)

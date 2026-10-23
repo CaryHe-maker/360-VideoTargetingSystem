@@ -17,6 +17,8 @@ import numpy as np
 WORK_WIDTH = 1024
 INLIER_DEG = 0.6
 ITERATIONS = 300
+# Offline studies (tools/camera_track.py) set these; the tracker passes its own.
+FAST_DOWNSAMPLE = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,14 +48,34 @@ def pixelsToUnit(x: np.ndarray, y: np.ndarray, width: int, height: int) -> np.nd
     )
 
 
-def _gray(rgb: np.ndarray) -> np.ndarray:
-    height = WORK_WIDTH // 2
-    small = cv2.resize(rgb, (WORK_WIDTH, height), interpolation=cv2.INTER_AREA)
+def downsample(rgb: np.ndarray, width: int, fast: bool = False) -> np.ndarray:
+    """A grey image ``width`` pixels wide.
+
+    ``fast`` takes every n-th pixel of the green channel down to about twice the width,
+    then averages 2 x 2: a fraction of a millisecond instead of about four for a
+    3840-pixel frame, at the cost of some aliasing.
+    """
+    height = width // 2
+    if fast:
+        step = max(1, rgb.shape[1] // (2 * width))
+        green = np.ascontiguousarray(rgb[::step, ::step, 1])
+        return cv2.resize(green, (width, height), interpolation=cv2.INTER_AREA)
+    small = cv2.resize(rgb, (width, height), interpolation=cv2.INTER_AREA)
     return cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
 
 
+def _gray(rgb: np.ndarray) -> np.ndarray:
+    return downsample(rgb, WORK_WIDTH, FAST_DOWNSAMPLE)
+
+
+_ORB = None
+
+
 def _features(gray: np.ndarray):
-    orb = cv2.ORB_create(nfeatures=3000, fastThreshold=10)
+    global _ORB
+    if _ORB is None:
+        _ORB = cv2.ORB_create(nfeatures=3000, fastThreshold=10)
+    orb = _ORB
     # Leave out the polar caps, where the projection stretches the image most.
     mask = np.zeros_like(gray)
     mask[gray.shape[0] // 8 : gray.shape[0] * 7 // 8] = 255
@@ -67,21 +89,24 @@ def _kabsch(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return vt.T @ np.diag([1.0, 1.0, d]) @ u.T
 
 
-def fitRotation(a: np.ndarray, b: np.ndarray, rng: np.random.Generator) -> RotationEstimate | None:
+def fitRotation(
+    a: np.ndarray, b: np.ndarray, rng: np.random.Generator, iterations: int | None = None
+) -> RotationEstimate | None:
     """RANSAC on two-pair samples, all hypotheses at once, then Kabsch on the inliers.
 
     Vectorised so that the work stays in NumPy and other threads keep running.
     """
     if len(a) < 3:
         return None
+    count = ITERATIONS if iterations is None else int(iterations)
     limit = np.cos(np.radians(INLIER_DEG))
-    picks = np.stack(
-        [rng.choice(len(a), 2, replace=False) for _ in range(ITERATIONS)]
-    )  # hypotheses x 2
+    first = rng.integers(0, len(a), count)
+    second = (first + rng.integers(1, len(a), count)) % len(a)  # never the same pair
+    picks = np.stack([first, second], axis=1)  # hypotheses x 2
     h = np.einsum("kpi,kpj->kij", a[picks], b[picks])
     u, _, vt = np.linalg.svd(h)
     d = np.sign(np.linalg.det(np.transpose(vt, (0, 2, 1)) @ np.transpose(u, (0, 2, 1))))
-    fix = np.ones((ITERATIONS, 3))
+    fix = np.ones((count, 3))
     fix[:, 2] = d
     rotations = np.transpose(vt, (0, 2, 1)) @ (fix[:, :, None] * np.transpose(u, (0, 2, 1)))
     scores = np.einsum("kij,nj,ni->kn", rotations, a, b) > limit
@@ -91,6 +116,25 @@ def fitRotation(a: np.ndarray, b: np.ndarray, rng: np.random.Generator) -> Rotat
     rotation = _kabsch(a[best], b[best])
     inliers = np.einsum("ij,ij->i", a @ rotation.T, b) > limit
     return RotationEstimate(rotation, int(inliers.sum()), len(a))
+
+
+def matchedDirections(previous, current, matcher) -> tuple[np.ndarray, np.ndarray] | None:
+    """Unit vectors of the features matched between two frames' ``(keys, descriptors, shape)``."""
+    (k1, d1, shape), (k2, d2, _) = previous, current
+    if d1 is None or d2 is None or len(k1) < 10 or len(k2) < 10:
+        return None
+    pairs = matcher.knnMatch(d1, d2, k=2)
+    good = [p[0] for p in pairs if len(p) == 2 and p[0].distance < 0.8 * p[1].distance]
+    if len(good) < 10:
+        return None
+    height, width = shape
+    q = np.fromiter((m.queryIdx for m in good), dtype=np.int64, count=len(good))
+    r = np.fromiter((m.trainIdx for m in good), dtype=np.int64, count=len(good))
+    p1 = cv2.KeyPoint_convert(k1)[q]
+    p2 = cv2.KeyPoint_convert(k2)[r]
+    a = pixelsToUnit(p1[:, 0] - 0.5, p1[:, 1] - 0.5, width, height)
+    b = pixelsToUnit(p2[:, 0] - 0.5, p2[:, 1] - 0.5, width, height)
+    return a, b
 
 
 def estimateRotation(
