@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from track360.core.config import loadConfig
@@ -119,6 +120,12 @@ class CoreConfigTest(unittest.TestCase):
         self.assertEqual(fast.backendTuning, default.backendTuning)
         self.assertEqual(lossFast.backendTuning, loss.backendTuning)
         self.assertEqual(lossFast.model.precision, "tf32")
+        # Baseline 3 is baseline 2 with the search turned with the camera (E053).
+        camera = loadConfig(REPOSITORY_ROOT / "configs" / "camera.yaml")
+        self.assertTrue(camera.backendTuning.cameraMotion)
+        self.assertFalse(loss.backendTuning.cameraMotion or default.backendTuning.cameraMotion)
+        self.assertEqual(replace(camera.backendTuning, cameraMotion=False), loss.backendTuning)
+        self.assertEqual(camera.model, loss.model)
 
     def _assertRejected(self, old: str, new: str) -> None:
         source = (REPOSITORY_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")

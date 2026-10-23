@@ -631,10 +631,13 @@ def _trackSpherical(
         runtime.controller.useSphereScan(math.radians(sphereScanDeg))
     if globalSearcher is not None:
         runtime.controller.useGlobalSearch(*globalSearcher.schedule)
-    camera = None
+    camera = runtime.camera
     if cameraMotion:
+        # Experimental settings from the command line replace the configuration's.
         from track360.runtime.camera_motion import CameraMotion
 
+        if camera is not None:
+            camera.close()
         camera = CameraMotion(workWidth=cameraMotion, **_CAMERA_OPTIONS)
         runtime.controller.useCameraMotion(camera)
     try:
@@ -656,7 +659,7 @@ def _trackSpherical(
         )
         return runtime.controller.lossStatistics
     finally:
-        if camera is not None:
+        if camera is not None and camera is not runtime.camera:
             camera.close()
         closeRuntime(runtime)
 

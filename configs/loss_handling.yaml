@@ -41,6 +41,7 @@ backendTuning:
   scanBudgetBurst: 40.0
   reacquireScore: 0.70
   lossActions: jump
+  cameraMotion: false
   releaseFrames: 3
   relativeGate: 0.05
   relativeEnterDeviation: -0.53

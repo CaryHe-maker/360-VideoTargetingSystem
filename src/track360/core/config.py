@@ -152,9 +152,12 @@ class BackendTuningConfig:
     zoomFirstScale: float = 2.0
     zoomLastScale: float = 4.0
     zoomLastAfterFrames: int = 20
+    # Turn the enlarged search views with the camera's rotation since the place was
+    # last trusted (evaluation log E053; needs loss handling).
+    cameraMotion: bool = False
 
     def __post_init__(self) -> None:
-        for name in ("lossHandling", "sphericalSearch"):
+        for name in ("lossHandling", "sphericalSearch", "cameraMotion"):
             if not isinstance(getattr(self, name), bool):
                 raise ConfigError(f"backendTuning.{name} must be boolean")
         for name in ("viewHorizontalFovCapRad", "viewVerticalFovCapRad"):
@@ -170,6 +173,8 @@ class BackendTuningConfig:
                 "backendTuning.relativeGate must be in [0, 1] and "
                 "relativeEnterDeviation in [-1, 0)"
             )
+        if self.cameraMotion and not self.lossHandling:
+            raise ConfigError("backendTuning.cameraMotion needs lossHandling")
         if self.lossActions not in LOSS_ACTIONS:
             raise ConfigError(
                 f"backendTuning.lossActions must be one of {', '.join(LOSS_ACTIONS)}"
@@ -332,6 +337,7 @@ def loadConfig(path: str | Path) -> AppConfig:
             "sphericalSearchFovDeg",
             "lossHandling",
             "lossActions",
+            "cameraMotion",
             *tuningFloats,
             *tuningInts,
         },
@@ -424,6 +430,7 @@ def loadConfig(path: str | Path) -> AppConfig:
                 "backendTuning.lossHandling", tuningRaw["lossHandling"]
             ),
             lossActions=_requireStr("backendTuning.lossActions", tuningRaw["lossActions"]),
+            cameraMotion=_requireBool("backendTuning.cameraMotion", tuningRaw["cameraMotion"]),
             **{
                 name: _requireFloat(f"backendTuning.{name}", tuningRaw[name])
                 for name in tuningFloats

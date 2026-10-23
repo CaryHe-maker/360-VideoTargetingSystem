@@ -67,6 +67,8 @@ class RuntimeBundle:
     # diagnostics it reads.
     judge: Any | None = None
     judgeSession: Any | None = None
+    # The camera's rotation (``backendTuning.cameraMotion``, E053).
+    camera: Any | None = None
 
 
 class _PrefetchReader:
@@ -184,6 +186,12 @@ def buildRuntime(
         from track360.backends.appearance import AppearanceVerifier
 
         verifier = AppearanceVerifier("dinov2", Path(config.model.weights).parent / "hub")
+    camera = None
+    if tuning.cameraMotion:
+        from track360.runtime.camera_motion import CameraMotion
+
+        camera = CameraMotion()
+        controller.useCameraMotion(camera)
     if candidateJudge is not None:
         if verifier is None:
             raise ProtocolError("a candidate judge needs loss handling")
@@ -197,6 +205,7 @@ def buildRuntime(
         verifier=verifier,
         judge=candidateJudge,
         judgeSession=rgbSession if candidateJudge is not None else None,
+        camera=camera,
     )
 
 
@@ -539,6 +548,8 @@ def _fallbackFrameResult(
 
 def closeRuntime(runtime: RuntimeBundle) -> None:
     """Release Geometry CUDA state before the backend empties the CUDA cache."""
+    if runtime.camera is not None:
+        runtime.camera.close()
     try:
         closeGeometry = getattr(runtime.geometry, "close", None)
         if callable(closeGeometry):

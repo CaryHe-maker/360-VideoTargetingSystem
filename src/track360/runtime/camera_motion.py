@@ -22,8 +22,10 @@ import numpy as np
 
 from track360.geometry import camera_rotation as cr
 
-WORK_WIDTH = 384
-ITERATIONS = 100
+# The configuration of baseline 3 (E053d): 512 pixels wide, 300 hypotheses, computed
+# only while the track is in doubt, full-quality downsampling.
+WORK_WIDTH = 512
+ITERATIONS = 300
 
 
 class CameraMotion:
@@ -31,7 +33,7 @@ class CameraMotion:
         self,
         workWidth: int = WORK_WIDTH,
         seed: int = 0,
-        fast: bool = True,
+        fast: bool = False,
         iterations: int = ITERATIONS,
         lazy: bool = True,
     ) -> None:
