@@ -2,7 +2,8 @@
 
     python tools/confirm_study.py next-search --dataset-root <dir> --label-root <dir> \\
         --runs outputs/E053d_cam_s1 ... --camera outputs/E053/camera512 --out outputs/E058/search
-    python tools/confirm_study.py next-frame ... --runs outputs/E053d_cam_s1 --out outputs/E058/frame  # noqa: E501
+    python tools/confirm_study.py next-frame ... --runs outputs/E053d_cam_s1 \
+        --out outputs/E058/frame
 
 A candidate whose score is in [low, 0.70) is not taken now but held.  It is taken when
 it is seen again where it should be (its place turned with the camera's rotation, within
