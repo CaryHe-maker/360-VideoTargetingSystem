@@ -132,6 +132,22 @@ def buildParser() -> argparse.ArgumentParser:
         "lazy=0/1)",
     )
     run.add_argument(
+        "--second-look",
+        default=None,
+        help="experimental (E061): LOST,TRACKING: look again, centred on the box, when it is "
+        "farther than that share of the half width from its view's centre (0: never)",
+    )
+    run.add_argument(
+        "--confirm",
+        default=None,
+        help="experimental (E061): LOW,WINDOW,TOLERANCE two-frame confirmation",
+    )
+    run.add_argument(
+        "--judge-charged",
+        action="store_true",
+        help="with --candidate-judge: its passes are paid from the scan budget",
+    )
+    run.add_argument(
         "--sphere-scan-deg",
         type=float,
         default=None,
@@ -264,6 +280,25 @@ def main(argv: list[str] | None = None) -> int:
                     noiseStd=args.noise_std,
                     candidateJudge=judge,
                     oracle=oracle,
+                    experiment={
+                        **(
+                            {"secondLook": tuple(float(x) for x in args.second_look.split(","))}
+                            if args.second_look
+                            else {}
+                        ),
+                        **(
+                            {
+                                "confirm": (
+                                    float(args.confirm.split(",")[0]),
+                                    int(args.confirm.split(",")[1]),
+                                    float(args.confirm.split(",")[2]),
+                                )
+                            }
+                            if args.confirm
+                            else {}
+                        ),
+                        **({"judgeCharged": True} if args.judge_charged else {}),
+                    },
                     cameraMotion=args.camera_motion,
                     cameraOptions={
                         key: int(value)

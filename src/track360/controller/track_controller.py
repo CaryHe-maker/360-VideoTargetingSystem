@@ -160,6 +160,11 @@ class TrackControllerImpl(TrackControllerProtocol):
         # Experimental (E053): targets at least this large search the whole sphere.
         self._sphereScanRad: float | None = None
         self._lastScanSphere = False
+        # Experimental (E061): two-frame confirmation of candidates below the taking
+        # score: (low, window frames, tolerance in sizes) and the candidates held.
+        self._confirm: tuple[float, int, float] | None = None
+        self._held: list[tuple[int, SphericalPoint, float]] = []
+        self._mainViewSize = (0.0, 0.0)
         # Experimental (E054): every this many lost frames, a detector looks at the
         # whole sphere and normal views are taken at the best ``_globalCount`` places.
         self._globalEvery = 0
@@ -329,6 +334,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             targetBfov.verticalFovRad,
             tuple(self._trajectory),
         )
+        self._mainViewSize = (targetBfov.horizontalFovRad, targetBfov.verticalFovRad)
         scanViews: tuple[ViewSpec, ...] = ()
         scanRefine = False
         self._lastScan = ""
@@ -475,6 +481,23 @@ class TrackControllerImpl(TrackControllerProtocol):
         """Where and how large the target was when last trusted."""
         return self._lastGoodBfov
 
+    def useTwoFrameConfirmation(self, low: float, window: int, tolerance: float) -> None:
+        """Experimental (E061): take a candidate scoring in [low, reacquireScore) when the
+        next search with candidates, within ``window`` frames, finds one scoring at least
+        ``low`` where it should be (turned with the camera, within ``tolerance`` sizes)."""
+        self._confirm = (float(low), int(window), float(tolerance))
+
+    @property
+    def isLost(self) -> bool:
+        return self._mode is TrackMode.LOST
+
+    def recentredMainView(self, plan: SearchPlan, center: SphericalPoint) -> ViewSpec:
+        """The frame's tracking view, centred elsewhere (experimental, E061)."""
+        view = self._planner.searchView(
+            center, self._mainViewSize[0], self._mainViewSize[1], tuple(self._trajectory)
+        )
+        return replace(view, viewId=plan.view.viewId)
+
     def useSphereScan(self, minSizeRad: float | None) -> None:
         """Experimental (E053): enlarged searches of targets this large take the whole sphere."""
         self._sphereScanRad = None if minSizeRad is None else float(minSizeRad)
@@ -496,6 +519,11 @@ class TrackControllerImpl(TrackControllerProtocol):
         """A normal-size search view centred on a candidate of angular size ``sizeRad``."""
         side = min(max(sizeRad, 1e-4), pi - 1e-3)
         return self._planner._searchView(center, side, side)
+
+    def chargeScan(self, forwards: int) -> None:
+        """Spend scan budget on passes outside the plan (experimental, E061)."""
+        if self._backendTuning.scanBudgetPerFrame > 0.0:
+            self._scanTokens -= forwards
 
     def settleScan(self, forwards: int) -> None:
         """Charge the scan of the frame what it really cost."""
@@ -586,6 +614,7 @@ class TrackControllerImpl(TrackControllerProtocol):
             if decision.nextMode is TrackMode.TRACKING:
                 self._lastGoodBfov = self._currentBfov
                 self._lastGoodFrame = int(plan.frameIndex)
+                self._held = []
             else:
                 self._suspectFrameCount += 1
                 # Without actions the run must stay what it is without loss handling.
@@ -676,6 +705,8 @@ class TrackControllerImpl(TrackControllerProtocol):
             records.append(record)
             if verdict == "not_best" and (best is None or _preferred(candidate, best, judged)):
                 best, bestRecord = candidate, record
+        if self._confirm is not None and not judged and candidates:
+            best, bestRecord = self._confirmHeld(candidates, records, frameIndex, best, bestRecord)
         oracle = self._oracle
         if oracle is not None and candidates:
             if best is None:
@@ -691,6 +722,42 @@ class TrackControllerImpl(TrackControllerProtocol):
         if bestRecord is not None:
             bestRecord["verdict"] = "accepted"
         return best, records
+
+    def _confirmHeld(self, candidates, records, frameIndex, best, bestRecord):
+        """Two-frame confirmation (E061): check the held candidates, then hold anew."""
+        assert self._confirm is not None
+        low, window, tolerance = self._confirm
+        held = [h for h in self._held if 0 < frameIndex - h[0] <= window]
+        if best is None and held:
+            confirmed = []
+            for index, candidate in enumerate(candidates):
+                if _observationScore(candidate) < low:
+                    continue
+                size = _angularSize(candidate.bfov)
+                for frame, place, heldSize in held:
+                    turned = place
+                    if self._camera is not None and frameIndex - 1 > frame:
+                        turned = _turned(place, self._camera.rotation(frame, frameIndex - 1))
+                    c = candidate.bfov.center
+                    cosine = c.x * turned.x + c.y * turned.y + c.z * turned.z
+                    if acos(max(-1.0, min(1.0, cosine))) < tolerance * max(size, heldSize):
+                        confirmed.append(index)
+                        break
+            if confirmed:
+                pick = max(confirmed, key=lambda i: _observationScore(candidates[i]))
+                best, bestRecord = candidates[pick], records[pick]
+                bestRecord["confirmed"] = 1
+        # Only the next search with candidates counts: hold this search's candidates.
+        self._held = (
+            []
+            if best is not None
+            else [
+                (frameIndex, c.bfov.center, _angularSize(c.bfov))
+                for c in candidates
+                if low <= _observationScore(c) < self._backendTuning.reacquireScore
+            ]
+        )
+        return best, bestRecord
 
     def _onCurrentBox(self, candidate: ProjectedObservation) -> bool:
         """The candidate is the box the tracker already has: same place, similar size."""
@@ -712,6 +779,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         score = _observationScore(candidate)
         self._lastGoodBfov = candidate.bfov
         self._lastGoodFrame = int(frame.frameIndex)
+        self._held = []
         self._stateMachine.reset()
         self._restartMotion(candidate.bfov, frame)
         self._currentBfov = candidate.bfov

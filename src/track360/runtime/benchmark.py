@@ -189,6 +189,7 @@ def runBenchmark(
     sphereScanDeg: float | None = None,
     globalSearch: tuple[int, ...] | None = None,
     cameraOptions: dict | None = None,
+    experiment: dict | None = None,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -225,6 +226,7 @@ def runBenchmark(
             sphereScanDeg=sphereScanDeg,
             globalSearch=globalSearch,
             cameraOptions=cameraOptions,
+            experiment=experiment,
         )
 
 
@@ -249,6 +251,7 @@ def _runLocked(
     sphereScanDeg: float | None = None,
     globalSearch: tuple[int, ...] | None = None,
     cameraOptions: dict | None = None,
+    experiment: dict | None = None,
 ) -> BenchmarkSummary:
     dataset = Vot360Dataset(datasetRoot, labelRoot)
     names = _selectSequences(dataset, sequences, shard)
@@ -273,6 +276,7 @@ def _runLocked(
             # Experimental (E053): enlarged searches turned with the camera.
             "cameraMotion": cameraMotion,
             "cameraOptions": cameraOptions,
+            "experiment": experiment,
             "sphereScanDeg": sphereScanDeg,
             # Experimental (E054): whole-sphere detection every N lost frames, K places.
             "globalSearch": None if globalSearch is None else list(globalSearch),
@@ -280,9 +284,7 @@ def _runLocked(
         },
     )
     session = _CountingSession(
-        sessionFactory(config.model)
-        if sessionFactory is not None
-        else createArtrackSession(config)
+        sessionFactory(config.model) if sessionFactory is not None else createArtrackSession(config)
     )
     probeModels = None
     probeSignals = tuple(probe or ())
@@ -293,8 +295,9 @@ def _runLocked(
             Path(config.model.weights).parent / "hub",
             [name for name in MODEL_SIGNALS if name in probeSignals] or MODEL_SIGNALS[:1],
         )
-    global _CAMERA_OPTIONS
+    global _CAMERA_OPTIONS, _EXPERIMENT
     _CAMERA_OPTIONS = dict(cameraOptions or {})
+    _EXPERIMENT = dict(experiment or {})
     globalSearcher = None
     if globalSearch is not None:
         from track360.runtime.global_search import GlobalSearcher
@@ -328,8 +331,7 @@ def _runLocked(
             if report.status != "skipped" or not (reportRoot / f"{name}.json").is_file():
                 _writeJson(reportRoot / f"{name}.json", asdict(report))
             LOGGER.info(
-                "[%d/%d] %s %s: frames=%d fps=%.2f p50=%.0fms p95=%.0fms forwards=%d"
-                " invalid=%d%s",
+                "[%d/%d] %s %s: frames=%d fps=%.2f p50=%.0fms p95=%.0fms forwards=%d invalid=%d%s",
                 position,
                 len(names),
                 method,
@@ -520,9 +522,7 @@ def _runOne(
                 writeStateTrace(outputRoot, method, name, trace)
             if sequenceOracle is not None:
                 (outputRoot / "oracle" / method).mkdir(parents=True, exist_ok=True)
-                _writeJson(
-                    outputRoot / "oracle" / method / f"{name}.json", sequenceOracle.report()
-                )
+                _writeJson(outputRoot / "oracle" / method / f"{name}.json", sequenceOracle.report())
         seconds = perf_counter() - started
         collector.finalize(frameCount)
         frameWidthPx = source.sequence.frameSize[0]
@@ -555,6 +555,9 @@ def _runOne(
 
 # Experimental (E053): options of the camera rotation (see CameraMotion).
 _CAMERA_OPTIONS: dict = {}
+# Experimental (E061): second look (lost, tracking), confirmation, judge charged to the
+# scan budget.
+_EXPERIMENT: dict = {}
 
 TRACE_COLUMNS = (
     "frame",
@@ -631,6 +634,8 @@ def _trackSpherical(
         runtime.controller.useSphereScan(math.radians(sphereScanDeg))
     if globalSearcher is not None:
         runtime.controller.useGlobalSearch(*globalSearcher.schedule)
+    if "confirm" in _EXPERIMENT:
+        runtime.controller.useTwoFrameConfirmation(*_EXPERIMENT["confirm"])
     camera = runtime.camera
     if cameraMotion:
         # Experimental settings from the command line replace the configuration's.
@@ -656,6 +661,8 @@ def _trackSpherical(
             oracle=oracle,
             camera=camera,
             globalSearcher=globalSearcher,
+            secondLook=_EXPERIMENT.get("secondLook"),
+            judgeCharged=bool(_EXPERIMENT.get("judgeCharged")),
         )
         return runtime.controller.lossStatistics
     finally:
@@ -686,9 +693,7 @@ def _trackErpDirect(
     history: deque[BBoxXYWH] = deque([state] * historyLength, maxlen=max(1, historyLength))
     while (frame := source.read()) is not None:
         extra = {"trajectories": (tuple(history),)} if historyLength else {}
-        prediction = session.inferBatch(
-            (frame.rgb,), (template,), priorBoxes=(state,), **extra
-        )[0]
+        prediction = session.inferBatch((frame.rgb,), (template,), priorBoxes=(state,), **extra)[0]
         state = prediction.bbox
         history.append(state)
         collector.write(

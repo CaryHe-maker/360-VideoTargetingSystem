@@ -230,6 +230,8 @@ def runTracking(
     oracle: Any | None = None,
     camera: Any | None = None,
     globalSearcher: Any | None = None,
+    secondLook: tuple[float, float] | None = None,
+    judgeCharged: bool = False,
 ) -> int:
     """Run the sequential tracking pipeline and publish one result per frame.
 
@@ -332,6 +334,24 @@ def runTracking(
                             )
                             with _profile(profiler, "backend"):
                                 rawObservation = backend.infer((view,))[0]
+                            if (
+                                secondLook is not None
+                                and secondLook[1] > 0.0
+                                and savedState is not None
+                                and not controller.isLost
+                                and _boxOffset(rawObservation.bbox, view.spec) > secondLook[1]
+                            ):
+                                # Experimental (E061): the box is far from the view's
+                                # centre, where the backend is least sure; look again
+                                # from the same memory with the view centred on it.
+                                recentred = _recentredMainView(
+                                    frame, plan, view, rawObservation, geometry, controller
+                                )
+                                if recentred is not None:
+                                    backend.restoreState(savedState)  # type: ignore[attr-defined]
+                                    view = geometry.cropViews(frame, [recentred])[0]
+                                    rawObservation = backend.infer((view,))[0]
+                                    forwardCount += 1
                             probed = (view, rawObservation)
                             _recordBackendProfile(profiler, backend)
                             with _profile(profiler, "calibration"):
@@ -381,10 +401,9 @@ def runTracking(
                                         backend=backend,
                                         verifier=verifier,
                                         refinementView=(
-                                            controller.refinementView
-                                            if plan.scanRefine
-                                            else None
+                                            controller.refinementView if plan.scanRefine else None
                                         ),
+                                        secondLook=None if secondLook is None else secondLook[0],
                                     )
                                     forwardCount += scanForwards
                                     controller.settleScan(scanForwards)
@@ -413,6 +432,8 @@ def runTracking(
                                             session=judgeSession,
                                         )
                                         forwardCount += judgeForwards
+                                        if judgeCharged:
+                                            controller.chargeScan(judgeForwards)
                             with _profile(profiler, "controller"):
                                 result = controller.consume(plan, projected, candidates)
                             if camera is not None:
@@ -471,9 +492,7 @@ def runTracking(
                     hostView, observation, projected = visualization
                     recorder.recordLocalRgb(frame, (hostView,))
                     recorder.recordBackendBoxes(frame, (hostView,), (observation,))
-                    recorder.recordGeometryBoxes(
-                        frame, () if projected is None else (projected,)
-                    )
+                    recorder.recordGeometryBoxes(frame, () if projected is None else (projected,))
                 # Do not let this frame's CUDA-backed view survive into the next
                 # iteration through Python locals.
                 view = observation = projected = visualization = None
@@ -613,9 +632,14 @@ def _scanCandidates(
     backend: TrackerBackend,
     verifier: Any,
     refinementView: Callable[..., ViewSpec] | None = None,
+    secondLook: float | None = None,
 ) -> tuple[tuple[ProjectedObservation, ...], int]:
     """Boxes found in the plan's search views with their similarity to the template,
     and the forward passes spent.
+
+    With ``secondLook`` (experimental, E061), a refined box farther than that share of
+    the view's half width from its centre is looked at again with a normal view centred
+    on it, and the second box replaces the first.
 
     With ``refinementView`` a search view only points at a place: a view of the normal
     size is taken around each box found, and the boxes of those views are returned.
@@ -637,12 +661,42 @@ def _scanCandidates(
                 continue
             specs.append(refinementView(pointed.bfov.center, len(specs)))
         views = (
-            {view.spec.viewId: view for view in geometry.cropViews(frame, specs)}
-            if specs
-            else {}
+            {view.spec.viewId: view for view in geometry.cropViews(frame, specs)} if specs else {}
         )
         found = backend.inferDetached(tuple(views.values())) if views else ()  # type: ignore[attr-defined]
         forwards += len(views)
+        if secondLook is not None and found:
+            again = []
+            for local in found:
+                if _boxOffset(local.bbox, views[local.viewId].spec) <= secondLook:
+                    continue
+                try:
+                    pointed = geometry.projectLocalBoxBoundary(
+                        local.bbox,
+                        views[local.viewId].spec,
+                        frame.rgb.shape[1],
+                        frame.rgb.shape[0],
+                    )
+                except GeometryError:
+                    continue
+                again.append((local, refinementView(pointed.bfov.center, 32 + len(again))))
+            if again:
+                second = {
+                    view.spec.viewId: view
+                    for view in geometry.cropViews(frame, [spec for _, spec in again])
+                }
+                seen = backend.inferDetached(tuple(second.values()))  # type: ignore[attr-defined]
+                forwards += len(second)
+                replaced = {spec.viewId: local for local, spec in again}
+                byView = {obs.viewId: obs for obs in seen}
+                kept = [local for local in found if local not in replaced.values()]
+                for viewId, local in replaced.items():
+                    if viewId in byView:
+                        kept.append(byView[viewId])
+                        views[viewId] = second[viewId]
+                    else:
+                        kept.append(local)
+                found = tuple(kept)
     candidates = []
     for local in withScoreProbability(found):
         view = views[local.viewId]
@@ -655,9 +709,7 @@ def _scanCandidates(
         )
         if projected is not None:
             candidates.append(
-                replace(
-                    projected, appearanceSimilarity=verifier.similarity(view, local.bbox)
-                )
+                replace(projected, appearanceSimilarity=verifier.similarity(view, local.bbox))
             )
     return tuple(candidates), forwards
 
@@ -752,6 +804,30 @@ def _judgeCandidates(
     return tuple(judged), forwards
 
 
+def _boxOffset(box: BBoxXYWH, spec: ViewSpec) -> float:
+    """How far a box's centre lies from its view's centre, in shares of the half width."""
+    x = (box.xPx + box.widthPx / 2.0) / spec.outputWidthPx - 0.5
+    y = (box.yPx + box.heightPx / 2.0) / spec.outputHeightPx - 0.5
+    return 2.0 * math.sqrt(x * x + y * y)
+
+
+def _recentredMainView(
+    frame: FramePacket,
+    plan: SearchPlan,
+    view: LocalView,
+    observation: LocalObservation,
+    geometry: SphericalGeometry,
+    controller: TrackControllerImpl,
+) -> ViewSpec | None:
+    try:
+        pointed = geometry.projectLocalBoxBoundary(
+            observation.bbox, view.spec, frame.rgb.shape[1], frame.rgb.shape[0]
+        )
+    except GeometryError:
+        return None
+    return controller.recentredMainView(plan, pointed.bfov.center)
+
+
 def _projectValidObservation(
     *,
     frame: FramePacket,
@@ -796,12 +872,16 @@ def _scaleScore(
         and predictedMotion.horizontalSizeRad > 0.0
         and predictedMotion.verticalSizeRad > 0.0
     ):
-        expectedWidth = view.spec.outputWidthPx * math.tan(
-            predictedMotion.horizontalSizeRad * 0.5
-        ) / max(math.tan(view.spec.bfov.horizontalFovRad * 0.5), 1e-6)
-        expectedHeight = view.spec.outputHeightPx * math.tan(
-            predictedMotion.verticalSizeRad * 0.5
-        ) / max(math.tan(view.spec.bfov.verticalFovRad * 0.5), 1e-6)
+        expectedWidth = (
+            view.spec.outputWidthPx
+            * math.tan(predictedMotion.horizontalSizeRad * 0.5)
+            / max(math.tan(view.spec.bfov.horizontalFovRad * 0.5), 1e-6)
+        )
+        expectedHeight = (
+            view.spec.outputHeightPx
+            * math.tan(predictedMotion.verticalSizeRad * 0.5)
+            / max(math.tan(view.spec.bfov.verticalFovRad * 0.5), 1e-6)
+        )
     if expectedWidth is None or expectedHeight is None:
         # Conservative neutral fallback during frame-zero motion bootstrap.
         expectedWidth = max(8.0, view.spec.outputWidthPx * 0.18)
