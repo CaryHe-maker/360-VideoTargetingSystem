@@ -81,10 +81,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stride", type=int, default=1, help="measure every n-th frame")
     parser.add_argument("--fast", action="store_true", help="fast downsampling")
     parser.add_argument("--iterations", type=int, default=cr.ITERATIONS)
+    parser.add_argument("--min-inliers", type=int, default=cr.MIN_INLIERS)
+    parser.add_argument("--min-share", type=float, default=cr.MIN_INLIER_SHARE)
     args = parser.parse_args(argv)
     cr.WORK_WIDTH = args.width
     cr.FAST_DOWNSAMPLE = args.fast
     cr.ITERATIONS = args.iterations
+    cr.MIN_INLIERS = args.min_inliers
+    cr.MIN_INLIER_SHARE = args.min_share
     index, count = (int(x) for x in args.shard.split("/"))
     dataset = Vot360Dataset(args.dataset_root, args.label_root)
     names = readSequenceFile(args.sequence_file)[index::count]

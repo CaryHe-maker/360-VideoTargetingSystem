@@ -9,6 +9,7 @@ Moving objects and parallax of near objects are outliers.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 import cv2
@@ -17,6 +18,10 @@ import numpy as np
 WORK_WIDTH = 1024
 INLIER_DEG = 0.6
 ITERATIONS = 300
+# A step with fewer inliers than this counts as no rotation.
+MIN_INLIERS = 30
+# ... or fewer than this share of the matches.
+MIN_INLIER_SHARE = 0.25
 # Offline studies (tools/camera_track.py) set these; the tracker passes its own.
 FAST_DOWNSAMPLE = False
 
@@ -36,7 +41,7 @@ class RotationEstimate:
 
     @property
     def reliable(self) -> bool:
-        return self.inliers >= 30 and self.inliers >= 0.25 * self.matches
+        return self.inliers >= MIN_INLIERS and self.inliers >= MIN_INLIER_SHARE * self.matches
 
 
 def pixelsToUnit(x: np.ndarray, y: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -68,14 +73,14 @@ def _gray(rgb: np.ndarray) -> np.ndarray:
     return downsample(rgb, WORK_WIDTH, FAST_DOWNSAMPLE)
 
 
-_ORB = None
+_ORB = threading.local()
 
 
 def _features(gray: np.ndarray):
-    global _ORB
-    if _ORB is None:
-        _ORB = cv2.ORB_create(nfeatures=3000, fastThreshold=10)
-    orb = _ORB
+    # One detector per thread: OpenCV's ORB object is not safe to share.
+    orb = getattr(_ORB, "detector", None)
+    if orb is None:
+        orb = _ORB.detector = cv2.ORB_create(nfeatures=3000, fastThreshold=10)
     # Leave out the polar caps, where the projection stretches the image most.
     mask = np.zeros_like(gray)
     mask[gray.shape[0] // 8 : gray.shape[0] * 7 // 8] = 255
@@ -109,7 +114,9 @@ def fitRotation(
     fix = np.ones((count, 3))
     fix[:, 2] = d
     rotations = np.transpose(vt, (0, 2, 1)) @ (fix[:, :, None] * np.transpose(u, (0, 2, 1)))
-    scores = np.einsum("kij,nj,ni->kn", rotations, a, b) > limit
+    # (R a) . b for every hypothesis and pair, as one matrix product.
+    turned = (rotations.reshape(-1, 3) @ a.T).reshape(count, 3, -1)
+    scores = np.einsum("kin,ni->kn", turned, b) > limit
     best = scores[int(np.argmax(scores.sum(1)))]
     if best.sum() < 3:
         return None
