@@ -235,6 +235,7 @@ def runTracking(
     memoryPolicy: str = "always",
     restoreAppearance: bool = False,
     secondLookCharged: bool = False,
+    secondLookCap: float | None = None,
 ) -> int:
     """Run the sequential tracking pipeline and publish one result per frame.
 
@@ -279,6 +280,8 @@ def runTracking(
 
         # E064: the appearance memory after a long trusted stretch, to start from again.
         goodState = None
+        # E066: forward passes spent so far, to keep the sequence's average under a cap.
+        spentForwards = 0
         pipelineReader = _PrefetchReader(source)
         pipelineReader.start()
         try:
@@ -346,6 +349,11 @@ def runTracking(
                                 and not controller.isLost
                                 and _boxOffset(rawObservation.bbox, view.spec) > secondLook[1]
                                 and (not secondLookCharged or controller.canSpendScan(1))
+                                and (
+                                    secondLookCap is None
+                                    or (spentForwards + forwardCount + 1)
+                                    <= secondLookCap * max(1, int(frame.frameIndex))
+                                )
                             ):
                                 # Experimental (E061): the box is far from the view's
                                 # centre, where the backend is least sure; look again
@@ -513,6 +521,7 @@ def runTracking(
                     break
                 if result is None:
                     raise RuntimeError("tracking frame produced no result")
+                spentForwards += forwardCount
                 _finishProfileFrame(
                     profiler,
                     iterationStartedNs,

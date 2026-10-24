@@ -148,6 +148,13 @@ def buildParser() -> argparse.ArgumentParser:
         help="with --second-look: the tracking-side second looks are paid from the scan budget",
     )
     run.add_argument(
+        "--second-look-cap",
+        type=float,
+        default=None,
+        help="with --second-look: skip a tracking-side second look that would lift the "
+        "sequence's forwards per frame so far above this",
+    )
+    run.add_argument(
         "--post-release",
         default=None,
         help="experimental (E064): FRAMES,FREEZE,SEARCH watch window after a release",
@@ -332,6 +339,11 @@ def main(argv: list[str] | None = None) -> int:
                         ),
                         **({"restoreAppearance": True} if args.restore_appearance else {}),
                         **({"secondLookCharged": True} if args.second_look_charged else {}),
+                        **(
+                            {"secondLookCap": args.second_look_cap}
+                            if args.second_look_cap is not None
+                            else {}
+                        ),
                     },
                     cameraMotion=args.camera_motion,
                     cameraOptions={
