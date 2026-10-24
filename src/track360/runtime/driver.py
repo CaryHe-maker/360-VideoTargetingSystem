@@ -236,6 +236,7 @@ def runTracking(
     restoreAppearance: bool = False,
     secondLookCharged: bool = False,
     secondLookCap: float | None = None,
+    secondLookReserve: bool = False,
 ) -> int:
     """Run the sequential tracking pipeline and publish one result per frame.
 
@@ -282,6 +283,13 @@ def runTracking(
         goodState = None
         # E066: forward passes spent so far, to keep the sequence's average under a cap.
         spentForwards = 0
+        # The tracking-side second look of the configuration (baseline 4), unless an
+        # experiment sets it.
+        tuning = getattr(controller, "backendTuning", None)
+        if secondLook is None and tuning is not None and tuning.secondLookOffset > 0.0:
+            secondLook = (0.0, tuning.secondLookOffset)
+            if secondLookCap is None and tuning.secondLookCap > 0.0:
+                secondLookCap = tuning.secondLookCap
         pipelineReader = _PrefetchReader(source)
         pipelineReader.start()
         try:
@@ -351,7 +359,15 @@ def runTracking(
                                 and (not secondLookCharged or controller.canSpendScan(1))
                                 and (
                                     secondLookCap is None
-                                    or (spentForwards + forwardCount + 1)
+                                    or (
+                                        spentForwards
+                                        + forwardCount
+                                        + 1
+                                        # E066b: the scan passes saved up will be spent
+                                        # later; count them now so they cannot lift
+                                        # the sequence above the cap afterwards.
+                                        + (controller.scanTokens if secondLookReserve else 0.0)
+                                    )
                                     <= secondLookCap * max(1, int(frame.frameIndex))
                                 )
                             ):

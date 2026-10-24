@@ -41,6 +41,8 @@ backendTuning:
   scanBudgetBurst: 40.0
   reacquireScore: 0.70
   lossActions: freeze
+  secondLookOffset: 0.0
+  secondLookCap: 0.0
   cameraMotion: false
   releaseFrames: 3
   relativeGate: 0.05

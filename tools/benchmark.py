@@ -155,6 +155,11 @@ def buildParser() -> argparse.ArgumentParser:
         "sequence's forwards per frame so far above this",
     )
     run.add_argument(
+        "--second-look-reserve",
+        action="store_true",
+        help="with --second-look-cap: count the scan passes saved up as already spent (E066b)",
+    )
+    run.add_argument(
         "--post-release",
         default=None,
         help="experimental (E064): FRAMES,FREEZE,SEARCH watch window after a release",
@@ -344,6 +349,7 @@ def main(argv: list[str] | None = None) -> int:
                             if args.second_look_cap is not None
                             else {}
                         ),
+                        **({"secondLookReserve": True} if args.second_look_reserve else {}),
                     },
                     cameraMotion=args.camera_motion,
                     cameraOptions={

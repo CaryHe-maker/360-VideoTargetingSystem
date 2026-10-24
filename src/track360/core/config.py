@@ -155,6 +155,13 @@ class BackendTuningConfig:
     # Turn the enlarged search views with the camera's rotation since the place was
     # last trusted (evaluation log E053; needs loss handling).
     cameraMotion: bool = False
+    # Look a second time when the tracker's box lies farther than this share of the
+    # view's half width from its centre: the view is centred on the box and the pass
+    # repeated from the same memory (evaluation log E062, E066; needs loss handling).
+    # 0: never.  The second looks are skipped while they would lift the sequence's
+    # forwards per frame so far above ``secondLookCap`` (0: no cap).
+    secondLookOffset: float = 0.0
+    secondLookCap: float = 0.0
 
     def __post_init__(self) -> None:
         for name in ("lossHandling", "sphericalSearch", "cameraMotion"):
@@ -175,6 +182,10 @@ class BackendTuningConfig:
             )
         if self.cameraMotion and not self.lossHandling:
             raise ConfigError("backendTuning.cameraMotion needs lossHandling")
+        if self.secondLookOffset < 0.0 or self.secondLookCap < 0.0:
+            raise ConfigError("backendTuning second-look values must be non-negative")
+        if self.secondLookOffset > 0.0 and not self.lossHandling:
+            raise ConfigError("backendTuning.secondLookOffset needs lossHandling")
         if self.lossActions not in LOSS_ACTIONS:
             raise ConfigError(
                 f"backendTuning.lossActions must be one of {', '.join(LOSS_ACTIONS)}"
@@ -324,6 +335,8 @@ def loadConfig(path: str | Path) -> AppConfig:
         "reacquireScore",
         "zoomFirstScale",
         "zoomLastScale",
+        "secondLookOffset",
+        "secondLookCap",
     )
     tuningInts = ("lostAfterFrames", "releaseFrames", "zoomLastAfterFrames")
     tuningRaw = _section(

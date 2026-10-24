@@ -669,6 +669,7 @@ def _trackSpherical(
             restoreAppearance=bool(_EXPERIMENT.get("restoreAppearance")),
             secondLookCharged=bool(_EXPERIMENT.get("secondLookCharged")),
             secondLookCap=_EXPERIMENT.get("secondLookCap"),
+            secondLookReserve=bool(_EXPERIMENT.get("secondLookReserve")),
         )
         return runtime.controller.lossStatistics
     finally:

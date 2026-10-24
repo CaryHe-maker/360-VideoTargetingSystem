@@ -544,6 +544,10 @@ class TrackControllerImpl(TrackControllerProtocol):
         return self._stateMachine.relativeSignal
 
     @property
+    def backendTuning(self) -> BackendTuningConfig:
+        return self._backendTuning
+
+    @property
     def isLost(self) -> bool:
         return self._mode is TrackMode.LOST
 
@@ -581,6 +585,13 @@ class TrackControllerImpl(TrackControllerProtocol):
         if self._backendTuning.scanBudgetPerFrame <= 0.0:
             return True
         return self._scanTokens >= forwards
+
+    @property
+    def scanTokens(self) -> float:
+        """Scan passes saved up and not yet spent (0 without a budget)."""
+        if self._backendTuning.scanBudgetPerFrame <= 0.0:
+            return 0.0
+        return max(0.0, self._scanTokens)
 
     def chargeScan(self, forwards: int) -> None:
         """Spend scan budget on passes outside the plan (experimental, E061)."""

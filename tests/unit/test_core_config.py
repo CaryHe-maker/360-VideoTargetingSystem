@@ -126,6 +126,16 @@ class CoreConfigTest(unittest.TestCase):
         self.assertFalse(loss.backendTuning.cameraMotion or default.backendTuning.cameraMotion)
         self.assertEqual(replace(camera.backendTuning, cameraMotion=False), loss.backendTuning)
         self.assertEqual(camera.model, loss.model)
+        # Baseline 4 is baseline 3 with the tracking-side second look (E066).
+        secondLook = loadConfig(REPOSITORY_ROOT / "configs" / "second_look.yaml")
+        self.assertAlmostEqual(secondLook.backendTuning.secondLookOffset, 0.5)
+        self.assertAlmostEqual(secondLook.backendTuning.secondLookCap, 1.58)
+        self.assertEqual(camera.backendTuning.secondLookOffset, 0.0)
+        self.assertEqual(
+            replace(secondLook.backendTuning, secondLookOffset=0.0, secondLookCap=0.0),
+            camera.backendTuning,
+        )
+        self.assertEqual(secondLook.model, camera.model)
 
     def _assertRejected(self, old: str, new: str) -> None:
         source = (REPOSITORY_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")
