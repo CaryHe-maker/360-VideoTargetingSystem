@@ -636,6 +636,8 @@ def _trackSpherical(
         runtime.controller.useGlobalSearch(*globalSearcher.schedule)
     if "confirm" in _EXPERIMENT:
         runtime.controller.useTwoFrameConfirmation(*_EXPERIMENT["confirm"])
+    if "postRelease" in _EXPERIMENT:
+        runtime.controller.usePostReleaseWatch(*_EXPERIMENT["postRelease"])
     camera = runtime.camera
     if cameraMotion:
         # Experimental settings from the command line replace the configuration's.
@@ -663,6 +665,9 @@ def _trackSpherical(
             globalSearcher=globalSearcher,
             secondLook=_EXPERIMENT.get("secondLook"),
             judgeCharged=bool(_EXPERIMENT.get("judgeCharged")),
+            memoryPolicy=_EXPERIMENT.get("memoryPolicy", "always"),
+            restoreAppearance=bool(_EXPERIMENT.get("restoreAppearance")),
+            secondLookCharged=bool(_EXPERIMENT.get("secondLookCharged")),
         )
         return runtime.controller.lossStatistics
     finally:

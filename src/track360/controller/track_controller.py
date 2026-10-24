@@ -164,6 +164,14 @@ class TrackControllerImpl(TrackControllerProtocol):
         # score: (low, window frames, tolerance in sizes) and the candidates held.
         self._confirm: tuple[float, int, float] | None = None
         self._held: list[tuple[int, SphericalPoint, float]] = []
+        # Experimental (E064): a watch window after a doubted track is trusted again:
+        # (frames, freeze the appearance memory, keep searching), the frames left, and
+        # the place trusted before the doubt began.
+        self._postReleaseOptions: tuple[int, bool, bool] | None = None
+        self._postRelease = 0
+        self._doubtAnchor: tuple[BFoV, int] | None = None
+        self._releaseAnchor: tuple[BFoV, int] | None = None
+        self._trustedStreak = 0
         self._mainViewSize = (0.0, 0.0)
         # Experimental (E054): every this many lost frames, a detector looks at the
         # whole sphere and normal views are taken at the best ``_globalCount`` places.
@@ -367,9 +375,13 @@ class TrackControllerImpl(TrackControllerProtocol):
             self._scanPrepaid = self._globalCount
             self._scanTokens -= self._scanPrepaid
             self._scanFrameCount += 1
-        elif searching:
+        elif searching or self._watching():
+            anchor = None
+            if not searching:
+                anchor = self._releaseAnchor
+                lostFrames = max(1, int(frame.frameIndex) - anchor[1])
             scanViews, scanRefine = self._zoomScan(
-                mainView, lostFrames, scanCount, int(frame.frameIndex)
+                mainView, lostFrames, scanCount, int(frame.frameIndex), anchor
             )
             if scanViews:
                 self._scanPrepaid = len(scanViews) + (1 if scanRefine else 0)
@@ -393,8 +405,22 @@ class TrackControllerImpl(TrackControllerProtocol):
         )
         return plan
 
+    def _watching(self) -> bool:
+        return bool(
+            self._postRelease > 0
+            and self._postReleaseOptions is not None
+            and self._postReleaseOptions[2]
+            and self._releaseAnchor is not None
+            and self._mode is TrackMode.TRACKING
+        )
+
     def _zoomScan(
-        self, mainView: ViewSpec, lostFrames: int, budget: int, frameIndex: int = -1
+        self,
+        mainView: ViewSpec,
+        lostFrames: int,
+        budget: int,
+        frameIndex: int = -1,
+        anchor: tuple[BFoV, int] | None = None,
     ) -> tuple[tuple[ViewSpec, ...], bool]:
         """The search views of a lost frame, and whether what they find is refined.
 
@@ -405,7 +431,8 @@ class TrackControllerImpl(TrackControllerProtocol):
         normal size (see ``refinementView``).
         """
         tuning = self._backendTuning
-        trusted = self._lastGoodBfov
+        trusted = self._lastGoodBfov if anchor is None else anchor[0]
+        trustedFrame = self._lastGoodFrame if anchor is None else anchor[1]
         assert trusted is not None
         if lostFrames == 0:
             if budget < 1:
@@ -422,10 +449,10 @@ class TrackControllerImpl(TrackControllerProtocol):
         )
         self._lastScan = f"{scale:g}x"
         centre = trusted.center
-        if self._camera is not None and frameIndex > self._lastGoodFrame + 1:
+        if self._camera is not None and frameIndex > trustedFrame + 1:
             # The camera may have turned since the place was trusted; the frame before
             # this one is the latest whose rotation is known when the search is planned.
-            centre = _turned(centre, self._camera.rotation(self._lastGoodFrame, frameIndex - 1))
+            centre = _turned(centre, self._camera.rotation(trustedFrame, frameIndex - 1))
         view = self._planner.probeView(
             centre,
             trusted.horizontalFovRad,
@@ -487,6 +514,35 @@ class TrackControllerImpl(TrackControllerProtocol):
         ``low`` where it should be (turned with the camera, within ``tolerance`` sizes)."""
         self._confirm = (float(low), int(window), float(tolerance))
 
+    def usePostReleaseWatch(self, frames: int, freeze: bool, search: bool) -> None:
+        """Experimental (E064): for ``frames`` frames after a doubted track is trusted
+        again, keep the appearance memory as it was (``freeze``) and go on searching
+        around the place trusted before the doubt (``search``)."""
+        self._postReleaseOptions = (int(frames), bool(freeze), bool(search))
+
+    @property
+    def memoryFrozen(self) -> bool:
+        """The appearance memory must not learn from this frame (E064 watch window)."""
+        return bool(
+            self._postRelease > 0 and self._postReleaseOptions and self._postReleaseOptions[1]
+        )
+
+    @property
+    def cameraAnchorFrame(self) -> int:
+        """The frame the camera's rotation is needed from."""
+        if self._postRelease > 0 and self._releaseAnchor is not None:
+            return self._releaseAnchor[1]
+        return self._lastGoodFrame
+
+    @property
+    def trustedStreak(self) -> int:
+        """Frames in a row the track has been trusted (E064)."""
+        return self._trustedStreak
+
+    @property
+    def lastRelativeSignal(self) -> float | None:
+        return self._stateMachine.relativeSignal
+
     @property
     def isLost(self) -> bool:
         return self._mode is TrackMode.LOST
@@ -519,6 +575,12 @@ class TrackControllerImpl(TrackControllerProtocol):
         """A normal-size search view centred on a candidate of angular size ``sizeRad``."""
         side = min(max(sizeRad, 1e-4), pi - 1e-3)
         return self._planner._searchView(center, side, side)
+
+    def canSpendScan(self, forwards: int) -> bool:
+        """Whether the scan budget holds this many more passes (always without a budget)."""
+        if self._backendTuning.scanBudgetPerFrame <= 0.0:
+            return True
+        return self._scanTokens >= forwards
 
     def chargeScan(self, forwards: int) -> None:
         """Spend scan budget on passes outside the plan (experimental, E061)."""
@@ -611,6 +673,7 @@ class TrackControllerImpl(TrackControllerProtocol):
         }
         self._lastStateObservation = evaluation
         if self._backendTuning.lossHandling:
+            self._watchBookkeeping(pending.mode, decision.nextMode)
             if decision.nextMode is TrackMode.TRACKING:
                 self._lastGoodBfov = self._currentBfov
                 self._lastGoodFrame = int(plan.frameIndex)
@@ -691,6 +754,8 @@ class TrackControllerImpl(TrackControllerProtocol):
                 verdict = "low_score" if score < self._backendTuning.reacquireScore else "not_best"
             if verdict == "not_best" and self._actions == "move" and self._onCurrentBox(candidate):
                 verdict = "same_place"
+            if verdict == "not_best" and self._watching() and self._onCurrentBox(candidate):
+                verdict = "same_place"  # the tracker already has it: nothing to jump to
             record: dict[str, object] = {
                 "view": int(candidate.viewId),
                 "similarity": None if similarity is None else round(float(similarity), 4),
@@ -722,6 +787,28 @@ class TrackControllerImpl(TrackControllerProtocol):
         if bestRecord is not None:
             bestRecord["verdict"] = "accepted"
         return best, records
+
+    def _watchBookkeeping(self, before: TrackMode, after: TrackMode) -> None:
+        """E064: start, count down and end the watch window; keep the pre-doubt place."""
+        trustedNow = after is TrackMode.TRACKING
+        self._trustedStreak = self._trustedStreak + 1 if trustedNow else 0
+        if self._postReleaseOptions is None:
+            return
+        if before is TrackMode.TRACKING and not trustedNow:
+            if self._postRelease > 0 and self._releaseAnchor is not None:
+                # Doubted again inside the window: search from the place trusted before
+                # the first doubt, not from where the track was released.
+                self._lastGoodBfov, self._lastGoodFrame = self._releaseAnchor
+                self._doubtAnchor = self._releaseAnchor
+            else:
+                assert self._lastGoodBfov is not None
+                self._doubtAnchor = (self._lastGoodBfov, self._lastGoodFrame)
+            self._postRelease = 0
+        elif before is not TrackMode.TRACKING and trustedNow and self._doubtAnchor is not None:
+            self._postRelease = self._postReleaseOptions[0]
+            self._releaseAnchor = self._doubtAnchor
+        elif trustedNow and self._postRelease > 0:
+            self._postRelease -= 1
 
     def _confirmHeld(self, candidates, records, frameIndex, best, bestRecord):
         """Two-frame confirmation (E061): check the held candidates, then hold anew."""
@@ -780,6 +867,9 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._lastGoodBfov = candidate.bfov
         self._lastGoodFrame = int(frame.frameIndex)
         self._held = []
+        self._postRelease = 0
+        self._doubtAnchor = None
+        self._trustedStreak = 0
         self._stateMachine.reset()
         self._restartMotion(candidate.bfov, frame)
         self._currentBfov = candidate.bfov

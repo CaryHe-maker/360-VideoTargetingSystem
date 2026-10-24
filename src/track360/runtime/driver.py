@@ -232,6 +232,9 @@ def runTracking(
     globalSearcher: Any | None = None,
     secondLook: tuple[float, float] | None = None,
     judgeCharged: bool = False,
+    memoryPolicy: str = "always",
+    restoreAppearance: bool = False,
+    secondLookCharged: bool = False,
 ) -> int:
     """Run the sequential tracking pipeline and publish one result per frame.
 
@@ -274,6 +277,8 @@ def runTracking(
         if recorder is not None:
             recorder.recordLocalRgb(frame0, [templateView])
 
+        # E064: the appearance memory after a long trusted stretch, to start from again.
+        goodState = None
         pipelineReader = _PrefetchReader(source)
         pipelineReader.start()
         try:
@@ -340,6 +345,7 @@ def runTracking(
                                 and savedState is not None
                                 and not controller.isLost
                                 and _boxOffset(rawObservation.bbox, view.spec) > secondLook[1]
+                                and (not secondLookCharged or controller.canSpendScan(1))
                             ):
                                 # Experimental (E061): the box is far from the view's
                                 # centre, where the backend is least sure; look again
@@ -352,6 +358,8 @@ def runTracking(
                                     view = geometry.cropViews(frame, [recentred])[0]
                                     rawObservation = backend.infer((view,))[0]
                                     forwardCount += 1
+                                    if secondLookCharged:
+                                        controller.chargeScan(1)
                             probed = (view, rawObservation)
                             _recordBackendProfile(profiler, backend)
                             with _profile(profiler, "calibration"):
@@ -442,16 +450,35 @@ def runTracking(
                                 result = controller.consume(plan, projected, candidates)
                             if camera is not None:
                                 index = int(frame.frameIndex)
-                                camera.mark(index, controller.lastGoodFrame == index)
+                                camera.mark(index, controller.cameraAnchorFrame == index)
                             if verifier is not None:
                                 # A doubted frame must not shape the tracker's appearance
                                 # memory; a jump to a candidate starts it afresh.
                                 if controller.lastFrameReacquired:
-                                    backend.resetState()  # type: ignore[attr-defined]
-                                    memory = "reset"
-                                elif controller.lastFrameSuspect and savedState is not None:
+                                    if restoreAppearance and goodState is not None:
+                                        backend.restoreState(goodState)  # type: ignore[attr-defined]
+                                        memory = "restored"
+                                    else:
+                                        backend.resetState()  # type: ignore[attr-defined]
+                                        memory = "reset"
+                                elif (
+                                    controller.lastFrameSuspect or controller.memoryFrozen
+                                ) and savedState is not None:
                                     backend.restoreState(savedState)  # type: ignore[attr-defined]
                                     memory = "frozen"
+                                elif memoryPolicy != "always" and savedState is not None:
+                                    signal = controller.lastRelativeSignal
+                                    if memoryPolicy == "never" or (
+                                        signal is not None and signal < 0.0
+                                    ):
+                                        backend.restoreState(savedState)  # type: ignore[attr-defined]
+                                        memory = "held"
+                                if (
+                                    restoreAppearance
+                                    and not controller.lastFrameSuspect
+                                    and controller.trustedStreak >= 10
+                                ):
+                                    goodState = backend.saveState()  # type: ignore[attr-defined]
                             if trace is not None:
                                 trace.append(
                                     {

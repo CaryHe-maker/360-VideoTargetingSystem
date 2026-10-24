@@ -143,6 +143,28 @@ def buildParser() -> argparse.ArgumentParser:
         help="experimental (E061): LOW,WINDOW,TOLERANCE two-frame confirmation",
     )
     run.add_argument(
+        "--second-look-charged",
+        action="store_true",
+        help="with --second-look: the tracking-side second looks are paid from the scan budget",
+    )
+    run.add_argument(
+        "--post-release",
+        default=None,
+        help="experimental (E064): FRAMES,FREEZE,SEARCH watch window after a release",
+    )
+    run.add_argument(
+        "--memory-update",
+        choices=("always", "confident", "never"),
+        default="always",
+        help="experimental (E064): when the appearance memory may learn from a trusted frame",
+    )
+    run.add_argument(
+        "--restore-appearance",
+        action="store_true",
+        help="experimental (E064): after a jump, start from the memory of the last long "
+        "trusted stretch instead of the frame-0 template",
+    )
+    run.add_argument(
         "--judge-charged",
         action="store_true",
         help="with --candidate-judge: its passes are paid from the scan budget",
@@ -298,6 +320,18 @@ def main(argv: list[str] | None = None) -> int:
                             else {}
                         ),
                         **({"judgeCharged": True} if args.judge_charged else {}),
+                        **(
+                            {"postRelease": tuple(int(x) for x in args.post_release.split(","))}
+                            if args.post_release
+                            else {}
+                        ),
+                        **(
+                            {"memoryPolicy": args.memory_update}
+                            if args.memory_update != "always"
+                            else {}
+                        ),
+                        **({"restoreAppearance": True} if args.restore_appearance else {}),
+                        **({"secondLookCharged": True} if args.second_look_charged else {}),
                     },
                     cameraMotion=args.camera_motion,
                     cameraOptions={
