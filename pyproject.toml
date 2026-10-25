@@ -24,6 +24,10 @@ dev = [
   "pytest>=8,<9",
   "ruff>=0.12,<1",
 ]
+# Offline experiments only (E075); AGPL-3.0, install with --no-deps.
+proposals = [
+  "ultralytics==8.4.180",
+]
 
 [project.urls]
 Repository = "https://github.com/CaryHe-maker/360-VideoTargetingSystem"

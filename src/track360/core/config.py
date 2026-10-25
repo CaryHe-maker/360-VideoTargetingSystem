@@ -162,9 +162,17 @@ class BackendTuningConfig:
     # forwards per frame so far above ``secondLookCap`` (0: no cap).
     secondLookOffset: float = 0.0
     secondLookCap: float = 0.0
+    # Hold a release while the tracker's box is nearer to the look-alikes seen around
+    # the target than ``galleryReleaseMargin`` (evaluation log E080, E081; needs loss
+    # handling).  The look-alikes are kept by the appearance verifier from frames whose
+    # relative signal is at least ``galleryPositiveRelative``, which are also its
+    # positives.
+    appearanceGallery: bool = False
+    galleryReleaseMargin: float = 0.05
+    galleryPositiveRelative: float = -0.2
 
     def __post_init__(self) -> None:
-        for name in ("lossHandling", "sphericalSearch", "cameraMotion"):
+        for name in ("lossHandling", "sphericalSearch", "cameraMotion", "appearanceGallery"):
             if not isinstance(getattr(self, name), bool):
                 raise ConfigError(f"backendTuning.{name} must be boolean")
         for name in ("viewHorizontalFovCapRad", "viewVerticalFovCapRad"):
@@ -182,6 +190,8 @@ class BackendTuningConfig:
             )
         if self.cameraMotion and not self.lossHandling:
             raise ConfigError("backendTuning.cameraMotion needs lossHandling")
+        if self.appearanceGallery and not self.lossHandling:
+            raise ConfigError("backendTuning.appearanceGallery needs lossHandling")
         if self.secondLookOffset < 0.0 or self.secondLookCap < 0.0:
             raise ConfigError("backendTuning second-look values must be non-negative")
         if self.secondLookOffset > 0.0 and not self.lossHandling:
@@ -337,6 +347,8 @@ def loadConfig(path: str | Path) -> AppConfig:
         "zoomLastScale",
         "secondLookOffset",
         "secondLookCap",
+        "galleryReleaseMargin",
+        "galleryPositiveRelative",
     )
     tuningInts = ("lostAfterFrames", "releaseFrames", "zoomLastAfterFrames")
     tuningRaw = _section(
@@ -351,6 +363,7 @@ def loadConfig(path: str | Path) -> AppConfig:
             "lossHandling",
             "lossActions",
             "cameraMotion",
+            "appearanceGallery",
             *tuningFloats,
             *tuningInts,
         },
@@ -444,6 +457,9 @@ def loadConfig(path: str | Path) -> AppConfig:
             ),
             lossActions=_requireStr("backendTuning.lossActions", tuningRaw["lossActions"]),
             cameraMotion=_requireBool("backendTuning.cameraMotion", tuningRaw["cameraMotion"]),
+            appearanceGallery=_requireBool(
+                "backendTuning.appearanceGallery", tuningRaw["appearanceGallery"]
+            ),
             **{
                 name: _requireFloat(f"backendTuning.{name}", tuningRaw[name])
                 for name in tuningFloats

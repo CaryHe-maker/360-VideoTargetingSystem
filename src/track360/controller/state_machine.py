@@ -42,11 +42,23 @@ class TrackStateMachine:
         # describe the target and not the track.
         self._trusted: dict[str, list[float]] = {"backend": [], "appearance": []}
         self._relativeSignal: float | None = None
+        # Experimental (E074): no release while the backend score is this far below
+        # the median of the trusted frames (None: no such floor).
+        self._releaseFloor: float | None = None
+
+    def useReleaseFloor(self, floor: float | None) -> None:
+        """Experimental (E074): hold a release while the backend deviation is below it."""
+        self._releaseFloor = None if floor is None else float(floor)
 
     @property
     def relativeSignal(self) -> float | None:
         """Mean relative deviation of the last frame under the relative rule."""
         return self._relativeSignal
+
+    @property
+    def latched(self) -> bool:
+        """A doubt is holding: the track is trusted again only after calm frames."""
+        return self._latched
 
     @property
     def untrustedFrames(self) -> int:
@@ -118,10 +130,11 @@ class TrackStateMachine:
         forced: bool = False,
     ) -> tuple[TrackMode, TransitionReason]:
         tuning = self._tuning
+        backendDeviation = 0.0
         if hasBox:
+            backendDeviation = self._deviation("backend", float(backend or 0.0))
             signal = 0.5 * (
-                self._deviation("backend", float(backend or 0.0))
-                + self._deviation("appearance", float(appearance or 0.0))
+                backendDeviation + self._deviation("appearance", float(appearance or 0.0))
             )
         else:
             signal = -1.0
@@ -131,6 +144,8 @@ class TrackStateMachine:
             calm = signal > threshold * RELATIVE_RELEASE_SHARE
             self._calmFrames = self._calmFrames + 1 if calm else 0
             trusted = self._calmFrames >= tuning.releaseFrames
+            if trusted and self._releaseFloor is not None and backendDeviation < self._releaseFloor:
+                trusted = False  # E074: calm, but the backend still doubts this box
         else:
             trusted = signal >= threshold
         # An evaluation oracle (E052) may declare the frame untrusted.

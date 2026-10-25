@@ -160,6 +160,39 @@ def buildParser() -> argparse.ArgumentParser:
         help="with --second-look-cap: count the scan passes saved up as already spent (E066b)",
     )
     run.add_argument(
+        "--extrapolated-scan",
+        default=None,
+        help="experimental (E073): FRAMES,CAP: a second enlarged search view where the "
+        "target would be had it kept the motion of its last FRAMES trusted frames",
+    )
+    run.add_argument(
+        "--gallery",
+        default=None,
+        help="experimental (E076): FLOOR,KEEP,EVERY[,GENTLE]: distrust a frame whose box is "
+        "FLOOR nearer to the sequence's negatives than to its positives; GENTLE 1: only hold "
+        "a doubt and keep the memory from learning such a frame (E076e)",
+    )
+    run.add_argument(
+        "--gallery2",
+        default=None,
+        help="experimental (E080): KEY=VALUE,... of the appearance gallery with look-alike "
+        "negatives: detect, gentle, release, jump, positive, keep, every, harvest, per, apart, "
+        "scale, width",
+    )
+    run.add_argument(
+        "--margin-jumps",
+        action="store_true",
+        help="experimental (E076d): with --gallery, take a candidate only when its gallery "
+        "margin beats the tracker box's",
+    )
+    run.add_argument(
+        "--release-floor",
+        type=float,
+        default=None,
+        help="experimental (E074): no release while the backend score is this far below "
+        "the median of the trusted frames (e.g. -0.15)",
+    )
+    run.add_argument(
         "--post-release",
         default=None,
         help="experimental (E064): FRAMES,FREEZE,SEARCH watch window after a release",
@@ -169,6 +202,13 @@ def buildParser() -> argparse.ArgumentParser:
         choices=("always", "confident", "never"),
         default="always",
         help="experimental (E064): when the appearance memory may learn from a trusted frame",
+    )
+    run.add_argument(
+        "--memory-floor",
+        type=float,
+        default=None,
+        help="experimental (E064f): with --memory-update confident, the relative signal from "
+        "which a trusted frame is learned (default 0; the median is about -0.2)",
     )
     run.add_argument(
         "--restore-appearance",
@@ -343,6 +383,11 @@ def main(argv: list[str] | None = None) -> int:
                             else {}
                         ),
                         **({"restoreAppearance": True} if args.restore_appearance else {}),
+                        **(
+                            {"memoryFloor": args.memory_floor}
+                            if args.memory_floor is not None
+                            else {}
+                        ),
                         **({"secondLookCharged": True} if args.second_look_charged else {}),
                         **(
                             {"secondLookCap": args.second_look_cap}
@@ -350,6 +395,43 @@ def main(argv: list[str] | None = None) -> int:
                             else {}
                         ),
                         **({"secondLookReserve": True} if args.second_look_reserve else {}),
+                        **(
+                            {
+                                "extrapolatedScan": tuple(
+                                    int(x) for x in args.extrapolated_scan.split(",")
+                                )
+                            }
+                            if args.extrapolated_scan
+                            else {}
+                        ),
+                        **({"marginJumps": True} if args.margin_jumps else {}),
+                        **(
+                            {
+                                "gallery2": {
+                                    k: float(v)
+                                    for k, v in (
+                                        item.split("=") for item in args.gallery2.split(",")
+                                    )
+                                }
+                            }
+                            if args.gallery2
+                            else {}
+                        ),
+                        **(
+                            {"releaseFloor": args.release_floor}
+                            if args.release_floor is not None
+                            else {}
+                        ),
+                        **(
+                            {
+                                "gallery": (
+                                    float(args.gallery.split(",")[0]),
+                                    *(int(x) for x in args.gallery.split(",")[1:]),
+                                )
+                            }
+                            if args.gallery
+                            else {}
+                        ),
                     },
                     cameraMotion=args.camera_motion,
                     cameraOptions={

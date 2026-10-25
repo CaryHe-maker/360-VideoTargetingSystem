@@ -37,6 +37,7 @@ PRESETS: dict[str, str] = {
     "loss_handling": "loss_handling.yaml",
     "camera": "camera.yaml",
     "second_look": "second_look.yaml",
+    "lookalike": "lookalike.yaml",
 }
 
 

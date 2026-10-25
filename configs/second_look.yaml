@@ -43,6 +43,9 @@ backendTuning:
   lossActions: jump
   secondLookOffset: 0.5
   secondLookCap: 1.58
+  appearanceGallery: false
+  galleryReleaseMargin: 0.05
+  galleryPositiveRelative: -0.2
   cameraMotion: true
   releaseFrames: 3
   relativeGate: 0.05

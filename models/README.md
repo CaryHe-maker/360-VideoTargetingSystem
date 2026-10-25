@@ -50,3 +50,13 @@ Windows PowerShell 可以使用 `Get-FileHash models\artrackv2_b_256.pth.tar`。
 | DINO ViT-S/16（只用于对比） | `facebookresearch/dino` | Apache 2.0 | 约 83 MB |
 | ResNet-18（只用于对比） | torchvision 的 ImageNet 权重 | BSD-3 | 约 45 MB |
 
+
+## 候选检测模型（实验，E075）
+
+`tools/proposal_study.py` 用到的视觉提示检测器，放在 `models/yoloe/`，不随仓库分发。2026-10-25 下载。
+
+| 模型 | 来源 | 许可证 | 大小 | SHA-256 |
+|---|---|---|---:|---|
+| YOLOE-11S-seg（`yoloe-11s-seg.pt`） | `https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-11s-seg.pt` | AGPL-3.0（Ultralytics） | 26.5 MB | `8e439445c87338b79d9ce21dec109f4621e26df67e94d26ea1a98c1e64dce3e3` |
+
+运行它需要 `ultralytics==8.4.180`（AGPL-3.0），按 `--no-deps` 装入，没有改动已有的 torch、numpy 等版本；另装了它导入时需要的 `requests`、`psutil`、`py-cpuinfo`、`ultralytics-thop`。只用于离线实验，不进入跟踪器的依赖；若进入，需要先处理 AGPL-3.0 的许可问题。

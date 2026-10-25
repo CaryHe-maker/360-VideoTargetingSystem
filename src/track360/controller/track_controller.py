@@ -153,6 +153,29 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._judgeThreshold: float | None = None
         # Evaluation only (E052): a partial oracle that corrects some decisions.
         self._oracle: Any | None = None
+        # Experimental (E076): a frame whose box is this far nearer to what the target
+        # is not than to what it is stays untrusted.
+        self._marginFloor: float | None = None
+        self._pendingMargin: float | None = None
+        self._lastMarginForced = False
+        # Experimental (E076d): take a candidate only when its gallery margin beats the
+        # tracker box's margin of the same frame.
+        self._marginJumps = False
+        self._frameMargin: float | None = None
+        # Experimental (E076e): the margin only holds a doubt (no release) and keeps the
+        # appearance memory from learning; it raises no doubt of its own.
+        self._marginGentle = False
+        self._lastMarginLow = False
+        # Experimental (E080): a release is held while the tracker box's look-alike
+        # margin is below ``_releaseHold``; a candidate is taken only from a margin of
+        # ``_candidateFloor``.
+        self._releaseHold: float | None = None
+        self._pendingReleaseMargin: float | None = None
+        self._candidateFloor: float | None = None
+        # Experimental (E081): a doubt the gallery margin started (the state machine
+        # trusted the frame) takes no candidate on the tracker's own box.
+        self._marginNoSamePlace = False
+        self._marginDoubt = False
         # Experimental (E053): the camera's rotation, to turn the search centre with it.
         self._camera: Any | None = None
         self._lastGoodFrame = 0
@@ -172,6 +195,10 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._doubtAnchor: tuple[BFoV, int] | None = None
         self._releaseAnchor: tuple[BFoV, int] | None = None
         self._trustedStreak = 0
+        # Experimental (E073): the places trusted lately, to extrapolate the target's
+        # motion into a second search view: (frames of the velocity, frames at most).
+        self._extrapolate: tuple[int, int] | None = None
+        self._trail: deque[tuple[int, SphericalPoint]] = deque(maxlen=16)
         self._mainViewSize = (0.0, 0.0)
         # Experimental (E054): every this many lost frames, a detector looks at the
         # whole sphere and normal views are taken at the best ``_globalCount`` places.
@@ -477,7 +504,41 @@ class TrackControllerImpl(TrackControllerProtocol):
                     SCAN_VIEW_ID_BASE,
                 )
         self._lastScanCentre = view.bfov.center
+        extra = self._extrapolatedCentre(trustedFrame, frameIndex) if anchor is None else None
+        if (
+            extra is not None
+            and not self._lastScanSphere
+            and budget >= 2
+            and (not limited or int(self._scanTokens) >= 4)
+        ):
+            second = self._planner.probeView(
+                extra,
+                trusted.horizontalFovRad,
+                trusted.verticalFovRad,
+                scale,
+                SCAN_VIEW_ID_BASE + 1,
+            )
+            return (view, second), True
         return (view,), True
+
+    def _extrapolatedCentre(self, trustedFrame: int, frameIndex: int) -> SphericalPoint | None:
+        """E073: the last trusted place moved on with the velocity of the trusted frames
+        before it (as seen in the frames, camera motion included)."""
+        if self._extrapolate is None or frameIndex < 0:
+            return None
+        frames, cap = self._extrapolate
+        trail = [item for item in self._trail if item[0] <= trustedFrame]
+        if len(trail) <= frames:
+            return None
+        (first, start), (last, end) = trail[-1 - frames], trail[-1]
+        steps = min(frameIndex - last, cap) / max(1, last - first)
+        x = end.x + (end.x - start.x) * steps
+        y = end.y + (end.y - start.y) * steps
+        z = end.z + (end.z - start.z) * steps
+        norm = sqrt(x * x + y * y + z * z)
+        if norm <= 0.0:
+            return None
+        return makeSphericalPoint(atan2(x, z), asin(max(-1.0, min(1.0, y / norm))))
 
     def useCameraMotion(self, camera: Any | None) -> None:
         """Experimental (E053): centre enlarged searches where the trusted place has turned to.
@@ -513,6 +574,64 @@ class TrackControllerImpl(TrackControllerProtocol):
         next search with candidates, within ``window`` frames, finds one scoring at least
         ``low`` where it should be (turned with the camera, within ``tolerance`` sizes)."""
         self._confirm = (float(low), int(window), float(tolerance))
+
+    def useExtrapolatedScan(self, frames: int, cap: int) -> None:
+        """Experimental (E073): an enlarged search also looks where the target would be
+        had it kept the motion of its last ``frames`` trusted frames (for at most ``cap``
+        frames since the place was trusted)."""
+        self._extrapolate = (int(frames), int(cap))
+
+    def useAppearanceMargin(self, floor: float | None) -> None:
+        """Experimental (E076): distrust a frame whose gallery margin is below ``floor``."""
+        self._marginFloor = None if floor is None else float(floor)
+
+    def useReleaseHold(self, floor: float | None) -> None:
+        """Experimental (E080): see ``_releaseHold``."""
+        self._releaseHold = None if floor is None else float(floor)
+
+    def noteReleaseMargin(self, margin: float | None) -> None:
+        self._pendingReleaseMargin = margin
+
+    def useMarginNoSamePlace(self, enabled: bool = True) -> None:
+        """Experimental (E081): see ``_marginNoSamePlace``."""
+        self._marginNoSamePlace = bool(enabled)
+
+    def useCandidateFloor(self, floor: float | None) -> None:
+        """Experimental (E080): see ``_candidateFloor``."""
+        self._candidateFloor = None if floor is None else float(floor)
+
+    def wideView(self, bfov: BFoV, scale: float, widthPx: int) -> ViewSpec:
+        """E080: a view ``scale`` times the normal search view around ``bfov``."""
+        spec = self._planner.probeView(
+            bfov.center, bfov.horizontalFovRad, bfov.verticalFovRad, scale, 0
+        )
+        return replace(spec, outputWidthPx=widthPx, outputHeightPx=widthPx, priorBox=None)
+
+    def useGentleMargin(self, enabled: bool = True) -> None:
+        """Experimental (E076e): see ``_marginGentle``."""
+        self._marginGentle = bool(enabled)
+
+    @property
+    def lastMarginLow(self) -> bool:
+        """The last frame's gallery margin was below the floor (E076e)."""
+        return self._lastMarginLow
+
+    def useMarginJumps(self, enabled: bool = True) -> None:
+        """Experimental (E076d): see ``_marginJumps``."""
+        self._marginJumps = bool(enabled)
+
+    def noteAppearanceMargin(self, margin: float | None) -> None:
+        """The gallery margin of the coming frame's tracker box (E076)."""
+        self._pendingMargin = margin
+
+    @property
+    def lastMarginForced(self) -> bool:
+        """The last frame was distrusted by the gallery margin alone (E076)."""
+        return self._lastMarginForced
+
+    def useReleaseFloor(self, floor: float | None) -> None:
+        """Experimental (E074): see ``TrackStateMachine.useReleaseFloor``."""
+        self._stateMachine.useReleaseFloor(floor)
 
     def usePostReleaseWatch(self, frames: int, freeze: bool, search: bool) -> None:
         """Experimental (E064): for ``frames`` frames after a doubted track is trusted
@@ -649,6 +768,27 @@ class TrackControllerImpl(TrackControllerProtocol):
         forced = (
             self._oracle.forceDoubt(frameIndex, trackerBox) if self._oracle is not None else False
         )
+        marginLow = (
+            self._marginFloor is not None
+            and self._pendingMargin is not None
+            and self._pendingMargin < self._marginFloor
+        )
+        self._lastMarginLow = bool(marginLow)
+        marginForced = marginLow and (not self._marginGentle or self._stateMachine.latched)
+        if (
+            self._releaseHold is not None
+            and self._pendingReleaseMargin is not None
+            and self._stateMachine.latched
+            and self._pendingReleaseMargin < self._releaseHold
+        ):
+            marginForced = True  # E080: still too like a look-alike to be released
+        self._pendingReleaseMargin = None
+        self._frameMargin = self._pendingMargin
+        self._pendingMargin = None
+        self._lastMarginForced = bool(marginForced and not forced)
+        if marginLow and pending.mode is TrackMode.TRACKING and not self._marginGentle:
+            self._marginDoubt = True
+        forced = forced or marginForced
         if self._actions in _SEARCHING_ACTIONS:
             chosen, trace["candidates"] = self._reacquisitionCandidate(
                 candidates, frameIndex, trackerBox
@@ -683,12 +823,16 @@ class TrackControllerImpl(TrackControllerProtocol):
             "finalStateRevision": int(plan.stateRevision),
         }
         self._lastStateObservation = evaluation
+        if decision.nextMode is TrackMode.TRACKING:
+            self._marginDoubt = False
         if self._backendTuning.lossHandling:
             self._watchBookkeeping(pending.mode, decision.nextMode)
             if decision.nextMode is TrackMode.TRACKING:
                 self._lastGoodBfov = self._currentBfov
                 self._lastGoodFrame = int(plan.frameIndex)
                 self._held = []
+                if self._currentBfov is not None:
+                    self._trail.append((int(plan.frameIndex), self._currentBfov.center))
             else:
                 self._suspectFrameCount += 1
                 # Without actions the run must stay what it is without loss handling.
@@ -767,6 +911,28 @@ class TrackControllerImpl(TrackControllerProtocol):
                 verdict = "same_place"
             if verdict == "not_best" and self._watching() and self._onCurrentBox(candidate):
                 verdict = "same_place"  # the tracker already has it: nothing to jump to
+            if (
+                verdict == "not_best"
+                and self._marginJumps
+                and self._frameMargin is not None
+                and candidate.appearanceMargin is not None
+                and candidate.appearanceMargin <= self._frameMargin
+            ):
+                verdict = "low_margin"  # E076d: no nearer to the target than the tracker
+            if (
+                verdict == "not_best"
+                and self._candidateFloor is not None
+                and candidate.appearanceMargin is not None
+                and candidate.appearanceMargin < self._candidateFloor
+            ):
+                verdict = "low_margin"  # E080: too like a look-alike
+            if (
+                verdict == "not_best"
+                and self._marginNoSamePlace
+                and self._marginDoubt
+                and self._onCurrentBox(candidate)
+            ):
+                verdict = "same_place"  # E081: nothing to jump to, only memory to lose
             record: dict[str, object] = {
                 "view": int(candidate.viewId),
                 "similarity": None if similarity is None else round(float(similarity), 4),
@@ -881,6 +1047,8 @@ class TrackControllerImpl(TrackControllerProtocol):
         self._postRelease = 0
         self._doubtAnchor = None
         self._trustedStreak = 0
+        self._trail.clear()
+        self._marginDoubt = False
         self._stateMachine.reset()
         self._restartMotion(candidate.bfov, frame)
         self._currentBfov = candidate.bfov

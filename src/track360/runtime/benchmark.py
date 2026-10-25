@@ -638,6 +638,16 @@ def _trackSpherical(
         runtime.controller.useTwoFrameConfirmation(*_EXPERIMENT["confirm"])
     if "postRelease" in _EXPERIMENT:
         runtime.controller.usePostReleaseWatch(*_EXPERIMENT["postRelease"])
+    if "extrapolatedScan" in _EXPERIMENT:
+        runtime.controller.useExtrapolatedScan(*_EXPERIMENT["extrapolatedScan"])
+    if "releaseFloor" in _EXPERIMENT:
+        runtime.controller.useReleaseFloor(_EXPERIMENT["releaseFloor"])
+    if "gallery" in _EXPERIMENT and runtime.verifier is not None:
+        runtime.verifier.useGallery(_EXPERIMENT["gallery"][1])
+    if "gallery2" in _EXPERIMENT and runtime.verifier is not None:
+        runtime.verifier.useGallery(int(_EXPERIMENT["gallery2"].get("keep", 50)))
+    if _EXPERIMENT.get("marginJumps"):
+        runtime.controller.useMarginJumps()
     camera = runtime.camera
     if cameraMotion:
         # Experimental settings from the command line replace the configuration's.
@@ -670,6 +680,9 @@ def _trackSpherical(
             secondLookCharged=bool(_EXPERIMENT.get("secondLookCharged")),
             secondLookCap=_EXPERIMENT.get("secondLookCap"),
             secondLookReserve=bool(_EXPERIMENT.get("secondLookReserve")),
+            gallery=_EXPERIMENT.get("gallery"),
+            memoryFloor=float(_EXPERIMENT.get("memoryFloor", 0.0)),
+            gallery2=_EXPERIMENT.get("gallery2"),
         )
         return runtime.controller.lossStatistics
     finally:

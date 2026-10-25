@@ -136,6 +136,16 @@ class CoreConfigTest(unittest.TestCase):
             camera.backendTuning,
         )
         self.assertEqual(secondLook.model, camera.model)
+        # Baseline 5 is baseline 4 with the look-alike release hold (E080a).
+        lookalike = loadConfig(REPOSITORY_ROOT / "configs" / "lookalike.yaml")
+        self.assertTrue(lookalike.backendTuning.appearanceGallery)
+        self.assertAlmostEqual(lookalike.backendTuning.galleryReleaseMargin, 0.05)
+        self.assertAlmostEqual(lookalike.backendTuning.galleryPositiveRelative, -0.2)
+        self.assertFalse(secondLook.backendTuning.appearanceGallery)
+        self.assertEqual(
+            replace(lookalike.backendTuning, appearanceGallery=False), secondLook.backendTuning
+        )
+        self.assertEqual(lookalike.model, secondLook.model)
 
     def _assertRejected(self, old: str, new: str) -> None:
         source = (REPOSITORY_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")

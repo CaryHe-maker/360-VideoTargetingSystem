@@ -26,6 +26,7 @@ from track360.controller import (
     scoreViewCenterMotion,
     withScoreProbability,
 )
+from track360.controller.view_planner import localBoxOfBfov
 from track360.core.config import AppConfig, ModelConfig
 from track360.core.errors import DecodeError, GeometryError, ProtocolError
 from track360.core.protocols import FrameSource as FrameSourceProtocol
@@ -186,6 +187,8 @@ def buildRuntime(
         from track360.backends.appearance import AppearanceVerifier
 
         verifier = AppearanceVerifier("dinov2", Path(config.model.weights).parent / "hub")
+        if tuning.appearanceGallery:
+            verifier.useGallery(50)
     camera = None
     if tuning.cameraMotion:
         from track360.runtime.camera_motion import CameraMotion
@@ -237,6 +240,9 @@ def runTracking(
     secondLookCharged: bool = False,
     secondLookCap: float | None = None,
     secondLookReserve: bool = False,
+    gallery: tuple[float, ...] | None = None,
+    memoryFloor: float = 0.0,
+    gallery2: dict[str, float] | None = None,
 ) -> int:
     """Run the sequential tracking pipeline and publish one result per frame.
 
@@ -281,6 +287,37 @@ def runTracking(
 
         # E064: the appearance memory after a long trusted stretch, to start from again.
         goodState = None
+        # E076: (margin floor, gallery size, frames between gallery entries).
+        # E080: the same gallery with look-alike negatives, read as a dict.
+        # The look-alike release hold of the configuration (baseline 5), unless an
+        # experiment sets the gallery.
+        tuning = getattr(controller, "backendTuning", None)
+        if (
+            gallery2 is None
+            and gallery is None
+            and tuning is not None
+            and tuning.appearanceGallery
+            and verifier is not None
+        ):
+            gallery2 = {
+                "release": tuning.galleryReleaseMargin,
+                "positive": tuning.galleryPositiveRelative,
+            }
+        if gallery2 is not None and verifier is not None:
+            gallery = (
+                gallery2.get("detect", -9.0),
+                int(gallery2.get("keep", 50)),
+                int(gallery2.get("every", 5)),
+                int(gallery2.get("gentle", 0)),
+            )
+            controller.useReleaseHold(gallery2.get("release"))
+            controller.useCandidateFloor(gallery2.get("jump"))
+            controller.useMarginNoSamePlace(bool(gallery2.get("nosame", 0)))
+        positiveFloor = float((gallery2 or {}).get("positive", 0.0))
+        if gallery is not None and verifier is not None:
+            controller.useAppearanceMargin(gallery[0])
+            if len(gallery) > 3 and gallery[3] == 1:
+                controller.useGentleMargin()
         # E066: forward passes spent so far, to keep the sequence's average under a cap.
         spentForwards = 0
         # The tracking-side second look of the configuration (baseline 4), unless an
@@ -406,6 +443,7 @@ def runTracking(
                                     projected,
                                 )
                             candidates: tuple[ProjectedObservation, ...] = ()
+                            trackerFeature = None
                             if verifier is not None:
                                 if projected is not None:
                                     projected = replace(
@@ -414,6 +452,17 @@ def runTracking(
                                             view, observation.bbox
                                         ),
                                     )
+                                    store = getattr(verifier, "gallery", None)
+                                    if gallery is not None and store is not None:
+                                        trackerFeature = verifier.lastFeature
+                                        controller.noteAppearanceMargin(
+                                            store.margin(trackerFeature)
+                                        )
+                                        if gallery2 is not None:
+                                            store.candidateSources = ("lookalike",)
+                                            controller.noteReleaseMargin(
+                                                store.margin(trackerFeature, ("lookalike",))
+                                            )
                                 if globalSearcher is not None and controller.globalSearchPending:
                                     candidates, scanForwards = _globalCandidates(
                                         frame=frame,
@@ -490,10 +539,21 @@ def runTracking(
                                 ) and savedState is not None:
                                     backend.restoreState(savedState)  # type: ignore[attr-defined]
                                     memory = "frozen"
+                                elif (
+                                    gallery is not None
+                                    and len(gallery) > 3
+                                    and gallery[3] == 1
+                                    and controller.lastMarginLow
+                                    and savedState is not None
+                                ):
+                                    # E076e: the box looks more like what the target is
+                                    # not; the memory does not learn it.
+                                    backend.restoreState(savedState)  # type: ignore[attr-defined]
+                                    memory = "held"
                                 elif memoryPolicy != "always" and savedState is not None:
                                     signal = controller.lastRelativeSignal
                                     if memoryPolicy == "never" or (
-                                        signal is not None and signal < 0.0
+                                        signal is not None and signal < memoryFloor
                                     ):
                                         backend.restoreState(savedState)  # type: ignore[attr-defined]
                                         memory = "held"
@@ -503,6 +563,38 @@ def runTracking(
                                     and controller.trustedStreak >= 10
                                 ):
                                     goodState = backend.saveState()  # type: ignore[attr-defined]
+                                if (
+                                    trackerFeature is not None
+                                    and int(frame.frameIndex) % int(gallery[2]) == 0
+                                    and not controller.lastFrameReacquired
+                                    and not controller.lastMarginForced
+                                ):
+                                    # E076: frames the state machine doubted on its own are
+                                    # what the target is not; confident frames are what it is.
+                                    signal = controller.lastRelativeSignal
+                                    if controller.lastFrameSuspect:
+                                        verifier.gallery.add(trackerFeature, positive=False)
+                                    elif signal is not None and signal >= positiveFloor:
+                                        verifier.gallery.add(trackerFeature, positive=True)
+                                if (
+                                    gallery2 is not None
+                                    and trackerFeature is not None
+                                    and projected is not None
+                                    and int(frame.frameIndex) % int(gallery2.get("harvest", 10))
+                                    == 0
+                                    and not controller.lastFrameSuspect
+                                    and not controller.lastFrameReacquired
+                                    and (controller.lastRelativeSignal or -9.0) >= positiveFloor
+                                    and verifier.gallery.margin(trackerFeature) >= 0.0
+                                ):
+                                    _harvestLookalikes(
+                                        frame,
+                                        projected.bfov,
+                                        controller,
+                                        geometry,
+                                        verifier,
+                                        gallery2,
+                                    )
                             if trace is not None:
                                 trace.append(
                                     {
@@ -680,6 +772,36 @@ def _projectObservation(
     )
 
 
+def _harvestLookalikes(frame, bfov, controller, geometry, verifier, options) -> None:
+    """E080: keep the places around a confidently tracked target that look most like it
+    as negatives of the appearance gallery."""
+    width = int(options.get("width", 448))
+    spec = controller.wideView(bfov, float(options.get("scale", 3.0)), width)
+    wide = geometry.cropViews(frame, [spec])[0]
+    box = localBoxOfBfov(spec, bfov)
+    for x, y in verifier.lookalikes(
+        wide.rgb, box, int(options.get("per", 3)), float(options.get("apart", 1.5)), width
+    ):
+        local = BBoxXYWH(
+            xPx=x - 0.5 * box.widthPx,
+            yPx=y - 0.5 * box.heightPx,
+            widthPx=box.widthPx,
+            heightPx=box.heightPx,
+        )
+        try:
+            place = geometry.projectLocalBoxBoundary(
+                local, spec, frame.rgb.shape[1], frame.rgb.shape[0]
+            ).bfov
+        except GeometryError:
+            continue
+        side = math.sqrt(place.horizontalFovRad * place.verticalFovRad)
+        near = controller.recentredView(place.center, side)
+        view = geometry.cropViews(frame, [near])[0]
+        verifier.gallery.add(
+            verifier.embedBox(view, localBoxOfBfov(near, place)), positive=False, source="lookalike"
+        )
+
+
 def _scanCandidates(
     *,
     frame: FramePacket,
@@ -764,8 +886,18 @@ def _scanCandidates(
             geometry=geometry,
         )
         if projected is not None:
+            similarity = verifier.similarity(view, local.bbox)
+            store = getattr(verifier, "gallery", None)
             candidates.append(
-                replace(projected, appearanceSimilarity=verifier.similarity(view, local.bbox))
+                replace(
+                    projected,
+                    appearanceSimilarity=similarity,
+                    appearanceMargin=(
+                        store.margin(verifier.lastFeature, store.candidateSources)
+                        if store is not None
+                        else None
+                    ),
+                )
             )
     return tuple(candidates), forwards
 
