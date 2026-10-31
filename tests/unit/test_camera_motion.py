@@ -2,7 +2,6 @@ import unittest
 
 import cv2
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 from track360.geometry.camera_rotation import rotateErp
 from track360.runtime.camera_motion import CameraMotion
@@ -16,13 +15,14 @@ def _scene() -> np.ndarray:
 
 
 def _angle(rotation: np.ndarray) -> float:
-    return float(np.degrees(Rotation.from_matrix(rotation).magnitude()))
+    return float(np.degrees(np.arccos(np.clip((np.trace(rotation) - 1.0) / 2.0, -1.0, 1.0))))
 
 
 class CameraMotionTest(unittest.TestCase):
     def setUp(self) -> None:
         self.scene = _scene()
-        step = Rotation.from_euler("y", 2.0, degrees=True).as_matrix()
+        c, s = np.cos(np.radians(2.0)), np.sin(np.radians(2.0))
+        step = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
         self.frames = [rotateErp(self.scene, np.linalg.matrix_power(step, k)) for k in range(6)]
 
     def testNothingIsMeasuredWhileTrustedAndTheChainStartsAtTheLastTrustedFrame(self) -> None:
