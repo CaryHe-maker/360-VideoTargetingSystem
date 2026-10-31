@@ -8,6 +8,7 @@ the template asks the other question: is this still the same thing?
 from __future__ import annotations
 
 from collections.abc import Sequence
+from math import sqrt
 from pathlib import Path
 from typing import Any
 
@@ -143,20 +144,141 @@ class AppearanceVerifier:
         self._models = _SHARED[key]
         self._model = model
         self._template: Any | None = None
+        self._lastFeature: Any | None = None
+        # Experimental (E076): what this sequence's target looks like and what it does not.
+        self._galleryKeep = 0
+        self._gallery: AppearanceGallery | None = None
+
+    def useGallery(self, keep: int) -> None:
+        """Experimental (E076): keep a gallery of ``keep`` positives and negatives."""
+        self._galleryKeep = int(keep)
 
     def setTemplate(self, template: LocalView, templateBox: BBoxXYWH) -> None:
         self._template = self._models.embed(targetCrop(template.rgb, templateBox))[self._model]
+        if self._galleryKeep > 0:
+            self._gallery = AppearanceGallery(self._template, self._galleryKeep)
+            self._prototype = self._patchPrototype(template.rgb, templateBox)
+
+    def embedBox(self, view: LocalView, box: BBoxXYWH) -> Any:
+        """The unit feature of a box (E080); does not change ``lastFeature``."""
+        return self._models.embed(targetCrop(view.rgb, box))[self._model]
+
+    def _patches(self, rgb: Any, side: int) -> Any:
+        import cv2
+
+        torch = self._models.torch
+        model = self._models._models[self._model]
+        side -= side % 14
+        image = cv2.resize(rgb, (side, side), interpolation=cv2.INTER_AREA)
+        x = torch.from_numpy(np.ascontiguousarray(image)).to(self._models._device)
+        x = x.permute(2, 0, 1).unsqueeze(0).float() / 255.0
+        x = (x - self._models._mean) / self._models._std
+        with torch.inference_mode():
+            tokens = model.forward_features(x)["x_norm_patchtokens"][0]
+        return torch.nn.functional.normalize(tokens, dim=1), side // 14
+
+    def _patchPrototype(self, rgb: Any, box: BBoxXYWH, side: int = 448) -> Any:
+        tokens, grid = self._patches(rgb, side)
+        scale = grid / rgb.shape[1]
+        centres = (np.arange(grid) + 0.5) / scale
+        cx, cy = np.meshgrid(centres, centres)
+        inside = (
+            (cx >= box.xPx)
+            & (cx <= box.xPx + box.widthPx)
+            & (cy >= box.yPx)
+            & (cy <= box.yPx + box.heightPx)
+        ).reshape(-1)
+        if not inside.any():
+            inside[
+                np.argmin(
+                    (cx - box.xPx - 0.5 * box.widthPx) ** 2
+                    + (cy - box.yPx - 0.5 * box.heightPx) ** 2
+                )
+            ] = True  # noqa: E501
+        mask = self._models.torch.from_numpy(inside).to(tokens.device)
+        return self._models.torch.nn.functional.normalize(tokens[mask].mean(0), dim=0)
+
+    def lookalikes(
+        self, rgb: Any, box: BBoxXYWH, count: int, apart: float, side: int = 448
+    ) -> list[tuple[float, float]]:
+        """E080: centres (view pixels) of the places in ``rgb`` most like the frame-0
+        target by DINOv2 patch features, at least ``apart`` box sizes from ``box``."""
+        torch = self._models.torch
+        tokens, grid = self._patches(rgb, side)
+        sim = (tokens @ self._prototype).reshape(1, 1, grid, grid)
+        size = max(sqrt(box.widthPx * box.heightPx), 4.0)
+        radius = max(1, int(round(0.5 * size * grid / rgb.shape[1])))
+        peaks = sim == torch.nn.functional.max_pool2d(sim, 2 * radius + 1, 1, radius)
+        values, order = torch.sort(sim[peaks], descending=True)
+        index = torch.nonzero(peaks.reshape(-1)).reshape(-1)[order]
+        cell = rgb.shape[1] / grid
+        cx, cy = box.xPx + 0.5 * box.widthPx, box.yPx + 0.5 * box.heightPx
+        out = []
+        for i in index[:20].tolist():
+            x, y = (i % grid + 0.5) * cell, (i // grid + 0.5) * cell
+            if sqrt((x - cx) ** 2 + (y - cy) ** 2) < apart * size:
+                continue
+            out.append((x, y))
+            if len(out) >= count:
+                break
+        return out
+
+    @property
+    def lastFeature(self) -> Any | None:
+        """The feature of the box of the last ``similarity`` call."""
+        return self._lastFeature
+
+    @property
+    def gallery(self) -> AppearanceGallery | None:
+        return self._gallery
 
     def similarity(self, view: LocalView, box: BBoxXYWH) -> float | None:
         """How much the box looks like the target of frame 0."""
         if self._template is None:
             return None
         feature = self._models.embed(targetCrop(view.rgb, box))[self._model]
+        self._lastFeature = feature
         return float((feature * self._template).sum().item())
+
+
+class AppearanceGallery:
+    """Experimental (E076): the frame-0 template and the latest boxes of this sequence
+    known to be the target (positives) or not (negatives).
+
+    A box's margin is its best similarity to a positive minus its best similarity to a
+    negative; without negatives it is the best similarity to a positive.
+    """
+
+    def __init__(self, template: Any, keep: int) -> None:
+        self._template = template
+        self._keep = keep
+        self._positives: list[Any] = []
+        # Negatives by source (E080): "doubt" are boxes of doubted frames, "lookalike"
+        # look-alikes found around a confidently tracked target.
+        self._negatives: dict[str, list[Any]] = {"doubt": [], "lookalike": []}
+        # Which negatives a scan candidate is compared with.
+        self.candidateSources: tuple[str, ...] = ("doubt",)
+
+    def add(self, feature: Any, positive: bool, source: str = "doubt") -> None:
+        store = self._positives if positive else self._negatives[source]
+        store.append(feature)
+        del store[: max(0, len(store) - self._keep)]
+
+    def margin(self, feature: Any, sources: tuple[str, ...] = ("doubt",)) -> float:
+        import torch
+
+        positives = torch.cat([self._template, *self._positives], dim=0)
+        best = float((positives @ feature.reshape(-1)).max().item())
+        negatives = [n for source in sources for n in self._negatives[source]]
+        if not negatives:
+            return best
+        stacked = torch.cat(negatives, dim=0)
+        return best - float((stacked @ feature.reshape(-1)).max().item())
 
 
 __all__ = [
     "MODEL_NAMES",
+    "AppearanceGallery",
     "AppearanceModels",
     "AppearanceVerifier",
     "histogramSimilarity",

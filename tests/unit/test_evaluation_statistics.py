@@ -6,7 +6,12 @@ import numpy as np
 from track360.core.errors import ProtocolError
 from track360.datasets.tune_split import readSequenceFile
 from track360.evaluation.bootstrap import bootstrapDifference, bootstrapRatio
-from track360.evaluation.comparison import compareScores, groupChange, hardRegressions
+from track360.evaluation.comparison import (
+    compareScores,
+    groupChange,
+    hardRegressions,
+    meanScores,
+)
 from track360.evaluation.loss_rate import (
     LOST_IOU_THRESHOLD,
     LOST_MIN_RUN_FRAMES,
@@ -192,6 +197,21 @@ class ComparisonTest(unittest.TestCase):
     def testAHardSequenceWithoutResultsIsAnError(self) -> None:
         with self.assertRaisesRegex(ProtocolError, "only"):
             hardRegressions(self.comparison, ["a", "only"])
+
+    def testMeanOfRunsAveragesScoresAndPoolsFrames(self) -> None:
+        mean = meanScores([self.baseline, self.candidate])
+
+        self.assertEqual(sorted(mean.perSequence), ["a", "b", "c"])
+        for name in ("a", "b", "c"):
+            first, second = self.baseline.perSequence[name], self.candidate.perSequence[name]
+            self.assertAlmostEqual(
+                mean.perSequence[name].success, (first.success + second.success) / 2
+            )
+            self.assertEqual(mean.perSequence[name].frames, first.frames + second.frames)
+        self.assertAlmostEqual(mean.lossRate, (10 + 15) / 120)
+        self.assertIs(meanScores([self.baseline]), self.baseline)
+        with self.assertRaisesRegex(ProtocolError, "no runs"):
+            meanScores([])
 
     def testSphericalScoresCannotBeCompared(self) -> None:
         rows = np.asarray([[10.0, 5.0, 30.0, 20.0, 0.0]] * 2)

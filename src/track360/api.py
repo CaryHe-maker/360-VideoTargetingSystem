@@ -12,6 +12,8 @@
     default         every frame one forward pass; the reference results
     loss_handling   as default, plus looking for the target again after losing it
                     (experimental: more forward passes, gain not established)
+    camera          as loss_handling, with the search turned with the camera's own
+                    rotation (baseline 3, light cost tier; experimental)
 
 ``precision="tf32"`` runs either of them faster on NVIDIA GPUs with TensorFloat-32
 (RTX 30 series and later), with results that differ in the last digits.
@@ -33,6 +35,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PRESETS: dict[str, str] = {
     "default": "default.yaml",
     "loss_handling": "loss_handling.yaml",
+    "camera": "camera.yaml",
+    "second_look": "second_look.yaml",
+    "lookalike": "lookalike.yaml",
+    "long_term_light": "long_term_light.yaml",
 }
 
 
@@ -221,6 +227,7 @@ class Track360Tracker:
                 recorder=recorder,
                 resultRecorder=recorder,
                 verifier=runtime.verifier,
+                camera=runtime.camera,
             )
             if output is not None:
                 openSink(runtime.sink, str(output))

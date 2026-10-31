@@ -28,6 +28,7 @@ from track360.backends.artrack_model import (
     _SEARCH_SIZE,
     _TEMPLATE_FACTOR,
     _TEMPLATE_SIZE,
+    DETACHED_KEY,
     ARTrackPrediction,
     ARTrackSession,
     ARTrackTemplate,
@@ -75,6 +76,12 @@ class PyTorchARTrackV2SeqSession:
         self._std = self._torch.tensor([0.229, 0.224, 0.225], device=self._device).view(
             3, 1, 1
         )
+        self._heads: dict[str, tuple[Any, Any, tuple[str, ...]]] = {}
+        self._head: tuple[Any, Any] | None = None
+        self._diagnostics = False
+        self._lastDiagnostics: dict[str, Any] = {}
+        self._noiseGenerator: Any | None = None
+        self._noiseStd = 0.0
         self._bins = int(modelConfig.BINS)
         self._range = int(modelConfig.RANGE)
         self._trajectoryLength = int(modelConfig.PRENUM)
@@ -180,6 +187,7 @@ class PyTorchARTrackV2SeqSession:
             device=self._device,
         )
         appearance = anchor.memory.get(_APPEARANCE_KEY)
+        detached = bool(anchor.memory.get(DETACHED_KEY))
         started = perf_counter_ns()
         with torch.inference_mode():
             if appearance is None:
@@ -199,6 +207,15 @@ class PyTorchARTrackV2SeqSession:
         logits = output["feat"][0:4, :, 0 : self._bins * self._range]
         soft = (logits.softmax(-1) * self._binCenters).sum(dim=-1).permute(1, 0)
         x0, y0, x1, y1 = (float(value) for value in ((hard + soft) / 2.0)[0].tolist())
+        if self._diagnostics:
+            probabilities = logits.softmax(-1)[:, 0]
+            entropy = -(probabilities * probabilities.clamp_min(1e-12).log()).sum(-1)
+            self._lastDiagnostics = {
+                "coordEntropy": [float(value) for value in entropy.tolist()],
+                "coordPeak": [float(value) for value in probabilities.max(-1).values.tolist()],
+                "hardSoftGap": [float(value) for value in (hard - soft).abs()[0].tolist()],
+                "scoreFeature": output["score_feat"].reshape(-1).float().cpu().numpy(),
+            }
         scale = _SEARCH_SIZE / resizeFactor
         width = max(1.0, (x1 - x0) * scale)
         height = max(1.0, (y1 - y0) * scale)
@@ -214,6 +231,10 @@ class PyTorchARTrackV2SeqSession:
         mapped = _clipBox(mapped, image.shape[1], image.shape[0])
         # The score head regresses the IoU of its own box directly.
         score = float(np.clip(float(output["score"].reshape(-1)[0].item()), 0.0, 1.0))
+        if detached and self._head is not None:
+            weight, offset = self._head
+            logit = (weight * output["score_feat"].reshape(-1).float()).sum() + offset
+            score = float(self._torch.sigmoid(logit).item())
         return ARTrackPrediction(mapped, score, score, score), int(elapsed)
 
     def _loadModel(self) -> tuple[Any, Any]:
@@ -224,15 +245,19 @@ class PyTorchARTrackV2SeqSession:
 
             update_config_from_file(str(self._root / "artrackv2_seq_256_full.yaml"))
             model = build_artrackv2_seq(cfg, training=False)
+            # Mapped, not read: the 1.6 GB archive holds training state the model does
+            # not need, and reading it whole doubled the memory a run needs to start.
             try:
-                checkpoint = self._torch.load(self._weights, map_location="cpu", weights_only=True)
+                checkpoint = self._torch.load(
+                    self._weights, map_location="cpu", weights_only=True, mmap=True
+                )
             except Exception as safeError:
                 # Official ARTrack archives include legacy training meters in addition to
                 # ``net``; the checkpoint path is explicit and local, so fall back to the
                 # compatible loader after the safe attempt fails.
                 try:
                     checkpoint = self._torch.load(
-                        self._weights, map_location="cpu", weights_only=False
+                        self._weights, map_location="cpu", weights_only=False, mmap=True
                     )
                 except Exception:
                     raise safeError from None
@@ -246,6 +271,8 @@ class PyTorchARTrackV2SeqSession:
             # Strict: a sequence-level model that silently drops or lacks parameters
             # would run, but not as the model that was trained.
             model.load_state_dict(state, strict=True)
+            # The model holds copies now; release the mapped archive before moving on.
+            del checkpoint, state
             # The coordinate embedding is declared with ``max_norm``: PyTorch rescales a
             # row in place the first time it is looked up, and the same table is the
             # output projection.  The checkpoint still holds rows above the limit (bins
@@ -262,10 +289,75 @@ class PyTorchARTrackV2SeqSession:
                 f"cannot construct sequence-level ARTrackV2-B-256 from {self._weights}: {error}"
             ) from error
 
+    def loadTargetHead(self, path: str | Path) -> None:
+        """Load a linear model on the score token that judges stateless passes.
+
+        Experimental (V2.1, evaluation-log E045): with a head loaded, the score of a
+        stateless pass is the head's probability that the box is on the target, not
+        the network's own score.  The file holds one model per fold with the sequences
+        it must be used for, and one for all other sequences (``selectTargetHead``).
+        """
+        data = np.load(Path(path), allow_pickle=False)
+        labels = sorted({key.rsplit("_", 1)[0] for key in data.files if key.endswith("_beta")})
+        self._heads = {}
+        for label in labels:
+            spread = self._torch.tensor(data[f"{label}_spread"], device=self._device)
+            beta = self._torch.tensor(data[f"{label}_beta"], device=self._device)
+            mean = self._torch.tensor(data[f"{label}_mean"], device=self._device)
+            # logit = b0 + sum(b * (x - mean) / spread) = offset + weight . x
+            weight = beta[1:] / spread
+            offset = beta[0] - (weight * mean).sum()
+            names = tuple(str(name) for name in data[f"{label}_sequences"])
+            self._heads[label] = (weight, offset, names)
+        if "all" not in self._heads:
+            raise ModelError(f"target head {path} has no model named 'all'")
+        self.selectTargetHead(None)
+
+    def selectTargetHead(self, sequence: str | None) -> None:
+        """Use the model that was fitted without ``sequence``; ``None``: the one for all."""
+        if not self._heads:
+            return
+        label = next(
+            (key for key, (_, _, names) in self._heads.items() if sequence in names), "all"
+        )
+        self._head = self._heads[label][:2]
+
+    def enableDiagnostics(self, enabled: bool = True) -> None:
+        """Keep, for the last image of every pass, what the network knew beyond its box.
+
+        ``lastDiagnostics`` then holds the entropy and the peak probability of the four
+        coordinate distributions, the gap between their arg-max and their expectation,
+        and the token the score head reads.  Off by default: it costs a copy per pass.
+        """
+        self._diagnostics = bool(enabled)
+        self._lastDiagnostics = {}
+
+    @property
+    def lastDiagnostics(self) -> dict[str, Any]:
+        return dict(self._lastDiagnostics)
+
+    def setInputNoise(self, seed: int | None, std: float = 0.0) -> None:
+        """Add seeded Gaussian noise to every network input from now on; ``None`` stops it.
+
+        An evaluation instrument, not a tracking feature: repeated runs that differ only
+        in this seed show how far the scores move by numerical chance.
+        """
+        if seed is None or std <= 0.0:
+            self._noiseGenerator, self._noiseStd = None, 0.0
+            return
+        self._noiseGenerator = self._torch.Generator(device=self._device)
+        self._noiseGenerator.manual_seed(int(seed))
+        self._noiseStd = float(std)
+
     def _preprocess(self, image: NDArray[np.uint8]) -> Any:
         array = image.astype(np.float32) / 255.0
         tensor = self._torch.from_numpy(array).permute(2, 0, 1).to(self._device)
-        return (tensor - self._mean) / self._std
+        tensor = (tensor - self._mean) / self._std
+        if self._noiseGenerator is None:
+            return tensor
+        return tensor + self._noiseStd * self._torch.randn(
+            tensor.shape, generator=self._noiseGenerator, device=self._device, dtype=tensor.dtype
+        )
 
     def _requireOpen(self) -> None:
         if self._closed:

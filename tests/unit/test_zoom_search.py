@@ -253,6 +253,38 @@ class ZoomSearchTest(unittest.TestCase):
         self.assertEqual(result.status.name, "TRACKING")
         self.assertAlmostEqual(result.bfov.center.yawRad, 0.3)
 
+    def testWithAJudgeItsScoreDecidesAndPicksTheCandidate(self) -> None:
+        controller = self._controller()
+        controller.useCandidateJudge(0.4)
+        index = self._lose(controller)
+        plan = controller.beginFrame(_frame(index))
+        self.assertEqual(controller.currentScan, "1x")
+        # A high search score is not enough, and an unjudged candidate is never taken.
+        high = replace(_observation(0.95, 0.9, yaw=1.0), judgeScore=0.1)
+        unjudged = _observation(0.95, 0.9, yaw=1.2)
+        controller.consume(plan, _observation(0.2, 0.1, yaw=0.3), (high, unjudged))
+        self.assertFalse(controller.lastFrameReacquired)
+        verdicts = [c["verdict"] for c in controller.lastFrameTrace["candidates"]]
+        self.assertEqual(verdicts, ["low_score", "low_score"])
+        self.assertEqual(controller.lastFrameTrace["candidates"][0]["judge"], 0.1)
+        # Of two accepted candidates the one the judge rates higher is taken, whatever
+        # the similarity and the search score say.
+        plan = controller.beginFrame(_frame(index + 1))
+        first = replace(_observation(0.9, 0.9, yaw=1.0), judgeScore=0.5)
+        second = replace(_observation(0.3, 0.1, yaw=-1.0), judgeScore=0.7)
+        result = controller.consume(plan, _observation(0.2, 0.1, yaw=0.3), (first, second))
+        self.assertTrue(controller.lastFrameReacquired)
+        self.assertAlmostEqual(result.bfov.center.yawRad, -1.0)
+
+    def testTheRecentredViewIsTheNormalSearchViewOfTheCandidate(self) -> None:
+        controller = self._controller()
+        index = self._lose(controller)
+        plan = controller.beginFrame(_frame(index))
+        view = controller.recentredView(makeSphericalPoint(1.0, 0.0), 0.35)
+        self.assertAlmostEqual(view.bfov.center.yawRad, 1.0, places=6)
+        self.assertAlmostEqual(view.bfov.horizontalFovRad, plan.view.bfov.horizontalFovRad)
+        self.assertIsNotNone(view.priorBox)
+
     def testWithoutActionsTheStateIsJudgedButNothingIsSearched(self) -> None:
         controller = self._controller(lossActions="none")
         index = self._lose(controller)

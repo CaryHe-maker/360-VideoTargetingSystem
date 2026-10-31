@@ -13,6 +13,7 @@ SUPPORTED_SCHEMA_VERSION = 2
 VISUALIZATION_STAGES = frozenset({"local_rgb", "backend_box", "geometry_box"})
 
 
+LOSS_ACTIONS = ("none", "freeze", "jump", "move")
 MODEL_PRECISIONS = ("fp32", "tf32")
 
 
@@ -133,7 +134,9 @@ class BackendTuningConfig:
     # of the two deviations below ``relativeEnterDeviation`` raises a doubt that
     # holds until ``releaseFrames`` calm frames.
     lossHandling: bool = False
-    # none: only judge the state; jump: search and jump.
+    # none: only judge the state; freeze: also keep untrusted frames out of the
+    # tracker's memory; jump: also search and jump; move: as jump, but a candidate on
+    # the box the tracker already has is not taken.
     lossActions: str = "jump"
     releaseFrames: int = 3
     relativeGate: float = 0.05
@@ -149,9 +152,27 @@ class BackendTuningConfig:
     zoomFirstScale: float = 2.0
     zoomLastScale: float = 4.0
     zoomLastAfterFrames: int = 20
+    # Turn the enlarged search views with the camera's rotation since the place was
+    # last trusted (evaluation log E053; needs loss handling).
+    cameraMotion: bool = False
+    # Look a second time when the tracker's box lies farther than this share of the
+    # view's half width from its centre: the view is centred on the box and the pass
+    # repeated from the same memory (evaluation log E062, E066; needs loss handling).
+    # 0: never.  The second looks are skipped while they would lift the sequence's
+    # forwards per frame so far above ``secondLookCap`` (0: no cap).
+    secondLookOffset: float = 0.0
+    secondLookCap: float = 0.0
+    # Hold a release while the tracker's box is nearer to the look-alikes seen around
+    # the target than ``galleryReleaseMargin`` (evaluation log E080, E081; needs loss
+    # handling).  The look-alikes are kept by the appearance verifier from frames whose
+    # relative signal is at least ``galleryPositiveRelative``, which are also its
+    # positives.
+    appearanceGallery: bool = False
+    galleryReleaseMargin: float = 0.05
+    galleryPositiveRelative: float = -0.2
 
     def __post_init__(self) -> None:
-        for name in ("lossHandling", "sphericalSearch"):
+        for name in ("lossHandling", "sphericalSearch", "cameraMotion", "appearanceGallery"):
             if not isinstance(getattr(self, name), bool):
                 raise ConfigError(f"backendTuning.{name} must be boolean")
         for name in ("viewHorizontalFovCapRad", "viewVerticalFovCapRad"):
@@ -167,8 +188,18 @@ class BackendTuningConfig:
                 "backendTuning.relativeGate must be in [0, 1] and "
                 "relativeEnterDeviation in [-1, 0)"
             )
-        if self.lossActions not in ("none", "jump"):
-            raise ConfigError("backendTuning.lossActions must be none or jump")
+        if self.cameraMotion and not self.lossHandling:
+            raise ConfigError("backendTuning.cameraMotion needs lossHandling")
+        if self.appearanceGallery and not self.lossHandling:
+            raise ConfigError("backendTuning.appearanceGallery needs lossHandling")
+        if self.secondLookOffset < 0.0 or self.secondLookCap < 0.0:
+            raise ConfigError("backendTuning second-look values must be non-negative")
+        if self.secondLookOffset > 0.0 and not self.lossHandling:
+            raise ConfigError("backendTuning.secondLookOffset needs lossHandling")
+        if self.lossActions not in LOSS_ACTIONS:
+            raise ConfigError(
+                f"backendTuning.lossActions must be one of {', '.join(LOSS_ACTIONS)}"
+            )
         if self.releaseFrames < 1:
             raise ConfigError("backendTuning.releaseFrames must be positive")
         for name in ("uncertainScore", "reacquireScore"):
@@ -314,6 +345,10 @@ def loadConfig(path: str | Path) -> AppConfig:
         "reacquireScore",
         "zoomFirstScale",
         "zoomLastScale",
+        "secondLookOffset",
+        "secondLookCap",
+        "galleryReleaseMargin",
+        "galleryPositiveRelative",
     )
     tuningInts = ("lostAfterFrames", "releaseFrames", "zoomLastAfterFrames")
     tuningRaw = _section(
@@ -327,6 +362,8 @@ def loadConfig(path: str | Path) -> AppConfig:
             "sphericalSearchFovDeg",
             "lossHandling",
             "lossActions",
+            "cameraMotion",
+            "appearanceGallery",
             *tuningFloats,
             *tuningInts,
         },
@@ -419,6 +456,10 @@ def loadConfig(path: str | Path) -> AppConfig:
                 "backendTuning.lossHandling", tuningRaw["lossHandling"]
             ),
             lossActions=_requireStr("backendTuning.lossActions", tuningRaw["lossActions"]),
+            cameraMotion=_requireBool("backendTuning.cameraMotion", tuningRaw["cameraMotion"]),
+            appearanceGallery=_requireBool(
+                "backendTuning.appearanceGallery", tuningRaw["appearanceGallery"]
+            ),
             **{
                 name: _requireFloat(f"backendTuning.{name}", tuningRaw[name])
                 for name in tuningFloats

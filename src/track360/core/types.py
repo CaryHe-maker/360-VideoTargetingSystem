@@ -422,6 +422,10 @@ class ProjectedObservation:
     edgeMargin: float = 0.0
     # Feature similarity of the box to the frame-0 template; None: not measured.
     appearanceSimilarity: float | None = None
+    # A search candidate's score from the learned candidate judge; None: not judged.
+    judgeScore: float | None = None
+    # Experimental (E076): the box's margin in the sequence's appearance gallery.
+    appearanceMargin: float | None = None
 
     def __post_init__(self) -> None:
         if self.viewId < 0:

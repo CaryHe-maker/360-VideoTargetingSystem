@@ -16,7 +16,13 @@ from track360.core.errors import DecodeError, ProtocolError
 from track360.core.types import BBoxXYWH
 from track360.geometry import SphericalGeometryImpl
 from track360.io.vot360_results import readResultFile, resultPaths
-from track360.runtime.benchmark import METHODS, evaluateResults, loadEfficiency, runBenchmark
+from track360.runtime.benchmark import (
+    METHODS,
+    evaluateResults,
+    loadEfficiency,
+    runBenchmark,
+    sequenceNoiseSeed,
+)
 from track360.runtime.run_archive import archiveRun, loadRecords
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -271,6 +277,53 @@ class BenchmarkTest(unittest.TestCase):
                     sessionFactory=FakeARTrackSession,
                     **options,
                 )
+
+    def testNoiseSeedGivesEverySequenceItsOwnRepeatableStream(self) -> None:
+        class _RecordsNoise(FakeARTrackSession):
+            calls: list[tuple[int | None, float]] = []
+
+            def setInputNoise(self, seed, std=0.0):
+                type(self).calls.append((seed, std))
+
+        with tempfile.TemporaryDirectory() as directory:
+            for seed in (3, None):
+                runBenchmark(
+                    datasetRoot=self.dataset,
+                    outputRoot=Path(directory) / str(seed),
+                    method="b0",
+                    config=self.config,
+                    sessionFactory=_RecordsNoise,
+                    noiseSeed=seed,
+                    noiseStd=0.002,
+                )
+            run = json.loads((Path(directory) / "3" / "reports" / "b0" / "run.json").read_text())
+
+        self.assertEqual(
+            _RecordsNoise.calls,
+            [
+                (sequenceNoiseSeed(3, "0001"), 0.002),
+                (sequenceNoiseSeed(3, "0002"), 0.002),
+                (None, 0.002),
+                (None, 0.002),
+            ],
+        )
+        self.assertNotEqual(sequenceNoiseSeed(3, "0001"), sequenceNoiseSeed(3, "0002"))
+        self.assertNotEqual(sequenceNoiseSeed(3, "0001"), sequenceNoiseSeed(4, "0001"))
+        self.assertEqual(run["inputNoise"], {"seed": 3, "std": 0.002})
+
+    def testASessionWithoutNoiseSupportRefusesASeed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            summary = runBenchmark(
+                datasetRoot=self.dataset,
+                outputRoot=directory,
+                method="b0",
+                config=self.config,
+                sessionFactory=FakeARTrackSession,
+                noiseSeed=1,
+            )
+
+        self.assertEqual([report.status for report in summary.reports], ["failed", "failed"])
+        self.assertIn("input noise", summary.failures[0].error)
 
     def testAFailingSequenceDoesNotStopTheRun(self) -> None:
         class _FailsOnSecondSequence(FakeARTrackSession):

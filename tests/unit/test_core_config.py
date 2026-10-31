@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from track360.core.config import loadConfig
@@ -119,6 +120,32 @@ class CoreConfigTest(unittest.TestCase):
         self.assertEqual(fast.backendTuning, default.backendTuning)
         self.assertEqual(lossFast.backendTuning, loss.backendTuning)
         self.assertEqual(lossFast.model.precision, "tf32")
+        # Baseline 3 is baseline 2 with the search turned with the camera (E053).
+        camera = loadConfig(REPOSITORY_ROOT / "configs" / "camera.yaml")
+        self.assertTrue(camera.backendTuning.cameraMotion)
+        self.assertFalse(loss.backendTuning.cameraMotion or default.backendTuning.cameraMotion)
+        self.assertEqual(replace(camera.backendTuning, cameraMotion=False), loss.backendTuning)
+        self.assertEqual(camera.model, loss.model)
+        # Baseline 4 is baseline 3 with the tracking-side second look (E066).
+        secondLook = loadConfig(REPOSITORY_ROOT / "configs" / "second_look.yaml")
+        self.assertAlmostEqual(secondLook.backendTuning.secondLookOffset, 0.5)
+        self.assertAlmostEqual(secondLook.backendTuning.secondLookCap, 1.58)
+        self.assertEqual(camera.backendTuning.secondLookOffset, 0.0)
+        self.assertEqual(
+            replace(secondLook.backendTuning, secondLookOffset=0.0, secondLookCap=0.0),
+            camera.backendTuning,
+        )
+        self.assertEqual(secondLook.model, camera.model)
+        # Baseline 5 is baseline 4 with the look-alike release hold (E080a).
+        lookalike = loadConfig(REPOSITORY_ROOT / "configs" / "lookalike.yaml")
+        self.assertTrue(lookalike.backendTuning.appearanceGallery)
+        self.assertAlmostEqual(lookalike.backendTuning.galleryReleaseMargin, 0.05)
+        self.assertAlmostEqual(lookalike.backendTuning.galleryPositiveRelative, -0.2)
+        self.assertFalse(secondLook.backendTuning.appearanceGallery)
+        self.assertEqual(
+            replace(lookalike.backendTuning, appearanceGallery=False), secondLook.backendTuning
+        )
+        self.assertEqual(lookalike.model, secondLook.model)
 
     def _assertRejected(self, old: str, new: str) -> None:
         source = (REPOSITORY_ROOT / "configs" / "default.yaml").read_text(encoding="utf-8")

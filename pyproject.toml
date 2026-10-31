@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "track360"
-version = "2.0.0.dev0"
+version = "2.1.0"
 description = "Spherical local-view single-object tracking for 360-degree (equirectangular) video"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -23,6 +23,10 @@ dependencies = [
 dev = [
   "pytest>=8,<9",
   "ruff>=0.12,<1",
+]
+# Offline experiments only (E075); AGPL-3.0, install with --no-deps.
+proposals = [
+  "ultralytics==8.4.180",
 ]
 
 [project.urls]

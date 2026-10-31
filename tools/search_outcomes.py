@@ -95,8 +95,14 @@ def analyse(args: argparse.Namespace) -> list[dict[str, object]]:
                 best = max(candidates, key=lambda c: c["score"]) if candidates else None
                 if present[index]:
                     truth = _direction(truthBfov[index, 0], truthBfov[index, 1])
-                    centre = _direction(anchor["yawDeg"], anchor["pitchDeg"])
+                    if not inPlace and row.get("scanYawDeg"):
+                        # The view's own centre when the run recorded it (E053 on).
+                        centre = _direction(row["scanYawDeg"], row["scanPitchDeg"])
+                    else:
+                        centre = _direction(anchor["yawDeg"], anchor["pitchDeg"])
                     item["reach"] = _angle(truth, centre) / half
+                    if row.get("scanSphere") == "1":
+                        item["reach"] = 0.0  # the whole sphere holds the target
                     if best is not None:
                         place = _direction(best["yawDeg"], best["pitchDeg"])
                         item["bestOnTarget"] = (

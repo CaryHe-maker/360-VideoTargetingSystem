@@ -10,6 +10,11 @@ an interrupted run.  ``eval`` scores every method found under the output root.
 ``compare`` gives the difference between two runs with bootstrap confidence intervals
 and, with ``--hard-file``, fails when a hard-regression sequence got worse.
 
+A run is deterministic, yet its scores move by about 0.01 S_dual when only the last
+digits of the network input change.  ``run --seeds 1,2,3,4,5`` repeats a run with seeded
+input noise into ``<output-root>_s<seed>``; ``compare`` takes several output roots per
+side, separated by commas, and compares the per-sequence means over the seeds.
+
 The tune set lives in the 360VOS training archives, which carry no labels of their
 own; pass ``--label-root`` (see ``tools/prepare_tune_set.py``) and
 ``--sequence-file configs/splits/360vos_tune.txt``.
@@ -36,9 +41,11 @@ from track360.evaluation.comparison import (
     compareScores,
     groupChange,
     hardRegressions,
+    meanScores,
 )
 from track360.evaluation.vot360_metrics import Vot360Scores
 from track360.runtime.benchmark import (
+    DEFAULT_NOISE_STD,
     METHODS,
     Efficiency,
     evaluateResults,
@@ -75,12 +82,182 @@ def buildParser() -> argparse.ArgumentParser:
     )
     run.add_argument("--no-resume", action="store_true", help="rerun finished sequences")
     run.add_argument(
+        "--seeds",
+        default=None,
+        help="comma-separated noise seeds; each runs into <output-root>_s<seed> with "
+        "Gaussian noise added to the network inputs",
+    )
+    run.add_argument(
+        "--noise-std",
+        type=float,
+        default=DEFAULT_NOISE_STD,
+        help="standard deviation of that noise, in normalised input units",
+    )
+    run.add_argument(
         "--probe",
         nargs="?",
         const="dinov2,dino,resnet18,clean",
         default=None,
         help="also record appearance signals per frame under probe/ (needs models/hub); "
         "optionally a comma-separated subset of dinov2,dino,resnet18,clean",
+    )
+
+    run.add_argument(
+        "--candidate-judge",
+        type=Path,
+        default=None,
+        help="experimental (E051): take search candidates by this learned judge "
+        "(tools/candidate_judge_export.py) instead of reacquireScore",
+    )
+    run.add_argument("--judge-threshold", type=float, default=None)
+    run.add_argument(
+        "--oracle",
+        default=None,
+        help="evaluation only (E052): stage=share,... with stages A-E; ground truth "
+        "corrects that share of the stage's mistakes",
+    )
+    run.add_argument(
+        "--camera-motion",
+        type=int,
+        nargs="?",
+        const=512,
+        default=0,
+        help="experimental (E053): turn enlarged searches with the camera's rotation, "
+        "estimated on frames this many pixels wide (default 512)",
+    )
+    run.add_argument(
+        "--camera-options",
+        default="",
+        help="with --camera-motion: key=value,... of CameraMotion (fast=0/1, iterations=N, "
+        "lazy=0/1)",
+    )
+    run.add_argument(
+        "--second-look",
+        default=None,
+        help="experimental (E061): LOST,TRACKING: look again, centred on the box, when it is "
+        "farther than that share of the half width from its view's centre (0: never)",
+    )
+    run.add_argument(
+        "--confirm",
+        default=None,
+        help="experimental (E061): LOW,WINDOW,TOLERANCE two-frame confirmation",
+    )
+    run.add_argument(
+        "--second-look-charged",
+        action="store_true",
+        help="with --second-look: the tracking-side second looks are paid from the scan budget",
+    )
+    run.add_argument(
+        "--second-look-cap",
+        type=float,
+        default=None,
+        help="with --second-look: skip a tracking-side second look that would lift the "
+        "sequence's forwards per frame so far above this",
+    )
+    run.add_argument(
+        "--second-look-reserve",
+        action="store_true",
+        help="with --second-look-cap: count the scan passes saved up as already spent (E066b)",
+    )
+    run.add_argument(
+        "--extrapolated-scan",
+        default=None,
+        help="experimental (E073): FRAMES,CAP: a second enlarged search view where the "
+        "target would be had it kept the motion of its last FRAMES trusted frames",
+    )
+    run.add_argument(
+        "--gallery",
+        default=None,
+        help="experimental (E076): FLOOR,KEEP,EVERY[,GENTLE]: distrust a frame whose box is "
+        "FLOOR nearer to the sequence's negatives than to its positives; GENTLE 1: only hold "
+        "a doubt and keep the memory from learning such a frame (E076e)",
+    )
+    run.add_argument(
+        "--tuning",
+        default=None,
+        help="experimental (E082): KEY=VALUE,... replacing backendTuning fields of the "
+        "configuration (validated as the configuration is)",
+    )
+    run.add_argument(
+        "--release-share",
+        type=float,
+        default=None,
+        help="experimental (E082): share of the entry threshold a doubted frame must be back "
+        "within to count as calm (0.5 in the state machine)",
+    )
+    run.add_argument(
+        "--gallery2",
+        default=None,
+        help="experimental (E080): KEY=VALUE,... of the appearance gallery with look-alike "
+        "negatives: detect, gentle, release, jump, positive, keep, every, harvest, per, apart, "
+        "scale, width",
+    )
+    run.add_argument(
+        "--margin-jumps",
+        action="store_true",
+        help="experimental (E076d): with --gallery, take a candidate only when its gallery "
+        "margin beats the tracker box's",
+    )
+    run.add_argument(
+        "--release-floor",
+        type=float,
+        default=None,
+        help="experimental (E074): no release while the backend score is this far below "
+        "the median of the trusted frames (e.g. -0.15)",
+    )
+    run.add_argument(
+        "--post-release",
+        default=None,
+        help="experimental (E064): FRAMES,FREEZE,SEARCH watch window after a release",
+    )
+    run.add_argument(
+        "--memory-update",
+        choices=("always", "confident", "never"),
+        default="always",
+        help="experimental (E064): when the appearance memory may learn from a trusted frame",
+    )
+    run.add_argument(
+        "--memory-floor",
+        type=float,
+        default=None,
+        help="experimental (E064f): with --memory-update confident, the relative signal from "
+        "which a trusted frame is learned (default 0; the median is about -0.2)",
+    )
+    run.add_argument(
+        "--restore-appearance",
+        action="store_true",
+        help="experimental (E064): after a jump, start from the memory of the last long "
+        "trusted stretch instead of the frame-0 template",
+    )
+    run.add_argument(
+        "--judge-charged",
+        action="store_true",
+        help="with --candidate-judge: its passes are paid from the scan budget",
+    )
+    run.add_argument(
+        "--sphere-scan-deg",
+        type=float,
+        default=None,
+        help="experimental (E053): targets at least this large (degrees) search the whole sphere",
+    )
+    run.add_argument(
+        "--global-search",
+        default=None,
+        help="experimental (E054): EVERY,COUNT[,AFTER]: every EVERY lost frames a whole-sphere "
+        "detector (OWLv2) proposes COUNT places for normal views; with AFTER, it replaces "
+        "every enlarged search once the track has been lost AFTER frames (EVERY 0)",
+    )
+    run.add_argument(
+        "--oracle-data",
+        type=Path,
+        default=Path("outputs/E052/distributions.npz"),
+        help="distributions the oracle draws from",
+    )
+    run.add_argument(
+        "--judge-prefilter",
+        type=float,
+        default=0.0,
+        help="candidates below this search score are not judged",
     )
 
     evaluate = commands.add_parser("eval", help="score the result files of every method")
@@ -126,8 +303,12 @@ def buildParser() -> argparse.ArgumentParser:
         "compare", help="difference between two runs with bootstrap confidence intervals"
     )
     _addCommon(compare, outputRoot=False)
-    compare.add_argument("--baseline", required=True, help="<output-root>:<method>")
-    compare.add_argument("--candidate", required=True, help="<output-root>:<method>")
+    compare.add_argument(
+        "--baseline",
+        required=True,
+        help="<output-root>:<method>; several roots separated by commas are averaged",
+    )
+    compare.add_argument("--candidate", required=True, help="same form as --baseline")
     compare.add_argument(
         "--hard-file",
         type=Path,
@@ -147,25 +328,167 @@ def buildParser() -> argparse.ArgumentParser:
     return parser
 
 
+def _withTuning(config, overrides: str | None):
+    """The configuration with ``KEY=VALUE,...`` replacing backendTuning fields (E082)."""
+    if not overrides:
+        return config
+    from dataclasses import fields, replace
+
+    kinds = {f.name: f.type for f in fields(config.backendTuning)}
+    values = {}
+    for item in overrides.split(","):
+        key, raw = item.split("=")
+        if key not in kinds:
+            raise SystemExit(f"--tuning: unknown backendTuning field '{key}'")
+        kind = str(kinds[key])
+        if "bool" in kind:
+            values[key] = raw.lower() in ("1", "true", "yes")
+        elif "int" in kind and "float" not in kind:
+            values[key] = int(raw)
+        else:
+            values[key] = float(raw)
+    return replace(config, backendTuning=replace(config.backendTuning, **values))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = buildParser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     try:
         sequences = _sequences(args)
         if args.command == "run":
-            summary = runBenchmark(
-                datasetRoot=args.dataset_root,
-                outputRoot=args.output_root,
-                labelRoot=args.label_root,
-                method=args.method,
-                config=loadConfig(args.config),
-                sequences=sequences,
-                maxFrames=args.max_frames,
-                resume=not args.no_resume,
-                shard=_parseShard(args.shard),
-                probe=_split(args.probe),
-            )
-            return 1 if summary.failures else 0
+            failed = False
+            seeds: list[int | None] = [int(item) for item in _split(args.seeds) or []] or [None]
+            judge = None
+            if args.candidate_judge is not None:
+                from track360.runtime.candidate_judge import CandidateJudge
+
+                if args.judge_threshold is None:
+                    raise SystemExit("--candidate-judge needs --judge-threshold")
+                judge = CandidateJudge(
+                    args.candidate_judge, args.judge_threshold, args.judge_prefilter
+                )
+            for seed in seeds:
+                root = args.output_root if seed is None else seedRoot(args.output_root, seed)
+                oracle = None
+                if args.oracle is not None:
+                    from track360.evaluation.oracle import OracleSettings
+
+                    oracle = OracleSettings.parse(args.oracle, args.oracle_data, seed or 0)
+                summary = runBenchmark(
+                    datasetRoot=args.dataset_root,
+                    outputRoot=root,
+                    labelRoot=args.label_root,
+                    method=args.method,
+                    config=_withTuning(loadConfig(args.config), args.tuning),
+                    sequences=sequences,
+                    maxFrames=args.max_frames,
+                    resume=not args.no_resume,
+                    shard=_parseShard(args.shard),
+                    probe=_split(args.probe),
+                    noiseSeed=seed,
+                    noiseStd=args.noise_std,
+                    candidateJudge=judge,
+                    oracle=oracle,
+                    experiment={
+                        **(
+                            {"secondLook": tuple(float(x) for x in args.second_look.split(","))}
+                            if args.second_look
+                            else {}
+                        ),
+                        **(
+                            {
+                                "confirm": (
+                                    float(args.confirm.split(",")[0]),
+                                    int(args.confirm.split(",")[1]),
+                                    float(args.confirm.split(",")[2]),
+                                )
+                            }
+                            if args.confirm
+                            else {}
+                        ),
+                        **({"judgeCharged": True} if args.judge_charged else {}),
+                        **(
+                            {"postRelease": tuple(int(x) for x in args.post_release.split(","))}
+                            if args.post_release
+                            else {}
+                        ),
+                        **(
+                            {"memoryPolicy": args.memory_update}
+                            if args.memory_update != "always"
+                            else {}
+                        ),
+                        **({"restoreAppearance": True} if args.restore_appearance else {}),
+                        **(
+                            {"memoryFloor": args.memory_floor}
+                            if args.memory_floor is not None
+                            else {}
+                        ),
+                        **({"secondLookCharged": True} if args.second_look_charged else {}),
+                        **(
+                            {"secondLookCap": args.second_look_cap}
+                            if args.second_look_cap is not None
+                            else {}
+                        ),
+                        **({"secondLookReserve": True} if args.second_look_reserve else {}),
+                        **(
+                            {
+                                "extrapolatedScan": tuple(
+                                    int(x) for x in args.extrapolated_scan.split(",")
+                                )
+                            }
+                            if args.extrapolated_scan
+                            else {}
+                        ),
+                        **({"marginJumps": True} if args.margin_jumps else {}),
+                        **(
+                            {"releaseShare": args.release_share}
+                            if args.release_share is not None
+                            else {}
+                        ),
+                        **(
+                            {
+                                "gallery2": {
+                                    k: float(v)
+                                    for k, v in (
+                                        item.split("=") for item in args.gallery2.split(",")
+                                    )
+                                }
+                            }
+                            if args.gallery2
+                            else {}
+                        ),
+                        **(
+                            {"releaseFloor": args.release_floor}
+                            if args.release_floor is not None
+                            else {}
+                        ),
+                        **(
+                            {
+                                "gallery": (
+                                    float(args.gallery.split(",")[0]),
+                                    *(int(x) for x in args.gallery.split(",")[1:]),
+                                )
+                            }
+                            if args.gallery
+                            else {}
+                        ),
+                    },
+                    cameraMotion=args.camera_motion,
+                    cameraOptions={
+                        key: int(value)
+                        for key, _, value in (
+                            item.partition("=") for item in args.camera_options.split(",") if item
+                        )
+                    },
+                    sphereScanDeg=args.sphere_scan_deg,
+                    globalSearch=(
+                        None
+                        if args.global_search is None
+                        else tuple(int(x) for x in args.global_search.split(","))
+                    ),
+                )
+                failed = failed or bool(summary.failures)
+            return 1 if failed else 0
         if args.command == "archive":
             path = archiveRun(
                 datasetRoot=args.dataset_root,
@@ -204,9 +527,7 @@ def main(argv: list[str] | None = None) -> int:
         print(formatEfficiency(efficiency))
         payload: dict[str, object] = {
             "overall": _payload(scores),
-            "efficiency": {
-                method: _efficiencyPayload(item) for method, item in efficiency.items()
-            },
+            "efficiency": {method: _efficiencyPayload(item) for method, item in efficiency.items()},
         }
         if args.info is not None:
             byAttribute = {}
@@ -265,9 +586,7 @@ def formatEfficiency(efficiency: dict[str, Efficiency | None]) -> str:
             lines.append(f"  {name:<16}{'no run reports':>16}")
             continue
         forwards = (
-            f"{'-':>16}"
-            if item.forwardsPerFrame is None
-            else f"{item.forwardsPerFrame:>16.2f}"
+            f"{'-':>16}" if item.forwardsPerFrame is None else f"{item.forwardsPerFrame:>16.2f}"
         )
         lines.append(
             f"  {name:<16}{forwards}{item.p50LatencyMs:>10.0f}{item.p95LatencyMs:>10.0f}"
@@ -312,10 +631,10 @@ def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
     hard = None if args.hard_file is None else readSequenceFile(args.hard_file)
     scores = []
     efficiency: dict[str, Efficiency | None] = {}
+    perSeed: dict[str, list[float]] = {}
     for label, reference in (("baseline", args.baseline), ("candidate", args.candidate)):
-        root, method = _parseRun(reference)
-        efficiency[label] = loadEfficiency(root, method, sequences)
-        scores.append(
+        roots, method = _parseRun(reference)
+        runs = [
             evaluateResults(
                 datasetRoot=args.dataset_root,
                 outputRoot=root,
@@ -323,7 +642,12 @@ def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
                 methods=[method],
                 only=sequences,
             )[method]["bbox"]
-        )
+            for root in roots.split(",")
+        ]
+        # Cost is read from the first root: the timings of seeded repeats are not pooled.
+        efficiency[label] = loadEfficiency(roots.split(",")[0], method, sequences)
+        perSeed[label] = [run.success for run in runs]
+        scores.append(meanScores(runs))
     comparison = compareScores(scores[0], scores[1], samples=args.samples)
     failed = () if hard is None else hardRegressions(comparison, hard)
     fragile = (
@@ -332,6 +656,9 @@ def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
         else groupChange(comparison, readSequenceFile(args.fragile_file), samples=args.samples)
     )
     print(formatComparison(comparison, args.baseline, args.candidate))
+    if any(len(values) > 1 for values in perSeed.values()):
+        print()
+        print(formatSeeds(perSeed))
     print()
     print(formatEfficiency(efficiency))
     if hard is not None:
@@ -346,6 +673,7 @@ def _compare(args: argparse.Namespace, sequences: list[str] | None) -> int:
             json.dumps(
                 {
                     **_comparisonPayload(comparison, args, failed),
+                    "sDualPerRun": perSeed,
                     "fragileGroup": None
                     if fragile is None
                     else {
@@ -395,6 +723,27 @@ def formatComparison(comparison: Comparison, baseline: str, candidate: str) -> s
     if len(comparison.changes) > 10:
         lines.append("    ...")
     lines += [_changeLine(change) for change in comparison.changes[5:][-5:]]
+    return "\n".join(lines)
+
+
+def seedRoot(outputRoot: str | Path, seed: int) -> Path:
+    """Output root of one seeded repeat of a run."""
+    root = Path(outputRoot)
+    return root.with_name(f"{root.name}_s{seed}")
+
+
+def formatSeeds(perSeed: dict[str, list[float]]) -> str:
+    """S_dual of every run on each side, with the mean and the spread between runs."""
+    lines = ["S_dual of each run (all the sequences that run has)"]
+    for label, values in perSeed.items():
+        mean = sum(values) / len(values)
+        spread = (
+            (sum((value - mean) ** 2 for value in values) / (len(values) - 1)) ** 0.5
+            if len(values) > 1
+            else 0.0
+        )
+        listed = " ".join(f"{value:.3f}" for value in values)
+        lines.append(f"  {label:<10}{listed}   mean {mean:.3f}  sd {spread:.3f}  n={len(values)}")
     return "\n".join(lines)
 
 

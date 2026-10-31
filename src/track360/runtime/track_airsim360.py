@@ -104,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
             resultRecorder=resultRecorder,
             processingTimer=timeCounter,
             verifier=runtime.verifier,
+            camera=runtime.camera,
         )
         expectedCount = resultCount if getattr(source, "frameCount", 0) <= 0 else source.frameCount
         finalizeSink(runtime.sink, expectedCount)

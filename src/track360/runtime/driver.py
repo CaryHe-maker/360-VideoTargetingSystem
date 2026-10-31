@@ -26,8 +26,9 @@ from track360.controller import (
     scoreViewCenterMotion,
     withScoreProbability,
 )
+from track360.controller.view_planner import localBoxOfBfov
 from track360.core.config import AppConfig, ModelConfig
-from track360.core.errors import DecodeError, GeometryError
+from track360.core.errors import DecodeError, GeometryError, ProtocolError
 from track360.core.protocols import FrameSource as FrameSourceProtocol
 from track360.core.protocols import ResultSink as ResultSinkProtocol
 from track360.core.protocols import SphericalGeometry, TrackerBackend
@@ -44,6 +45,7 @@ from track360.core.types import (
 )
 from track360.geometry import SphericalGeometryImpl
 from track360.io.result_sink import FileResultSink
+from track360.runtime.gpu_lock import isDeviceFailure
 from track360.runtime.reproducibility import seedEverything
 
 if TYPE_CHECKING:
@@ -62,6 +64,12 @@ class RuntimeBundle:
     sink: ResultSinkProtocol
     verifier: Any | None = None
     recorder: VisualizationRecorder | None = None
+    # Experimental (E051): a learned judge of search candidates and the session whose
+    # diagnostics it reads.
+    judge: Any | None = None
+    judgeSession: Any | None = None
+    # The camera's rotation (``backendTuning.cameraMotion``, E053).
+    camera: Any | None = None
 
 
 class _PrefetchReader:
@@ -151,6 +159,7 @@ def buildRuntime(
     artrackSessionFactory: Callable[[ModelConfig], ARTrackSession] | None = None,
     geometryFactory: Callable[[int], SphericalGeometry] | None = None,
     profile: bool = False,
+    candidateJudge: Any | None = None,
 ) -> RuntimeBundle:
     tuning = config.backendTuning
     seedEverything(config.reproducibility)
@@ -178,6 +187,18 @@ def buildRuntime(
         from track360.backends.appearance import AppearanceVerifier
 
         verifier = AppearanceVerifier("dinov2", Path(config.model.weights).parent / "hub")
+        if tuning.appearanceGallery:
+            verifier.useGallery(50)
+    camera = None
+    if tuning.cameraMotion:
+        from track360.runtime.camera_motion import CameraMotion
+
+        camera = CameraMotion()
+        controller.useCameraMotion(camera)
+    if candidateJudge is not None:
+        if verifier is None:
+            raise ProtocolError("a candidate judge needs loss handling")
+        controller.useCandidateJudge(candidateJudge.threshold)
     return RuntimeBundle(
         geometry=geometry,
         controller=controller,
@@ -185,6 +206,9 @@ def buildRuntime(
         sink=sink,
         recorder=recorder,
         verifier=verifier,
+        judge=candidateJudge,
+        judgeSession=rgbSession if candidateJudge is not None else None,
+        camera=camera,
     )
 
 
@@ -204,6 +228,21 @@ def runTracking(
     probe: Any | None = None,
     verifier: Any | None = None,
     trace: list[dict[str, object]] | None = None,
+    judge: Any | None = None,
+    judgeSession: Any | None = None,
+    oracle: Any | None = None,
+    camera: Any | None = None,
+    globalSearcher: Any | None = None,
+    secondLook: tuple[float, float] | None = None,
+    judgeCharged: bool = False,
+    memoryPolicy: str = "always",
+    restoreAppearance: bool = False,
+    secondLookCharged: bool = False,
+    secondLookCap: float | None = None,
+    secondLookReserve: bool = False,
+    gallery: tuple[float, ...] | None = None,
+    memoryFloor: float = 0.0,
+    gallery2: dict[str, float] | None = None,
 ) -> int:
     """Run the sequential tracking pipeline and publish one result per frame.
 
@@ -216,6 +255,10 @@ def runTracking(
         try:
             decodeStartedNs = _profileNow(profiler)
             frame0 = _requireFrame(source.read())
+            if camera is not None:
+                camera.submit(int(frame0.frameIndex), frame0.rgb)
+            if globalSearcher is not None and initialBfov is not None:
+                globalSearcher.begin(frame0.rgb, initialBfov)
             _startProfileFrame(profiler, int(frame0.frameIndex), decodeStartedNs)
             with _profile(profiler, "controller"):
                 initPlan = controller.buildInitialization(
@@ -230,6 +273,8 @@ def runTracking(
             if verifier is not None:
                 verifier.setTemplate(templateView, initPlan.templateBox)
             initialResult = controller.commitInitialization(initPlan)
+            if camera is not None:
+                camera.mark(int(frame0.frameIndex), True)
         finally:
             _stopProcessing(processingTimer)
         _finishProfileFrame(profiler, initializationStartedNs, batchSizes=[1], forwardCount=0)
@@ -240,6 +285,48 @@ def runTracking(
         if recorder is not None:
             recorder.recordLocalRgb(frame0, [templateView])
 
+        # E064: the appearance memory after a long trusted stretch, to start from again.
+        goodState = None
+        # E076: (margin floor, gallery size, frames between gallery entries).
+        # E080: the same gallery with look-alike negatives, read as a dict.
+        # The look-alike release hold of the configuration (baseline 5), unless an
+        # experiment sets the gallery.
+        tuning = getattr(controller, "backendTuning", None)
+        if (
+            gallery2 is None
+            and gallery is None
+            and tuning is not None
+            and tuning.appearanceGallery
+            and verifier is not None
+        ):
+            gallery2 = {
+                "release": tuning.galleryReleaseMargin,
+                "positive": tuning.galleryPositiveRelative,
+            }
+        if gallery2 is not None and verifier is not None:
+            gallery = (
+                gallery2.get("detect", -9.0),
+                int(gallery2.get("keep", 50)),
+                int(gallery2.get("every", 5)),
+                int(gallery2.get("gentle", 0)),
+            )
+            controller.useReleaseHold(gallery2.get("release"))
+            controller.useCandidateFloor(gallery2.get("jump"))
+            controller.useMarginNoSamePlace(bool(gallery2.get("nosame", 0)))
+        positiveFloor = float((gallery2 or {}).get("positive", 0.0))
+        if gallery is not None and verifier is not None:
+            controller.useAppearanceMargin(gallery[0])
+            if len(gallery) > 3 and gallery[3] == 1:
+                controller.useGentleMargin()
+        # E066: forward passes spent so far, to keep the sequence's average under a cap.
+        spentForwards = 0
+        # The tracking-side second look of the configuration (baseline 4), unless an
+        # experiment sets it.
+        tuning = getattr(controller, "backendTuning", None)
+        if secondLook is None and tuning is not None and tuning.secondLookOffset > 0.0:
+            secondLook = (0.0, tuning.secondLookOffset)
+            if secondLookCap is None and tuning.secondLookCap > 0.0:
+                secondLookCap = tuning.secondLookCap
         pipelineReader = _PrefetchReader(source)
         pipelineReader.start()
         try:
@@ -255,6 +342,8 @@ def runTracking(
                     frame = pipelineReader.read()
                     if frame is not None:
                         _startProfileFrame(profiler, int(frame.frameIndex), decodeStartedNs)
+                        if camera is not None:
+                            camera.submit(int(frame.frameIndex), frame.rgb)
                         _recordPipelineProfile(profiler, pipelineReader, controller)
                         try:
                             with _profile(profiler, "controller"):
@@ -298,6 +387,40 @@ def runTracking(
                             )
                             with _profile(profiler, "backend"):
                                 rawObservation = backend.infer((view,))[0]
+                            if (
+                                secondLook is not None
+                                and secondLook[1] > 0.0
+                                and savedState is not None
+                                and not controller.isLost
+                                and _boxOffset(rawObservation.bbox, view.spec) > secondLook[1]
+                                and (not secondLookCharged or controller.canSpendScan(1))
+                                and (
+                                    secondLookCap is None
+                                    or (
+                                        spentForwards
+                                        + forwardCount
+                                        + 1
+                                        # E066b: the scan passes saved up will be spent
+                                        # later; count them now so they cannot lift
+                                        # the sequence above the cap afterwards.
+                                        + (controller.scanTokens if secondLookReserve else 0.0)
+                                    )
+                                    <= secondLookCap * max(1, int(frame.frameIndex))
+                                )
+                            ):
+                                # Experimental (E061): the box is far from the view's
+                                # centre, where the backend is least sure; look again
+                                # from the same memory with the view centred on it.
+                                recentred = _recentredMainView(
+                                    frame, plan, view, rawObservation, geometry, controller
+                                )
+                                if recentred is not None:
+                                    backend.restoreState(savedState)  # type: ignore[attr-defined]
+                                    view = geometry.cropViews(frame, [recentred])[0]
+                                    rawObservation = backend.infer((view,))[0]
+                                    forwardCount += 1
+                                    if secondLookCharged:
+                                        controller.chargeScan(1)
                             probed = (view, rawObservation)
                             _recordBackendProfile(profiler, backend)
                             with _profile(profiler, "calibration"):
@@ -320,6 +443,7 @@ def runTracking(
                                     projected,
                                 )
                             candidates: tuple[ProjectedObservation, ...] = ()
+                            trackerFeature = None
                             if verifier is not None:
                                 if projected is not None:
                                     projected = replace(
@@ -328,7 +452,29 @@ def runTracking(
                                             view, observation.bbox
                                         ),
                                     )
-                                if plan.scanViews:
+                                    store = getattr(verifier, "gallery", None)
+                                    if gallery is not None and store is not None:
+                                        trackerFeature = verifier.lastFeature
+                                        controller.noteAppearanceMargin(
+                                            store.margin(trackerFeature)
+                                        )
+                                        if gallery2 is not None:
+                                            store.candidateSources = ("lookalike",)
+                                            controller.noteReleaseMargin(
+                                                store.margin(trackerFeature, ("lookalike",))
+                                            )
+                                if globalSearcher is not None and controller.globalSearchPending:
+                                    candidates, scanForwards = _globalCandidates(
+                                        frame=frame,
+                                        controller=controller,
+                                        geometry=geometry,
+                                        backend=backend,
+                                        verifier=verifier,
+                                        searcher=globalSearcher,
+                                    )
+                                    forwardCount += scanForwards
+                                    controller.settleScan(scanForwards)
+                                elif plan.scanViews:
                                     candidates, scanForwards = _scanCandidates(
                                         frame=frame,
                                         plan=plan,
@@ -336,24 +482,119 @@ def runTracking(
                                         backend=backend,
                                         verifier=verifier,
                                         refinementView=(
-                                            controller.refinementView
-                                            if plan.scanRefine
-                                            else None
+                                            controller.refinementView if plan.scanRefine else None
+                                        ),
+                                        secondLook=(
+                                            None
+                                            if secondLook is None or secondLook[0] <= 0.0
+                                            else secondLook[0]
                                         ),
                                     )
                                     forwardCount += scanForwards
                                     controller.settleScan(scanForwards)
+                                    if oracle is not None and plan.scanRefine:
+                                        # Evaluation only (E052): a box near the target.
+                                        scanView = plan.scanViews[0]
+                                        extra = oracle.extraCandidate(
+                                            int(frame.frameIndex),
+                                            scanView.bfov.center,
+                                            0.5 * scanView.bfov.horizontalFovRad,
+                                            candidates,
+                                            geometry,
+                                        )
+                                        if extra is not None:
+                                            candidates = (*candidates, extra)
+                                    if judge is not None and candidates:
+                                        # Not charged to the scan budget: the search
+                                        # stays as it was, only the decision changes.
+                                        candidates, judgeForwards = _judgeCandidates(
+                                            frame=frame,
+                                            candidates=candidates,
+                                            controller=controller,
+                                            geometry=geometry,
+                                            backend=backend,
+                                            judge=judge,
+                                            session=judgeSession,
+                                        )
+                                        forwardCount += judgeForwards
+                                        if judgeCharged:
+                                            controller.chargeScan(judgeForwards)
                             with _profile(profiler, "controller"):
                                 result = controller.consume(plan, projected, candidates)
+                            if camera is not None:
+                                index = int(frame.frameIndex)
+                                camera.mark(index, controller.cameraAnchorFrame == index)
                             if verifier is not None:
                                 # A doubted frame must not shape the tracker's appearance
                                 # memory; a jump to a candidate starts it afresh.
                                 if controller.lastFrameReacquired:
-                                    backend.resetState()  # type: ignore[attr-defined]
-                                    memory = "reset"
-                                elif controller.lastFrameSuspect and savedState is not None:
+                                    if restoreAppearance and goodState is not None:
+                                        backend.restoreState(goodState)  # type: ignore[attr-defined]
+                                        memory = "restored"
+                                    else:
+                                        backend.resetState()  # type: ignore[attr-defined]
+                                        memory = "reset"
+                                elif (
+                                    controller.lastFrameSuspect or controller.memoryFrozen
+                                ) and savedState is not None:
                                     backend.restoreState(savedState)  # type: ignore[attr-defined]
                                     memory = "frozen"
+                                elif (
+                                    gallery is not None
+                                    and len(gallery) > 3
+                                    and gallery[3] == 1
+                                    and controller.lastMarginLow
+                                    and savedState is not None
+                                ):
+                                    # E076e: the box looks more like what the target is
+                                    # not; the memory does not learn it.
+                                    backend.restoreState(savedState)  # type: ignore[attr-defined]
+                                    memory = "held"
+                                elif memoryPolicy != "always" and savedState is not None:
+                                    signal = controller.lastRelativeSignal
+                                    if memoryPolicy == "never" or (
+                                        signal is not None and signal < memoryFloor
+                                    ):
+                                        backend.restoreState(savedState)  # type: ignore[attr-defined]
+                                        memory = "held"
+                                if (
+                                    restoreAppearance
+                                    and not controller.lastFrameSuspect
+                                    and controller.trustedStreak >= 10
+                                ):
+                                    goodState = backend.saveState()  # type: ignore[attr-defined]
+                                if (
+                                    trackerFeature is not None
+                                    and int(frame.frameIndex) % int(gallery[2]) == 0
+                                    and not controller.lastFrameReacquired
+                                    and not controller.lastMarginForced
+                                ):
+                                    # E076: frames the state machine doubted on its own are
+                                    # what the target is not; confident frames are what it is.
+                                    signal = controller.lastRelativeSignal
+                                    if controller.lastFrameSuspect:
+                                        verifier.gallery.add(trackerFeature, positive=False)
+                                    elif signal is not None and signal >= positiveFloor:
+                                        verifier.gallery.add(trackerFeature, positive=True)
+                                if (
+                                    gallery2 is not None
+                                    and trackerFeature is not None
+                                    and projected is not None
+                                    and int(frame.frameIndex) % int(gallery2.get("harvest", 10))
+                                    == 0
+                                    and not controller.lastFrameSuspect
+                                    and not controller.lastFrameReacquired
+                                    and (controller.lastRelativeSignal or -9.0) >= positiveFloor
+                                    and verifier.gallery.margin(trackerFeature) >= 0.0
+                                ):
+                                    _harvestLookalikes(
+                                        frame,
+                                        projected.bfov,
+                                        controller,
+                                        geometry,
+                                        verifier,
+                                        gallery2,
+                                    )
                             if trace is not None:
                                 trace.append(
                                     {
@@ -388,6 +629,7 @@ def runTracking(
                     break
                 if result is None:
                     raise RuntimeError("tracking frame produced no result")
+                spentForwards += forwardCount
                 _finishProfileFrame(
                     profiler,
                     iterationStartedNs,
@@ -398,9 +640,7 @@ def runTracking(
                     hostView, observation, projected = visualization
                     recorder.recordLocalRgb(frame, (hostView,))
                     recorder.recordBackendBoxes(frame, (hostView,), (observation,))
-                    recorder.recordGeometryBoxes(
-                        frame, () if projected is None else (projected,)
-                    )
+                    recorder.recordGeometryBoxes(frame, () if projected is None else (projected,))
                 # Do not let this frame's CUDA-backed view survive into the next
                 # iteration through Python locals.
                 view = observation = projected = visualization = None
@@ -455,7 +695,13 @@ def _fallbackFrameResult(
     frame: FramePacket,
     error: BaseException,
 ):
-    """Convert any expected runtime failure into one invalid frame result."""
+    """Convert any expected runtime failure into one invalid frame result.
+
+    A failure of the GPU itself is not converted: every later frame would fail the
+    same way and the sequence would end looking complete (evaluation log, E047).
+    """
+    if isDeviceFailure(error):
+        raise error
     print(
         "[runtime] frame failed; emitted zero-confidence fallback: "
         f"sequence={frame.sequenceId}, frame={int(frame.frameIndex)}, reason={error}",
@@ -469,6 +715,8 @@ def _fallbackFrameResult(
 
 def closeRuntime(runtime: RuntimeBundle) -> None:
     """Release Geometry CUDA state before the backend empties the CUDA cache."""
+    if runtime.camera is not None:
+        runtime.camera.close()
     try:
         closeGeometry = getattr(runtime.geometry, "close", None)
         if callable(closeGeometry):
@@ -524,6 +772,36 @@ def _projectObservation(
     )
 
 
+def _harvestLookalikes(frame, bfov, controller, geometry, verifier, options) -> None:
+    """E080: keep the places around a confidently tracked target that look most like it
+    as negatives of the appearance gallery."""
+    width = int(options.get("width", 448))
+    spec = controller.wideView(bfov, float(options.get("scale", 3.0)), width)
+    wide = geometry.cropViews(frame, [spec])[0]
+    box = localBoxOfBfov(spec, bfov)
+    for x, y in verifier.lookalikes(
+        wide.rgb, box, int(options.get("per", 3)), float(options.get("apart", 1.5)), width
+    ):
+        local = BBoxXYWH(
+            xPx=x - 0.5 * box.widthPx,
+            yPx=y - 0.5 * box.heightPx,
+            widthPx=box.widthPx,
+            heightPx=box.heightPx,
+        )
+        try:
+            place = geometry.projectLocalBoxBoundary(
+                local, spec, frame.rgb.shape[1], frame.rgb.shape[0]
+            ).bfov
+        except GeometryError:
+            continue
+        side = math.sqrt(place.horizontalFovRad * place.verticalFovRad)
+        near = controller.recentredView(place.center, side)
+        view = geometry.cropViews(frame, [near])[0]
+        verifier.gallery.add(
+            verifier.embedBox(view, localBoxOfBfov(near, place)), positive=False, source="lookalike"
+        )
+
+
 def _scanCandidates(
     *,
     frame: FramePacket,
@@ -532,9 +810,14 @@ def _scanCandidates(
     backend: TrackerBackend,
     verifier: Any,
     refinementView: Callable[..., ViewSpec] | None = None,
+    secondLook: float | None = None,
 ) -> tuple[tuple[ProjectedObservation, ...], int]:
     """Boxes found in the plan's search views with their similarity to the template,
     and the forward passes spent.
+
+    With ``secondLook`` (experimental, E061), a refined box farther than that share of
+    the view's half width from its centre is looked at again with a normal view centred
+    on it, and the second box replaces the first.
 
     With ``refinementView`` a search view only points at a place: a view of the normal
     size is taken around each box found, and the boxes of those views are returned.
@@ -556,12 +839,89 @@ def _scanCandidates(
                 continue
             specs.append(refinementView(pointed.bfov.center, len(specs)))
         views = (
-            {view.spec.viewId: view for view in geometry.cropViews(frame, specs)}
-            if specs
-            else {}
+            {view.spec.viewId: view for view in geometry.cropViews(frame, specs)} if specs else {}
         )
         found = backend.inferDetached(tuple(views.values())) if views else ()  # type: ignore[attr-defined]
         forwards += len(views)
+        if secondLook is not None and found:
+            again = []
+            for local in found:
+                if _boxOffset(local.bbox, views[local.viewId].spec) <= secondLook:
+                    continue
+                try:
+                    pointed = geometry.projectLocalBoxBoundary(
+                        local.bbox,
+                        views[local.viewId].spec,
+                        frame.rgb.shape[1],
+                        frame.rgb.shape[0],
+                    )
+                except GeometryError:
+                    continue
+                again.append((local, refinementView(pointed.bfov.center, 32 + len(again))))
+            if again:
+                second = {
+                    view.spec.viewId: view
+                    for view in geometry.cropViews(frame, [spec for _, spec in again])
+                }
+                seen = backend.inferDetached(tuple(second.values()))  # type: ignore[attr-defined]
+                forwards += len(second)
+                replaced = {spec.viewId: local for local, spec in again}
+                byView = {obs.viewId: obs for obs in seen}
+                kept = [local for local in found if local not in replaced.values()]
+                for viewId, local in replaced.items():
+                    if viewId in byView:
+                        kept.append(byView[viewId])
+                        views[viewId] = second[viewId]
+                    else:
+                        kept.append(local)
+                found = tuple(kept)
+    candidates = []
+    for local in withScoreProbability(found):
+        view = views[local.viewId]
+        projected = _projectValidObservation(
+            frame=frame,
+            view=view,
+            observation=local,
+            predictedMotion=None,
+            geometry=geometry,
+        )
+        if projected is not None:
+            similarity = verifier.similarity(view, local.bbox)
+            store = getattr(verifier, "gallery", None)
+            candidates.append(
+                replace(
+                    projected,
+                    appearanceSimilarity=similarity,
+                    appearanceMargin=(
+                        store.margin(verifier.lastFeature, store.candidateSources)
+                        if store is not None
+                        else None
+                    ),
+                )
+            )
+    return tuple(candidates), forwards
+
+
+def _globalCandidates(
+    *,
+    frame: FramePacket,
+    controller: TrackControllerImpl,
+    geometry: SphericalGeometry,
+    backend: TrackerBackend,
+    verifier: Any,
+    searcher: Any,
+) -> tuple[tuple[ProjectedObservation, ...], int]:
+    """Normal views at the best places a whole-sphere detector found (E054)."""
+    trusted = controller.trustedBfov
+    if trusted is None:
+        return (), 0
+    size = math.sqrt(trusted.horizontalFovRad * trusted.verticalFovRad)
+    places = searcher.search(frame.rgb, controller._globalCount, max(size, math.radians(1.0)))
+    specs = [controller.refinementView(place, index) for index, place in enumerate(places)]
+    if not specs:
+        return (), 0
+    views = {view.spec.viewId: view for view in geometry.cropViews(frame, specs)}
+    found = backend.inferDetached(tuple(views.values()))  # type: ignore[attr-defined]
     candidates = []
     for local in withScoreProbability(found):
         view = views[local.viewId]
@@ -574,11 +934,86 @@ def _scanCandidates(
         )
         if projected is not None:
             candidates.append(
-                replace(
-                    projected, appearanceSimilarity=verifier.similarity(view, local.bbox)
-                )
+                replace(projected, appearanceSimilarity=verifier.similarity(view, local.bbox))
             )
-    return tuple(candidates), forwards
+    return tuple(candidates), len(views)
+
+
+def _judgeCandidates(
+    *,
+    frame: FramePacket,
+    candidates: tuple[ProjectedObservation, ...],
+    controller: TrackControllerImpl,
+    geometry: SphericalGeometry,
+    backend: TrackerBackend,
+    judge: Any,
+    session: Any,
+) -> tuple[tuple[ProjectedObservation, ...], int]:
+    """Score each candidate with the learned judge, and the forward passes spent.
+
+    Each candidate gets one stateless pass on a normal-size view centred on it, as in
+    the judge's training data (``tools/backend_signals.py trace``).  A candidate below
+    the judge's search-score prefilter, or whose pass finds nothing, is not judged and
+    cannot be taken.
+    """
+    from track360.runtime.candidate_judge import judgeFeatures
+
+    judge.select(str(frame.sequenceId))
+    scan = controller.currentScan
+    judged = []
+    forwards = 0
+    for candidate in candidates:
+        raw = candidate.singleScore if candidate.singleScore is not None else candidate.fusedScore
+        search = float(min(1.0, max(0.0, raw)))
+        if search < judge.prefilter:
+            judged.append(candidate)
+            continue
+        size = math.sqrt(candidate.bfov.horizontalFovRad * candidate.bfov.verticalFovRad)
+        spec = controller.recentredView(candidate.bfov.center, size)
+        view = geometry.cropViews(frame, [spec])[0]
+        session.enableDiagnostics(True)
+        try:
+            again = backend.inferDetached((view,))  # type: ignore[attr-defined]
+            diagnostics = session.lastDiagnostics
+        finally:
+            session.enableDiagnostics(False)
+        forwards += 1
+        if not again or not diagnostics:
+            judged.append(candidate)
+            continue
+        features = judgeFeatures(
+            searchScore=search,
+            recentredScore=again[0].fusedScore,
+            similarity=candidate.appearanceSimilarity,
+            scan=scan,
+            diagnostics=diagnostics,
+        )
+        judged.append(replace(candidate, judgeScore=float(judge.score(features)[0])))
+    return tuple(judged), forwards
+
+
+def _boxOffset(box: BBoxXYWH, spec: ViewSpec) -> float:
+    """How far a box's centre lies from its view's centre, in shares of the half width."""
+    x = (box.xPx + box.widthPx / 2.0) / spec.outputWidthPx - 0.5
+    y = (box.yPx + box.heightPx / 2.0) / spec.outputHeightPx - 0.5
+    return 2.0 * math.sqrt(x * x + y * y)
+
+
+def _recentredMainView(
+    frame: FramePacket,
+    plan: SearchPlan,
+    view: LocalView,
+    observation: LocalObservation,
+    geometry: SphericalGeometry,
+    controller: TrackControllerImpl,
+) -> ViewSpec | None:
+    try:
+        pointed = geometry.projectLocalBoxBoundary(
+            observation.bbox, view.spec, frame.rgb.shape[1], frame.rgb.shape[0]
+        )
+    except GeometryError:
+        return None
+    return controller.recentredMainView(plan, pointed.bfov.center)
 
 
 def _projectValidObservation(
@@ -625,12 +1060,16 @@ def _scaleScore(
         and predictedMotion.horizontalSizeRad > 0.0
         and predictedMotion.verticalSizeRad > 0.0
     ):
-        expectedWidth = view.spec.outputWidthPx * math.tan(
-            predictedMotion.horizontalSizeRad * 0.5
-        ) / max(math.tan(view.spec.bfov.horizontalFovRad * 0.5), 1e-6)
-        expectedHeight = view.spec.outputHeightPx * math.tan(
-            predictedMotion.verticalSizeRad * 0.5
-        ) / max(math.tan(view.spec.bfov.verticalFovRad * 0.5), 1e-6)
+        expectedWidth = (
+            view.spec.outputWidthPx
+            * math.tan(predictedMotion.horizontalSizeRad * 0.5)
+            / max(math.tan(view.spec.bfov.horizontalFovRad * 0.5), 1e-6)
+        )
+        expectedHeight = (
+            view.spec.outputHeightPx
+            * math.tan(predictedMotion.verticalSizeRad * 0.5)
+            / max(math.tan(view.spec.bfov.verticalFovRad * 0.5), 1e-6)
+        )
     if expectedWidth is None or expectedHeight is None:
         # Conservative neutral fallback during frame-zero motion bootstrap.
         expectedWidth = max(8.0, view.spec.outputWidthPx * 0.18)

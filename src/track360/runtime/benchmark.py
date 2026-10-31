@@ -9,10 +9,13 @@ Output layout under one root, ready for the official toolkit as well::
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import logging
+import math
 from collections import deque
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -36,9 +39,12 @@ from track360.io.vot360_results import (
     writeSequenceResults,
 )
 from track360.runtime.driver import buildRuntime, closeRuntime, runTracking
+from track360.runtime.gpu_lock import exclusiveGpuRun
 from track360.runtime.reproducibility import collectRunMetadata, seedEverything
 
 LOGGER = logging.getLogger("track360.benchmark")
+# Standard deviation of the input noise of a seeded run, in normalised input units.
+DEFAULT_NOISE_STD = 0.001
 REPORT_DIRECTORY = "reports"
 
 METHODS: dict[str, str] = {
@@ -106,6 +112,12 @@ class _TimedCollector(ResultCollector):
         self.writeTimes.append(perf_counter())
 
 
+def sequenceNoiseSeed(seed: int, sequence: str) -> int:
+    """Seed of one sequence's noise stream: stable across runs, orders and platforms."""
+    digest = hashlib.sha256(f"{seed}:{sequence}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") >> 1
+
+
 class _CountingSession:
     """Count the images a session runs through the network."""
 
@@ -169,6 +181,15 @@ def runBenchmark(
     shard: tuple[int, int] = (0, 1),
     sessionFactory: SessionFactory | None = None,
     probe: Sequence[str] | None = None,
+    noiseSeed: int | None = None,
+    noiseStd: float = DEFAULT_NOISE_STD,
+    candidateJudge: Any | None = None,
+    oracle: Any | None = None,
+    cameraMotion: int = 0,
+    sphereScanDeg: float | None = None,
+    globalSearch: tuple[int, ...] | None = None,
+    cameraOptions: dict | None = None,
+    experiment: dict | None = None,
 ) -> BenchmarkSummary:
     """Track every selected sequence with one method, one failure never stopping the rest.
 
@@ -176,9 +197,62 @@ def runBenchmark(
     split a run.  With ``resume`` a sequence whose result files are already complete is
     skipped.  ``labelRoot`` supplies labels for sequences shipped without them, such as
     the tune set.
+
+    ``noiseSeed`` adds Gaussian noise of ``noiseStd`` to the network inputs.  The stream
+    restarts for every sequence from the seed and the sequence name, so a sequence gets
+    the same noise whatever the order, the shard or the resume point of the run.
     """
     if method not in METHODS:
         raise ProtocolError(f"unknown method '{method}'; available: {', '.join(METHODS)}")
+    # Only the real model needs the machine to itself; tests bring their own sessions.
+    with exclusiveGpuRun() if sessionFactory is None else nullcontext():
+        return _runLocked(
+            datasetRoot=datasetRoot,
+            outputRoot=outputRoot,
+            method=method,
+            config=config,
+            labelRoot=labelRoot,
+            sequences=sequences,
+            maxFrames=maxFrames,
+            resume=resume,
+            shard=shard,
+            sessionFactory=sessionFactory,
+            probe=probe,
+            noiseSeed=noiseSeed,
+            noiseStd=noiseStd,
+            candidateJudge=candidateJudge,
+            oracle=oracle,
+            cameraMotion=cameraMotion,
+            sphereScanDeg=sphereScanDeg,
+            globalSearch=globalSearch,
+            cameraOptions=cameraOptions,
+            experiment=experiment,
+        )
+
+
+def _runLocked(
+    *,
+    datasetRoot: str | Path,
+    outputRoot: str | Path,
+    method: str,
+    config: AppConfig,
+    labelRoot: str | Path | None,
+    sequences: Sequence[str] | None,
+    maxFrames: int | None,
+    resume: bool,
+    shard: tuple[int, int],
+    sessionFactory: SessionFactory | None,
+    probe: Sequence[str] | None,
+    noiseSeed: int | None,
+    noiseStd: float,
+    candidateJudge: Any | None = None,
+    oracle: Any | None = None,
+    cameraMotion: int = 0,
+    sphereScanDeg: float | None = None,
+    globalSearch: tuple[int, ...] | None = None,
+    cameraOptions: dict | None = None,
+    experiment: dict | None = None,
+) -> BenchmarkSummary:
     dataset = Vot360Dataset(datasetRoot, labelRoot)
     names = _selectSequences(dataset, sequences, shard)
     output = Path(outputRoot)
@@ -195,13 +269,22 @@ def runBenchmark(
             "sequences": list(names),
             "maxFrames": maxFrames,
             "shard": list(shard),
+            "inputNoise": None if noiseSeed is None else {"seed": noiseSeed, "std": noiseStd},
+            "candidateJudge": None if candidateJudge is None else candidateJudge.describe(),
+            # Evaluation only: ground truth corrected some decisions (E052).
+            "oracle": None if oracle is None else oracle.describe(),
+            # Experimental (E053): enlarged searches turned with the camera.
+            "cameraMotion": cameraMotion,
+            "cameraOptions": cameraOptions,
+            "experiment": experiment,
+            "sphereScanDeg": sphereScanDeg,
+            # Experimental (E054): whole-sphere detection every N lost frames, K places.
+            "globalSearch": None if globalSearch is None else list(globalSearch),
             **collectRunMetadata(config),
         },
     )
     session = _CountingSession(
-        sessionFactory(config.model)
-        if sessionFactory is not None
-        else createArtrackSession(config)
+        sessionFactory(config.model) if sessionFactory is not None else createArtrackSession(config)
     )
     probeModels = None
     probeSignals = tuple(probe or ())
@@ -212,6 +295,15 @@ def runBenchmark(
             Path(config.model.weights).parent / "hub",
             [name for name in MODEL_SIGNALS if name in probeSignals] or MODEL_SIGNALS[:1],
         )
+    global _CAMERA_OPTIONS, _EXPERIMENT
+    _CAMERA_OPTIONS = dict(cameraOptions or {})
+    _EXPERIMENT = dict(experiment or {})
+    globalSearcher = None
+    if globalSearch is not None:
+        from track360.runtime.global_search import GlobalSearcher
+
+        globalSearcher = GlobalSearcher(Path(config.model.weights).parent / "hf")
+        globalSearcher.schedule = tuple(globalSearch)
     reports: list[SequenceReport] = []
     try:
         for position, name in enumerate(names, start=1):
@@ -226,14 +318,20 @@ def runBenchmark(
                 resume,
                 probeModels,
                 "clean" in probeSignals,
+                noiseSeed,
+                noiseStd,
+                candidateJudge,
+                oracle,
+                cameraMotion,
+                sphereScanDeg,
+                globalSearcher,
             )
             reports.append(report)
             # A skipped sequence keeps the report of the run that tracked it.
             if report.status != "skipped" or not (reportRoot / f"{name}.json").is_file():
                 _writeJson(reportRoot / f"{name}.json", asdict(report))
             LOGGER.info(
-                "[%d/%d] %s %s: frames=%d fps=%.2f p50=%.0fms p95=%.0fms forwards=%d"
-                " invalid=%d%s",
+                "[%d/%d] %s %s: frames=%d fps=%.2f p50=%.0fms p95=%.0fms forwards=%d invalid=%d%s",
                 position,
                 len(names),
                 method,
@@ -368,6 +466,13 @@ def _runOne(
     resume: bool,
     probeModels: Any | None = None,
     probeClean: bool = True,
+    noiseSeed: int | None = None,
+    noiseStd: float = DEFAULT_NOISE_STD,
+    candidateJudge: Any | None = None,
+    oracle: Any | None = None,
+    cameraMotion: int = 0,
+    sphereScanDeg: float | None = None,
+    globalSearcher: Any | None = None,
 ) -> SequenceReport:
     source = Vot360DataSource(maxFrames=maxFrames, labelRoot=dataset.labelRoot)
     try:
@@ -377,6 +482,11 @@ def _runOne(
             return SequenceReport(sequence=name, status="skipped", frames=frameCount)
         collector = _TimedCollector()
         session.forwards = 0
+        setNoise = getattr(session, "setInputNoise", None)
+        if setNoise is not None:
+            setNoise(None if noiseSeed is None else sequenceNoiseSeed(noiseSeed, name), noiseStd)
+        elif noiseSeed is not None:
+            raise ProtocolError("this session cannot add input noise")
         started = perf_counter()
         probe = None
         if probeModels is not None and method != "b0":
@@ -390,9 +500,29 @@ def _runOne(
             trace: list[dict[str, object]] | None = (
                 [] if config.backendTuning.lossHandling else None
             )
-            loss = _trackSpherical(source, session, config, collector, probe, trace)
+            sequenceOracle = None
+            if oracle is not None:
+                from track360.evaluation.oracle import sequenceOracle as makeOracle
+
+                sequenceOracle = makeOracle(oracle, source.sequence, name)
+            loss = _trackSpherical(
+                source,
+                session,
+                config,
+                collector,
+                probe,
+                trace,
+                candidateJudge,
+                sequenceOracle,
+                cameraMotion,
+                sphereScanDeg,
+                globalSearcher,
+            )
             if trace is not None:
                 writeStateTrace(outputRoot, method, name, trace)
+            if sequenceOracle is not None:
+                (outputRoot / "oracle" / method).mkdir(parents=True, exist_ok=True)
+                _writeJson(outputRoot / "oracle" / method / f"{name}.json", sequenceOracle.report())
         seconds = perf_counter() - started
         collector.finalize(frameCount)
         frameWidthPx = source.sequence.frameSize[0]
@@ -423,6 +553,12 @@ def _runOne(
         source.close()
 
 
+# Experimental (E053): options of the camera rotation (see CameraMotion).
+_CAMERA_OPTIONS: dict = {}
+# Experimental (E061): second look (lost, tracking), confirmation, judge charged to the
+# scan budget.
+_EXPERIMENT: dict = {}
+
 TRACE_COLUMNS = (
     "frame",
     "modeBefore",
@@ -445,6 +581,9 @@ TRACE_COLUMNS = (
     "forwards",
     "scanViews",
     "scan",
+    "scanYawDeg",
+    "scanPitchDeg",
+    "scanSphere",
     "relative",
     "candidates",
 )
@@ -479,9 +618,47 @@ def _trackSpherical(
     collector: ResultCollector,
     probe: Any | None = None,
     trace: list[dict[str, object]] | None = None,
+    candidateJudge: Any | None = None,
+    oracle: Any | None = None,
+    cameraMotion: int = 0,
+    sphereScanDeg: float | None = None,
+    globalSearcher: Any | None = None,
 ) -> dict[str, object]:
     shared = _SharedSession(session)
-    runtime = buildRuntime(config, artrackSessionFactory=lambda _: shared)
+    runtime = buildRuntime(
+        config, artrackSessionFactory=lambda _: shared, candidateJudge=candidateJudge
+    )
+    if oracle is not None:
+        runtime.controller.useOracle(oracle)
+    if sphereScanDeg is not None:
+        runtime.controller.useSphereScan(math.radians(sphereScanDeg))
+    if globalSearcher is not None:
+        runtime.controller.useGlobalSearch(*globalSearcher.schedule)
+    if "confirm" in _EXPERIMENT:
+        runtime.controller.useTwoFrameConfirmation(*_EXPERIMENT["confirm"])
+    if "postRelease" in _EXPERIMENT:
+        runtime.controller.usePostReleaseWatch(*_EXPERIMENT["postRelease"])
+    if "extrapolatedScan" in _EXPERIMENT:
+        runtime.controller.useExtrapolatedScan(*_EXPERIMENT["extrapolatedScan"])
+    if "releaseShare" in _EXPERIMENT:
+        runtime.controller.useReleaseShare(_EXPERIMENT["releaseShare"])
+    if "releaseFloor" in _EXPERIMENT:
+        runtime.controller.useReleaseFloor(_EXPERIMENT["releaseFloor"])
+    if "gallery" in _EXPERIMENT and runtime.verifier is not None:
+        runtime.verifier.useGallery(_EXPERIMENT["gallery"][1])
+    if "gallery2" in _EXPERIMENT and runtime.verifier is not None:
+        runtime.verifier.useGallery(int(_EXPERIMENT["gallery2"].get("keep", 50)))
+    if _EXPERIMENT.get("marginJumps"):
+        runtime.controller.useMarginJumps()
+    camera = runtime.camera
+    if cameraMotion:
+        # Experimental settings from the command line replace the configuration's.
+        from track360.runtime.camera_motion import CameraMotion
+
+        if camera is not None:
+            camera.close()
+        camera = CameraMotion(workWidth=cameraMotion, **_CAMERA_OPTIONS)
+        runtime.controller.useCameraMotion(camera)
     try:
         runTracking(
             source=source,
@@ -493,9 +670,26 @@ def _trackSpherical(
             probe=probe,
             verifier=runtime.verifier,
             trace=trace,
+            judge=runtime.judge,
+            judgeSession=runtime.judgeSession,
+            oracle=oracle,
+            camera=camera,
+            globalSearcher=globalSearcher,
+            secondLook=_EXPERIMENT.get("secondLook"),
+            judgeCharged=bool(_EXPERIMENT.get("judgeCharged")),
+            memoryPolicy=_EXPERIMENT.get("memoryPolicy", "always"),
+            restoreAppearance=bool(_EXPERIMENT.get("restoreAppearance")),
+            secondLookCharged=bool(_EXPERIMENT.get("secondLookCharged")),
+            secondLookCap=_EXPERIMENT.get("secondLookCap"),
+            secondLookReserve=bool(_EXPERIMENT.get("secondLookReserve")),
+            gallery=_EXPERIMENT.get("gallery"),
+            memoryFloor=float(_EXPERIMENT.get("memoryFloor", 0.0)),
+            gallery2=_EXPERIMENT.get("gallery2"),
         )
         return runtime.controller.lossStatistics
     finally:
+        if camera is not None and camera is not runtime.camera:
+            camera.close()
         closeRuntime(runtime)
 
 
@@ -521,9 +715,7 @@ def _trackErpDirect(
     history: deque[BBoxXYWH] = deque([state] * historyLength, maxlen=max(1, historyLength))
     while (frame := source.read()) is not None:
         extra = {"trajectories": (tuple(history),)} if historyLength else {}
-        prediction = session.inferBatch(
-            (frame.rgb,), (template,), priorBoxes=(state,), **extra
-        )[0]
+        prediction = session.inferBatch((frame.rgb,), (template,), priorBoxes=(state,), **extra)[0]
         state = prediction.bbox
         history.append(state)
         collector.write(

@@ -1,6 +1,6 @@
 # Benchmark 数据集
 
-本文记录测试集的选型结论和评测协议；每一轮的评测结果记录在 [evaluation-log.md](evaluation-log.md)。数据读取见 [Datasets](modules/datasets.md)；评测脚本是 [V2Plan](V2Plan.md) Phase 2 的任务。
+本文记录测试集的选型结论和评测协议；每一轮的评测结果记录在 [evaluation-log.md](evaluation-log.md)。数据读取见 [Datasets](modules/datasets.md)；评测脚本是 `tools/benchmark.py`。
 
 ## 结论
 
