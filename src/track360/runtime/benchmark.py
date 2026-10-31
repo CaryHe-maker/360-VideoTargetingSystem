@@ -640,6 +640,8 @@ def _trackSpherical(
         runtime.controller.usePostReleaseWatch(*_EXPERIMENT["postRelease"])
     if "extrapolatedScan" in _EXPERIMENT:
         runtime.controller.useExtrapolatedScan(*_EXPERIMENT["extrapolatedScan"])
+    if "releaseShare" in _EXPERIMENT:
+        runtime.controller.useReleaseShare(_EXPERIMENT["releaseShare"])
     if "releaseFloor" in _EXPERIMENT:
         runtime.controller.useReleaseFloor(_EXPERIMENT["releaseFloor"])
     if "gallery" in _EXPERIMENT and runtime.verifier is not None:

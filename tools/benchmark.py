@@ -173,6 +173,19 @@ def buildParser() -> argparse.ArgumentParser:
         "a doubt and keep the memory from learning such a frame (E076e)",
     )
     run.add_argument(
+        "--tuning",
+        default=None,
+        help="experimental (E082): KEY=VALUE,... replacing backendTuning fields of the "
+        "configuration (validated as the configuration is)",
+    )
+    run.add_argument(
+        "--release-share",
+        type=float,
+        default=None,
+        help="experimental (E082): share of the entry threshold a doubted frame must be back "
+        "within to count as calm (0.5 in the state machine)",
+    )
+    run.add_argument(
         "--gallery2",
         default=None,
         help="experimental (E080): KEY=VALUE,... of the appearance gallery with look-alike "
@@ -315,6 +328,28 @@ def buildParser() -> argparse.ArgumentParser:
     return parser
 
 
+def _withTuning(config, overrides: str | None):
+    """The configuration with ``KEY=VALUE,...`` replacing backendTuning fields (E082)."""
+    if not overrides:
+        return config
+    from dataclasses import fields, replace
+
+    kinds = {f.name: f.type for f in fields(config.backendTuning)}
+    values = {}
+    for item in overrides.split(","):
+        key, raw = item.split("=")
+        if key not in kinds:
+            raise SystemExit(f"--tuning: unknown backendTuning field '{key}'")
+        kind = str(kinds[key])
+        if "bool" in kind:
+            values[key] = raw.lower() in ("1", "true", "yes")
+        elif "int" in kind and "float" not in kind:
+            values[key] = int(raw)
+        else:
+            values[key] = float(raw)
+    return replace(config, backendTuning=replace(config.backendTuning, **values))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = buildParser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
@@ -344,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
                     outputRoot=root,
                     labelRoot=args.label_root,
                     method=args.method,
-                    config=loadConfig(args.config),
+                    config=_withTuning(loadConfig(args.config), args.tuning),
                     sequences=sequences,
                     maxFrames=args.max_frames,
                     resume=not args.no_resume,
@@ -405,6 +440,11 @@ def main(argv: list[str] | None = None) -> int:
                             else {}
                         ),
                         **({"marginJumps": True} if args.margin_jumps else {}),
+                        **(
+                            {"releaseShare": args.release_share}
+                            if args.release_share is not None
+                            else {}
+                        ),
                         **(
                             {
                                 "gallery2": {

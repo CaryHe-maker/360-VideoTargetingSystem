@@ -45,6 +45,13 @@ class TrackStateMachine:
         # Experimental (E074): no release while the backend score is this far below
         # the median of the trusted frames (None: no such floor).
         self._releaseFloor: float | None = None
+        # Experimental (E082): the share of the entry threshold a doubted frame must be
+        # back within to count as calm.
+        self._releaseShare = RELATIVE_RELEASE_SHARE
+
+    def useReleaseShare(self, share: float) -> None:
+        """Experimental (E082): see ``_releaseShare``."""
+        self._releaseShare = float(share)
 
     def useReleaseFloor(self, floor: float | None) -> None:
         """Experimental (E074): hold a release while the backend deviation is below it."""
@@ -141,7 +148,7 @@ class TrackStateMachine:
         self._relativeSignal = signal
         threshold = tuning.relativeEnterDeviation
         if self._latched:
-            calm = signal > threshold * RELATIVE_RELEASE_SHARE
+            calm = signal > threshold * self._releaseShare
             self._calmFrames = self._calmFrames + 1 if calm else 0
             trusted = self._calmFrames >= tuning.releaseFrames
             if trusted and self._releaseFloor is not None and backendDeviation < self._releaseFloor:

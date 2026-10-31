@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.11-ee4c2c)](https://pytorch.org)
 [![Backend](https://img.shields.io/badge/backend-ARTrackV2--B--256-6f42c1)](https://github.com/MIV-XJTU/ARTrack)
-[![Status](https://img.shields.io/badge/status-V2.1%20开发中-orange)](docs/V2.1Plan.md)
+[![Version](https://img.shields.io/badge/version-2.1.0-green)](CHANGELOG.md)
 
 </div>
 
@@ -32,7 +32,7 @@ Track360 不改动跟踪器本身，只改变**“看哪里”**，做法与 360
 
 ## 现状和数字
 
-V2.0 还没有发布。下面是当前代码在 **360VOT 官方测试集**（120 条序列，112,777 帧）上的结果，每个配置只跑了一次（2026-10-11，[评测记录](docs/evaluation-log.md) E042）。
+2.1.0（2026-10-31）发布 V2.1 的轻代价档。下面是 **360VOT 官方测试集**（120 条序列，112,777 帧）上的结果，每个配置只跑了一次：V2.1 轻代价基线是 2026-10-31 的 E085，其余是 2026-10-11 的 E042（[评测记录](docs/evaluation-log.md)）。
 
 | 配置 | 怎么选 | S<sub>dual</sub> | P<sub>dual</sub> | P<sub>angle</sub> | 丢失率 | 每帧前向 | FPS（RTX 4060 Laptop） |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -42,14 +42,14 @@ V2.0 还没有发布。下面是当前代码在 **360VOT 官方测试集**（120
 | 基线 2，速度档 | `--preset loss_handling --precision tf32` | 0.510 | 0.481 | 0.544 | 0.309 | 1.12 | 30.9 |
 | 基线 3：基线 2 加相机旋转补偿（实验，V2.1） | `--preset camera` | 未在测试集上运行 | | | | 1.14¹ | 30–32¹ |
 | 基线 4：基线 3 加未丢失时的二次定位（实验，V2.1） | `--preset second_look` | 未在测试集上运行 | | | | 1.15² | 28² |
-| 基线 5：基线 4 加“像干扰物时不放行”（实验，V2.1） | `--preset lookalike` | 未在测试集上运行 | | | | 1.18³ | 28³ |
+| **V2.1 轻代价基线**（= 基线 5：基线 4 加“像干扰物时不放行”） | `--preset long_term_light` | **0.528** | 0.502 | 0.566 | 0.309 | 1.12 | 25.1³ |
 | 对照：同一个后端直接在 ERP 上跟踪（`b0`） | `tools/benchmark.py run --method b0` | 0.368 | 0.339 | 0.381 | 0.532 | 1.00 | 20.3 |
 
 ¹ 基线 3 的数字来自开发序列（dev train 33 条，5 个种子）：S<sub>dual</sub> 0.496，同样条件下基线 1 是 0.486、基线 2 是 0.484；延迟是基线 1 的 1.19–1.25 倍（[基线](docs/baselines.md)、评测记录 E053）。
 
 ² 基线 4 的数字来自开发序列（dev train 33 条，5 个种子）：S<sub>dual</sub> 0.515，对基线 3 +0.019 [+0.002, +0.039]，对基线 1 +0.029 [+0.002, +0.062]；FPS 28 是 E066 白天的运行；延迟是紧接着运行的基线 1 的 1.29 倍（当晚机器较慢，两者分别是 41 ms 和 53 ms；[基线](docs/baselines.md)、评测记录 E066）。
 
-³ 基线 5 的数字来自开发序列（dev train 33 条）：S<sub>dual</sub> 0.524（种子 1–5），对基线 4 +0.0062 [+0.0003, +0.0142]（种子 1–10）；延迟与基线 4 相同（[基线](docs/baselines.md)、评测记录 E080、E081）。
+³ V2.1 轻代价基线单帧最多 3 次前向；测试集运行中途因机器内存不足被停过两次，FPS 只作参考（P50 33 ms，是基线 1 的 1.26 倍）。对基线 1 +0.015 [−0.002, +0.032]，对基线 2 −0.004 [−0.025, +0.018]；开发序列上 dev train 0.524（对基线 1 +0.038 [+0.012, +0.071]）、dev test 0.523（+0.021 [−0.005, +0.055]），各 5 个种子。预设 `lookalike` 与它相同（[基线](docs/baselines.md)、评测记录 E080a、E083–E085）。
 
 同一个后端、同一份权重，套上本项目的框架后 S<sub>dual</sub> 高 0.144（基线 1，95% 区间 [+0.098, +0.190]）和 0.163（基线 2，[+0.118, +0.209]），丢失率从 0.532 降到 0.313 和 0.287。
 
@@ -57,6 +57,7 @@ V2.0 还没有发布。下面是当前代码在 **360VOT 官方测试集**（120
 
 怎么读这些数字：
 
+- V2.1 轻代价基线在三个数据上都比基线 1 高（dev train +0.038、dev test +0.021、测试集 +0.015），只有 dev train 的区间不含 0；和基线 2 在测试集上分不出高低。V2.1 计划的“对基线 1 +0.05”没有达到。四项做法的消融见 [实验结论](docs/experiments.md)。
 - 基线 1 比论文里直接在 ERP 上跟踪的最好结果（LoRAT，0.461）高 5.1 个点，比论文最佳的 360 框架低 2.2 个点。项目原定的 0.56 没有达到。
 - 基线 2 在测试集上比基线 1 高 0.019，95% 区间 [−0.002, +0.040]，含 0，而且只有一次运行。之后在开发序列上各跑 5 次（给输入加不同的微小噪声），基线 2 对基线 1 是 −0.002，区间 [−0.026, +0.020]（[评测记录](docs/evaluation-log.md) E043）。现有的证据不支持基线 2 比基线 1 好，它仍然是实验功能。
 - 速度档（TF32）在测试集上两条基线都低了一两个点，区间上端略高于 0；在开发序列上多次运行的均值分不出高低。它换来 8%–9% 的速度，是否值得由使用者决定，默认是 FP32。
@@ -64,7 +65,7 @@ V2.0 还没有发布。下面是当前代码在 **360VOT 官方测试集**（120
 - 用真值在丢失后把跟踪器放回目标，开发序列上的上限比基线 1 高约 0.15：丢失后的重新寻找还有很大空间，这是 V2.1 的方向。
 - 速度是完整流程的数字（读图、解码、取视图、前向、回投），4K 的 JPEG 序列，没有固定电源模式和温度。
 
-每个数字的来历、测法和局限见 [两条基线](docs/baselines.md) 和 [评测记录](docs/evaluation-log.md)。
+每个数字的来历、测法和局限见 [基线](docs/baselines.md) 和 [评测记录](docs/evaluation-log.md)。
 
 ## 安装
 
@@ -89,9 +90,10 @@ track360 track --input path/to/video.mp4 --init-box 1200,640,180,140 --output ou
 track360 track --input path/to/frames/ --init-bfov=12.0,-3.5,20,35 \
   --output out/result.txt --demo out/demo.mp4 --gif out/demo.gif
 
-# 速度档；丢失处理
+# 速度档；丢失处理；V2.1 轻代价基线
 track360 track --input video.mp4 --init-box 1200,640,180,140 --output out/a.txt --precision tf32
 track360 track --input video.mp4 --init-box 1200,640,180,140 --output out/b.txt --preset loss_handling
+track360 track --input video.mp4 --init-box 1200,640,180,140 --output out/c.txt --preset long_term_light
 ```
 
 - 输出每帧一行 `x,y,width,height`（ERP 像素坐标，跨缝目标的 `x + width` 可以超过图像宽度）；
@@ -180,14 +182,14 @@ pytest                    # 不需要 GPU 和权重
 ruff check src tests tools
 ```
 
-回归测试里有一组在合成序列上逐位比对的轨迹；默认配置在真实数据上的结果也要求与记录逐字节相同，做法见 [两条基线](docs/baselines.md)。
+回归测试里有一组在合成序列上逐位比对的轨迹；默认配置在真实数据上的结果也要求与记录逐字节相同，做法见 [基线](docs/baselines.md)。
 
 ## 文档
 
 [快速上手](docs/getting-started.md) ·
 [系统架构](docs/architecture.md) ·
 [配置说明](docs/configuration.md) ·
-[两条基线](docs/baselines.md) ·
+[基线](docs/baselines.md) ·
 [Benchmark 数据集](docs/benchmark.md) ·
 [评测记录](docs/evaluation-log.md) ·
 [V2.1 计划](docs/V2.1Plan.md) ·
@@ -201,8 +203,9 @@ ruff check src tests tools
 - [x] 速度：默认配置 22 → 40 FPS，结果不变；TF32 速度档
 - [x] 权重下载和校验、Python API、演示视频
 - [x] 在 360VOT 官方测试集上给出当前代码的结果（基线 1：0.512，基线 2：0.532）
-- [ ] V2.0 发布
-- [ ] V2.1：丢失后的重新寻找（出事时把位置定住、候选的确认）
+- [x] V2.0 的全部内容随 2.1.0 一起发布
+- [x] V2.1 轻代价档：丢失处理、相机旋转补偿、二次定位、像干扰物时不放行（测试集 0.528）
+- [ ] V2.1 重代价档（平均每帧前向 ≤ 2.0）
 - [ ] 更多后端；TensorRT
 
 ## 引用

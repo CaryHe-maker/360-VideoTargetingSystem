@@ -629,6 +629,10 @@ class TrackControllerImpl(TrackControllerProtocol):
         """The last frame was distrusted by the gallery margin alone (E076)."""
         return self._lastMarginForced
 
+    def useReleaseShare(self, share: float) -> None:
+        """Experimental (E082): see ``TrackStateMachine.useReleaseShare``."""
+        self._stateMachine.useReleaseShare(share)
+
     def useReleaseFloor(self, floor: float | None) -> None:
         """Experimental (E074): see ``TrackStateMachine.useReleaseFloor``."""
         self._stateMachine.useReleaseFloor(floor)

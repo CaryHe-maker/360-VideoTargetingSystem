@@ -38,6 +38,7 @@ PRESETS: dict[str, str] = {
     "camera": "camera.yaml",
     "second_look": "second_look.yaml",
     "lookalike": "lookalike.yaml",
+    "long_term_light": "long_term_light.yaml",
 }
 
 
